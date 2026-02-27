@@ -50,11 +50,6 @@ export default function Home() {
     let cancelled = false;
 
     const loadModels = async () => {
-      if (!apiKey) {
-        setModelOptions(GEMINI_MODELS as unknown as string[]);
-        return;
-      }
-
       setModelsLoading(true);
       try {
         const res = await fetch("/api/gemini/models", {
@@ -267,11 +262,11 @@ export default function Home() {
                   : "border-yellow-800/50 text-yellow-400 bg-yellow-900/15"
               }`}
             >
-              {apiKey ? "Gemini API Key Set" : "Set Gemini API Key"}
+              {"Swap API Key"}
             </button>
             {showApiKeyInput && (
               <div className="absolute right-0 top-full mt-2 bg-gray-800 border border-gray-700 rounded-lg p-3 z-50 shadow-xl w-72">
-                <label className="text-xs text-gray-400 block mb-1">Gemini API Key</label>
+                <label className="text-xs text-gray-400 block mb-1">Gemini API Key (Optional)</label>
                 <input
                   type="password"
                   className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
@@ -279,7 +274,7 @@ export default function Home() {
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="AIza..."
                 />
-                <p className="text-[10px] text-gray-500 mt-1">Stored in memory only.</p>
+                <p className="text-[10px] text-gray-500 mt-1">Stored in memory only. If blank, server uses GEMINI_API_KEY from .env.</p>
                 <button
                   onClick={() => setShowApiKeyInput(false)}
                   className="mt-2 text-xs text-blue-400 hover:text-blue-300"

@@ -129,6 +129,8 @@ export interface Prediction {
   raw_response: string;
   parse_error_reason?: string | null;
   parse_fix_suggestion?: string | null;
+  inference_runtime_ms?: number | null;
+  parse_retry_count?: number | null;
   corrected_label: Decision | null;
   error_tag: ErrorTag | null;
   reviewer_note: string | null;

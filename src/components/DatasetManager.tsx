@@ -6,7 +6,7 @@ import type { Detection, Dataset, DatasetItem } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 
 export function DatasetManager({ detection }: { detection: Detection }) {
-  const { refreshCounter, triggerRefresh } = useAppStore();
+  const { refreshCounter, triggerRefresh, apiKey, selectedModel } = useAppStore();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [datasetItems, setDatasetItems] = useState<DatasetItem[]>([]);
@@ -16,6 +16,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
   const [editingDatasetName, setEditingDatasetName] = useState("");
   const [editingDatasetSplit, setEditingDatasetSplit] = useState("ITERATION");
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
+  const [describingImages, setDescribingImages] = useState(false);
 
   const loadDatasets = useCallback(async () => {
     const res = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
@@ -113,6 +114,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
         item_id: item.item_id,
         image_id: item.image_id,
         image_uri: item.image_uri,
+        image_description: item.image_description || "",
         ground_truth_label: item.ground_truth_label,
       }),
     });
@@ -120,6 +122,36 @@ export function DatasetManager({ detection }: { detection: Detection }) {
     await loadDatasetItems();
     triggerRefresh();
     setSavingItemId(null);
+  };
+
+  const populateDescriptionsWithAi = async () => {
+    if (!selectedDatasetId) return;
+    setDescribingImages(true);
+    try {
+      const res = await fetch("/api/gemini/describe-dataset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: apiKey,
+          model_override: selectedModel,
+          dataset_id: selectedDatasetId,
+          overwrite: false,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload?.error || "Failed to generate image descriptions");
+      }
+      await loadDatasetItems();
+      await loadDatasets();
+      triggerRefresh();
+      alert(`Generated ${payload.updated || 0} descriptions.`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Failed to generate descriptions";
+      alert(msg);
+    } finally {
+      setDescribingImages(false);
+    }
   };
 
   const countByLabel = (label: string) =>
@@ -275,13 +307,22 @@ export function DatasetManager({ detection }: { detection: Detection }) {
               </div>
             </div>
             <div className="mt-2">
-              <button
-                onClick={saveDatasetMeta}
-                disabled={savingDatasetMeta}
-                className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
-              >
-                {savingDatasetMeta ? "Saving..." : "Save Dataset Meta"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={saveDatasetMeta}
+                  disabled={savingDatasetMeta}
+                  className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+                >
+                  {savingDatasetMeta ? "Saving..." : "Save Dataset Meta"}
+                </button>
+                <button
+                  onClick={populateDescriptionsWithAi}
+                  disabled={describingImages || datasetItems.length === 0}
+                  className="text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded"
+                >
+                  {describingImages ? "Generating descriptions..." : "Populate Descriptions with AI"}
+                </button>
+              </div>
             </div>
 
             {selectedDataset.split_type === "HELD_OUT_EVAL" && (
@@ -308,6 +349,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                     <th className="text-left py-2.5 px-4">Preview</th>
                     <th className="text-left py-2.5 px-4">Image ID</th>
                     <th className="text-left py-2.5 px-4">Image URI</th>
+                    <th className="text-left py-2.5 px-4">Image Description</th>
                     <th className="text-center py-2.5 px-4">Ground Truth</th>
                     <th className="text-right py-2.5 px-4">Save</th>
                   </tr>
@@ -341,6 +383,13 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300"
                           value={item.image_uri}
                           onChange={(e) => updateItemField(item.item_id, { image_uri: e.target.value })}
+                        />
+                      </td>
+                      <td className="py-2 px-4">
+                        <textarea
+                          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 min-h-12"
+                          value={item.image_description || ""}
+                          onChange={(e) => updateItemField(item.item_id, { image_description: e.target.value })}
                         />
                       </td>
                       <td className="text-center py-2 px-4">
@@ -679,13 +728,13 @@ function DatasetUploadForm({
       </button>
 
       {expandedIndex != null && fileRows[expandedIndex] && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+        <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto flex items-start justify-center p-6">
           <button
             className="absolute inset-0"
             onClick={() => setExpandedIndex(null)}
             aria-label="Close preview"
           />
-          <div className="relative z-10 w-full max-w-5xl">
+          <div className="relative z-10 w-full max-w-5xl max-h-[calc(100vh-3rem)] overflow-y-auto my-auto">
             <div className="flex items-center justify-between mb-2 text-xs text-gray-300">
               <span>{fileRows[expandedIndex].file.name}</span>
               <span>{expandedIndex + 1} / {fileRows.length}</span>

@@ -109,6 +109,8 @@ function initSchema(db: Database.Database) {
       raw_response TEXT NOT NULL DEFAULT '',
       parse_error_reason TEXT,
       parse_fix_suggestion TEXT,
+      inference_runtime_ms INTEGER,
+      parse_retry_count INTEGER NOT NULL DEFAULT 0,
       corrected_label TEXT,
       error_tag TEXT,
       reviewer_note TEXT,
@@ -133,6 +135,7 @@ function initSchema(db: Database.Database) {
   ensureNullableGroundTruthColumns(db);
   ensureRunsColumns(db);
   ensurePredictionParseColumns(db);
+  ensurePredictionRuntimeColumns(db);
 }
 
 function ensureDatasetItemColumns(db: Database.Database) {
@@ -209,6 +212,8 @@ function ensureNullableGroundTruthColumns(db: Database.Database) {
         raw_response TEXT NOT NULL DEFAULT '',
         parse_error_reason TEXT,
         parse_fix_suggestion TEXT,
+        inference_runtime_ms INTEGER,
+        parse_retry_count INTEGER NOT NULL DEFAULT 0,
         corrected_label TEXT,
         error_tag TEXT,
         reviewer_note TEXT,
@@ -218,11 +223,11 @@ function ensureNullableGroundTruthColumns(db: Database.Database) {
 
       INSERT INTO predictions_new (
         prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence,
-        evidence, parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, corrected_label, error_tag, reviewer_note, corrected_at
+        evidence, parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count, corrected_label, error_tag, reviewer_note, corrected_at
       )
       SELECT
         prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence,
-        evidence, parse_ok, raw_response, NULL, NULL, corrected_label, error_tag, reviewer_note, corrected_at
+        evidence, parse_ok, raw_response, NULL, NULL, NULL, 0, corrected_label, error_tag, reviewer_note, corrected_at
       FROM predictions;
 
       DROP TABLE predictions;
@@ -253,5 +258,17 @@ function ensurePredictionParseColumns(db: Database.Database) {
   }
   if (!hasParseFix) {
     db.exec("ALTER TABLE predictions ADD COLUMN parse_fix_suggestion TEXT");
+  }
+}
+
+function ensurePredictionRuntimeColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(predictions)").all() as Array<{ name: string }>;
+  const hasRuntime = columns.some((c) => c.name === "inference_runtime_ms");
+  const hasRetryCount = columns.some((c) => c.name === "parse_retry_count");
+  if (!hasRuntime) {
+    db.exec("ALTER TABLE predictions ADD COLUMN inference_runtime_ms INTEGER");
+  }
+  if (!hasRetryCount) {
+    db.exec("ALTER TABLE predictions ADD COLUMN parse_retry_count INTEGER NOT NULL DEFAULT 0");
   }
 }

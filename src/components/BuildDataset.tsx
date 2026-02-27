@@ -92,8 +92,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     [mode, rows, datasetName]
   );
   const canRun = useMemo(
-    () => !!apiKey && !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
-    [apiKey, selectedPromptId, mode, selectedExistingDatasetId, canSave]
+    () => !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
+    [selectedPromptId, mode, selectedExistingDatasetId, canSave]
   );
 
   const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -416,8 +416,12 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                         <span className="font-mono text-gray-300">{r.imageId}</span>
                       )}
                     </td>
-                    <td className="px-2 py-2 text-gray-300 whitespace-nowrap">{r.groundTruthLabel || "UNSET"}</td>
-                    <td className="px-2 py-2 text-gray-300 whitespace-nowrap">{r.aiAssignedLabel || "—"}</td>
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <LabelBadge label={r.groundTruthLabel || "UNSET"} />
+                    </td>
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <LabelBadge label={r.aiAssignedLabel || "—"} />
+                    </td>
                     <td className="px-2 py-2 text-gray-300 whitespace-nowrap">
                       {typeof r.aiConfidence === "number" ? r.aiConfidence.toFixed(2) : "—"}
                     </td>
@@ -481,4 +485,20 @@ function validateImageIds(rows: BuildRow[]): { ok: true } | { ok: false; error: 
     seen.add(imageId);
   }
   return { ok: true };
+}
+
+function LabelBadge({ label }: { label: string }) {
+  if (label === "DETECTED") {
+    return <span className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300">{label}</span>;
+  }
+  if (label === "NOT_DETECTED") {
+    return <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300">{label}</span>;
+  }
+  if (label === "PARSE_FAIL") {
+    return <span className="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400">{label}</span>;
+  }
+  if (label === "UNSET") {
+    return <span className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">{label}</span>;
+  }
+  return <span className="text-gray-300">{label}</span>;
 }

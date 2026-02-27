@@ -18,17 +18,32 @@ export async function runDetectionInference(
   parseOk: boolean;
   parseErrorReason: string | null;
   parseFixSuggestion: string | null;
+  runtimeMs: number;
+  retryCount: number;
 }> {
   const genAI = getGeminiClient(apiKey);
+  const responseSchema = {
+    type: "OBJECT",
+    required: ["detection_code", "decision", "confidence", "evidence"],
+    properties: {
+      detection_code: { type: "STRING" },
+      decision: { type: "STRING", enum: ["DETECTED", "NOT_DETECTED"] },
+      confidence: { type: "NUMBER" },
+      evidence: { type: "STRING" },
+    },
+  } as const;
+
   const model = genAI.getGenerativeModel({
     model: prompt.model || "gemini-2.5-flash",
     generationConfig: {
       temperature: prompt.temperature,
       topP: prompt.top_p,
       maxOutputTokens: prompt.max_output_tokens,
+      responseMimeType: "application/json",
+      responseSchema,
     },
     systemInstruction: prompt.system_prompt,
-  });
+  } as any);
 
   // Build image part
   const imageParts = await buildImagePart(imageUri);
@@ -38,19 +53,57 @@ export async function runDetectionInference(
     detectionCode
   );
   const compiledUserPrompt = buildCompiledUserPrompt(prompt, userPrompt);
+  const maxParseRetries = 3;
+  let currentPrompt = compiledUserPrompt;
+  let lastRaw = "";
+  let lastParseReason: string | null = null;
+  let lastParseFix: string | null = null;
+  const startedAt = Date.now();
 
   try {
-    const result = await model.generateContent([compiledUserPrompt, ...imageParts]);
-    const raw = result.response.text();
+    for (let attempt = 0; attempt <= maxParseRetries; attempt += 1) {
+      const result = await model.generateContent([currentPrompt, ...imageParts]);
+      const raw = result.response.text();
+      lastRaw = raw;
 
-    // Try to parse JSON
-    const parsed = parseGeminiResponse(raw, detectionCode);
+      const parsed = parseGeminiResponse(raw, detectionCode);
+      if (parsed.ok) {
+        return {
+          parsed: parsed.result,
+          raw,
+          parseOk: true,
+          parseErrorReason: null,
+          parseFixSuggestion: null,
+          runtimeMs: Date.now() - startedAt,
+          retryCount: attempt,
+        };
+      }
+
+      lastParseReason = parsed.reason;
+      lastParseFix = parsed.fix;
+
+      if (attempt >= maxParseRetries) {
+        break;
+      }
+
+      currentPrompt = buildRetryPrompt({
+        basePrompt: compiledUserPrompt,
+        attempt: attempt + 1,
+        reason: parsed.reason,
+        fix: parsed.fix,
+      });
+    }
+
     return {
-      parsed: parsed.result,
-      raw,
-      parseOk: parsed.ok,
-      parseErrorReason: parsed.reason,
-      parseFixSuggestion: parsed.fix,
+      parsed: null,
+      raw: lastRaw,
+      parseOk: false,
+      parseErrorReason: lastParseReason
+        ? `${lastParseReason} (after ${maxParseRetries} retries)`
+        : `Parse failed after ${maxParseRetries} retries.`,
+      parseFixSuggestion: lastParseFix,
+      runtimeMs: Date.now() - startedAt,
+      retryCount: maxParseRetries,
     };
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -61,8 +114,34 @@ export async function runDetectionInference(
       parseErrorReason: `Model/API error: ${errMsg}`,
       parseFixSuggestion:
         "Verify API key/model availability, reduce concurrency, and retry. If this persists, inspect network/API quota errors.",
+      runtimeMs: Date.now() - startedAt,
+      retryCount: 0,
     };
   }
+}
+
+function buildRetryPrompt({
+  basePrompt,
+  attempt,
+  reason,
+  fix,
+}: {
+  basePrompt: string;
+  attempt: number;
+  reason: string | null;
+  fix: string | null;
+}): string {
+  const retryHeader = [
+    `Retry attempt ${attempt}: previous response failed schema validation.`,
+    reason ? `Issue: ${reason}` : "",
+    fix ? `Required fix: ${fix}` : "",
+    "Return only valid JSON with exactly these keys: detection_code, decision, confidence, evidence.",
+    "No markdown. No backticks. No explanation text.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return `${basePrompt}\n\n${retryHeader}`;
 }
 
 function buildCompiledUserPrompt(prompt: PromptVersion, baseUserPrompt: string): string {
@@ -79,7 +158,7 @@ function buildCompiledUserPrompt(prompt: PromptVersion, baseUserPrompt: string):
   return sections.join("\n\n");
 }
 
-async function buildImagePart(imageUri: string) {
+export async function buildImagePart(imageUri: string) {
   // Support local file paths and base64 data URIs
   if (imageUri.startsWith("data:")) {
     const match = imageUri.match(/^data:([^;]+);base64,(.+)$/);

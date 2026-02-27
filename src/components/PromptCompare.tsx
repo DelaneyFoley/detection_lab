@@ -15,7 +15,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [results, setResults] = useState<Map<string, { run: any; predictions: Prediction[] }>>(new Map());
-  const [previewState, setPreviewState] = useState<{ promptId: string; index: number } | null>(null);
+  const [previewState, setPreviewState] = useState<
+    { promptId: string; imageId: string; source: "disagreement" | "full" } | null
+  >(null);
   const runningRef = useRef(false);
 
   const loadData = useCallback(async () => {
@@ -106,41 +108,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     return map;
   }, [prompts]);
 
-  const activePreviewRows = useMemo(() => {
-    if (!previewState) return [];
-    const entry = results.get(previewState.promptId);
-    return (entry?.predictions || []).filter((p) => !!p.image_uri);
-  }, [previewState, results]);
-
-  useEffect(() => {
-    if (!previewState) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setPreviewState(null);
-        return;
-      }
-      if (activePreviewRows.length === 0) return;
-      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-        event.preventDefault();
-        setPreviewState((prev) => {
-          if (!prev) return prev;
-          return { ...prev, index: Math.min(activePreviewRows.length - 1, prev.index + 1) };
-        });
-      }
-      if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-        event.preventDefault();
-        setPreviewState((prev) => {
-          if (!prev) return prev;
-          return { ...prev, index: Math.max(0, prev.index - 1) };
-        });
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [previewState, activePreviewRows.length]);
-
   // Find disagreement cases
-  const disagreements: Map<string, Map<string, string | null>> = new Map();
+  const disagreements: Map<string, { decisions: Map<string, string | null>; sample: Prediction | null; groundTruth: string | null }> = new Map();
   if (resultEntries.length >= 2) {
     const allImageIds = new Set<string>();
     for (const [, { predictions }] of resultEntries) {
@@ -154,10 +123,105 @@ export function PromptCompare({ detection }: { detection: Detection }) {
       }
       const values = Array.from(decisions.values());
       if (new Set(values).size > 1) {
-        disagreements.set(imageId, decisions);
+        const sample =
+          resultEntries
+            .map(([, { predictions }]) => predictions.find((p) => p.image_id === imageId) || null)
+            .find((p) => !!p) || null;
+        disagreements.set(imageId, {
+          decisions,
+          sample,
+          groundTruth: sample ? getResolvedGroundTruth(sample) : null,
+        });
       }
     }
   }
+
+  const getPredictionForImage = useCallback(
+    (promptId: string, imageId: string): Prediction | null => {
+      const entry = results.get(promptId);
+      if (!entry) return null;
+      return entry.predictions.find((p) => p.image_id === imageId) || null;
+    },
+    [results]
+  );
+
+  const activePreviewImageIds = useMemo(() => {
+    if (!previewState) return [] as string[];
+    if (previewState.source === "disagreement") {
+      return Array.from(disagreements.entries())
+        .filter(([, disagreement]) => !!disagreement.sample?.image_uri)
+        .map(([imageId]) => imageId);
+    }
+    const entry = results.get(previewState.promptId);
+    return (entry?.predictions || []).filter((p) => !!p.image_uri).map((p) => p.image_id);
+  }, [previewState, disagreements, results]);
+
+  const activePreviewIndex = useMemo(() => {
+    if (!previewState) return -1;
+    return activePreviewImageIds.findIndex((imageId) => imageId === previewState.imageId);
+  }, [previewState, activePreviewImageIds]);
+
+  const activePreviewPrediction = useMemo(() => {
+    if (!previewState || activePreviewIndex < 0) return null;
+    const activeImageId = activePreviewImageIds[activePreviewIndex];
+    const preferred = getPredictionForImage(previewState.promptId, activeImageId);
+    if (preferred?.image_uri) return preferred;
+    for (const [promptId] of resultEntries) {
+      const candidate = getPredictionForImage(promptId, activeImageId);
+      if (candidate?.image_uri) return candidate;
+    }
+    return null;
+  }, [previewState, activePreviewIndex, activePreviewImageIds, getPredictionForImage, resultEntries]);
+
+  const activePromptOutcomes = useMemo(() => {
+    if (!previewState || activePreviewIndex < 0) return [];
+    const activeImageId = activePreviewImageIds[activePreviewIndex];
+    return resultEntries.map(([promptId]) => {
+      const prediction = getPredictionForImage(promptId, activeImageId);
+      return { promptId, prediction };
+    });
+  }, [previewState, activePreviewIndex, activePreviewImageIds, resultEntries, getPredictionForImage]);
+
+  const activeGroundTruth = useMemo(() => {
+    for (const row of activePromptOutcomes) {
+      if (row.prediction) {
+        const gt = getResolvedGroundTruth(row.prediction);
+        if (gt) return gt;
+      }
+    }
+    return null;
+  }, [activePromptOutcomes]);
+
+  useEffect(() => {
+    if (!previewState) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewState(null);
+        return;
+      }
+      if (activePreviewImageIds.length === 0) return;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        event.preventDefault();
+        setPreviewState((prev) => {
+          if (!prev) return prev;
+          const currentIndex = activePreviewImageIds.findIndex((imageId) => imageId === prev.imageId);
+          const nextIndex = Math.min(activePreviewImageIds.length - 1, Math.max(0, currentIndex + 1));
+          return { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId };
+        });
+      }
+      if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setPreviewState((prev) => {
+          if (!prev) return prev;
+          const currentIndex = activePreviewImageIds.findIndex((imageId) => imageId === prev.imageId);
+          const nextIndex = Math.max(0, Math.max(0, currentIndex) - 1);
+          return { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId };
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewState, activePreviewImageIds]);
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -331,7 +395,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-gray-800">
                     <tr className="text-gray-500 border-b border-gray-700">
+                      <th className="text-left py-2 px-3">Preview</th>
                       <th className="text-left py-2 px-3">Image ID</th>
+                      <th className="text-center py-2 px-3">Ground Truth</th>
                       {resultEntries.map(([promptId]) => {
                         const prompt = prompts.find((p) => p.prompt_version_id === promptId);
                         return (
@@ -343,24 +409,38 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {Array.from(disagreements.entries()).map(([imageId, decisions]) => (
+                    {Array.from(disagreements.entries()).map(([imageId, disagreement]) => (
                       <tr key={imageId} className="border-b border-gray-800">
+                        <td className="py-2 px-3">
+                          {disagreement.sample?.image_uri ? (
+                            <img
+                              src={disagreement.sample.image_uri}
+                              alt={imageId}
+                              className="w-12 h-9 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                              onClick={() =>
+                                setPreviewState({
+                                  promptId:
+                                    resultEntries.find(([, { predictions }]) =>
+                                      predictions.some((p) => p.image_id === imageId && !!p.image_uri)
+                                    )?.[0] || resultEntries[0][0],
+                                  imageId,
+                                  source: "disagreement",
+                                })
+                              }
+                            />
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
                         <td className="py-2 px-3 font-mono">{imageId}</td>
+                        <td className="text-center py-2 px-3">
+                          <DecisionBadge decision={disagreement.groundTruth} />
+                        </td>
                         {resultEntries.map(([promptId]) => {
-                          const decision = decisions.get(promptId);
+                          const decision = disagreement.decisions.get(promptId) ?? null;
                           return (
                             <td key={promptId} className="text-center py-2 px-3">
-                              <span
-                                className={`px-1.5 py-0.5 rounded text-xs ${
-                                  decision === "DETECTED"
-                                    ? "bg-purple-900/30 text-purple-300"
-                                    : decision === "NOT_DETECTED"
-                                    ? "bg-emerald-900/30 text-emerald-300"
-                                    : "bg-red-900/30 text-red-400"
-                                }`}
-                              >
-                                {decision || "PARSE_FAIL"}
-                              </span>
+                              <DecisionBadge decision={decision || "PARSE_FAIL"} />
                             </td>
                           );
                         })}
@@ -398,10 +478,11 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                       </thead>
                       <tbody>
                         {predictions.map((p: Prediction) => {
+                          const resolvedGroundTruth = getResolvedGroundTruth(p);
                           const correct =
-                            p.ground_truth_label != null &&
+                            resolvedGroundTruth != null &&
                             p.parse_ok &&
-                            p.predicted_decision === p.ground_truth_label;
+                            p.predicted_decision === resolvedGroundTruth;
                           return (
                             <tr key={p.prediction_id} className="border-b border-gray-800/50">
                               <td className="py-1.5 px-2 font-mono">{p.image_id}</td>
@@ -411,24 +492,17 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                                     src={p.image_uri}
                                     alt={p.image_id}
                                     className="w-12 h-9 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
-                                    onClick={() => {
-                                      const rows = predictions.filter((row) => !!row.image_uri);
-                                      const idx = Math.max(
-                                        0,
-                                        rows.findIndex((row) => row.prediction_id === p.prediction_id)
-                                      );
-                                      setPreviewState({ promptId, index: idx });
-                                    }}
+                                    onClick={() => setPreviewState({ promptId, imageId: p.image_id, source: "full" })}
                                   />
                                 ) : (
                                   <span className="text-gray-600">—</span>
                                 )}
                               </td>
                               <td className="text-center py-1.5 px-2">
-                                <DecisionBadge decision={p.ground_truth_label || null} />
+                                <DecisionBadge decision={resolvedGroundTruth} />
                               </td>
                               <td className="text-center py-1.5 px-2">
-                                <DecisionBadge decision={p.predicted_decision} />
+                                <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
                               </td>
                               <td className="text-center py-1.5 px-2">
                                 {correct ? (
@@ -440,8 +514,10 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                               <td className="text-right py-1.5 px-2">
                                 {p.confidence != null ? p.confidence.toFixed(2) : "—"}
                               </td>
-                              <td className="py-1.5 px-2 text-gray-400 max-w-[200px] truncate">
-                                {p.evidence || "—"}
+                              <td className="py-1.5 px-2 text-gray-400">
+                                <div className="max-w-[320px] max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
+                                  {p.evidence || "—"}
+                                </div>
                               </td>
                               <td className="text-center py-1.5 px-2">
                                 {p.parse_ok ? (
@@ -463,68 +539,158 @@ export function PromptCompare({ detection }: { detection: Detection }) {
         </div>
       )}
 
-      {previewState && activePreviewRows.length > 0 && activePreviewRows[previewState.index] && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+      {previewState && activePreviewImageIds.length > 0 && activePreviewPrediction && (
+        <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto flex items-start justify-center p-6">
           <button className="absolute inset-0" onClick={() => setPreviewState(null)} aria-label="Close preview" />
-          <div className="relative z-10 w-full max-w-6xl bg-gray-900 border border-gray-700 rounded-lg p-4">
+          <div className="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto">
             <div className="flex items-center justify-between mb-3">
               <div className="text-xs text-gray-400">
-                {promptLabelById.get(previewState.promptId) || previewState.promptId.slice(0, 8)} ·{" "}
-                {previewState.index + 1}/{activePreviewRows.length}
+                {previewState.source === "disagreement" ? "Disagreement Cases" : promptLabelById.get(previewState.promptId) || previewState.promptId.slice(0, 8)} ·{" "}
+                {Math.max(activePreviewIndex, 0) + 1}/{activePreviewImageIds.length} · {activePreviewPrediction.image_id}
               </div>
               <div className="flex gap-2">
                 <button
                   className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
-                  onClick={() =>
+                  onClick={() => {
+                    if (activePreviewIndex < 0) return;
+                    const nextIndex = Math.max(0, activePreviewIndex - 1);
                     setPreviewState((prev) =>
-                      prev ? { ...prev, index: Math.max(0, prev.index - 1) } : prev
-                    )
-                  }
-                  disabled={previewState.index === 0}
+                      prev ? { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId } : prev
+                    );
+                  }}
+                  disabled={activePreviewIndex <= 0}
                 >
                   Prev
                 </button>
                 <button
                   className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
-                  onClick={() =>
+                  onClick={() => {
+                    if (activePreviewIndex < 0) return;
+                    const nextIndex = Math.min(activePreviewImageIds.length - 1, activePreviewIndex + 1);
                     setPreviewState((prev) =>
-                      prev ? { ...prev, index: Math.min(activePreviewRows.length - 1, prev.index + 1) } : prev
-                    )
-                  }
-                  disabled={previewState.index >= activePreviewRows.length - 1}
+                      prev ? { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId } : prev
+                    );
+                  }}
+                  disabled={activePreviewIndex >= activePreviewImageIds.length - 1}
                 >
                   Next
                 </button>
               </div>
             </div>
-            <div className="grid grid-cols-[1fr_260px] gap-4">
-              <div className="bg-gray-950 rounded border border-gray-800 p-2">
-                <img
-                  src={activePreviewRows[previewState.index].image_uri}
-                  alt={activePreviewRows[previewState.index].image_id}
-                  className="w-full max-h-[70vh] object-contain rounded"
-                />
-              </div>
-              <div className="space-y-2 max-h-[70vh] overflow-y-auto">
-                {activePreviewRows.map((row, idx) => (
+            <div className="overflow-x-auto">
+              <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4 min-w-[980px]">
+              <div className="space-y-2 max-h-[70vh] overflow-y-auto w-80 shrink-0">
+                {activePreviewImageIds.map((imageId, idx) => {
+                  const row = getPredictionForImage(previewState.promptId, imageId);
+                  const firstWithImage =
+                    row ||
+                    resultEntries
+                      .map(([promptId]) => getPredictionForImage(promptId, imageId))
+                      .find((p) => !!p?.image_uri) ||
+                    null;
+                  return (
                   <button
-                    key={row.prediction_id}
+                    key={`${imageId}-${idx}`}
                     className={`w-full text-left p-2 rounded border ${
-                      idx === previewState.index
+                      idx === activePreviewIndex
                         ? "border-blue-500 bg-blue-900/20"
                         : "border-gray-700 bg-gray-900/40 hover:border-gray-600"
                     }`}
-                    onClick={() => setPreviewState((prev) => (prev ? { ...prev, index: idx } : prev))}
+                    onClick={() => setPreviewState((prev) => (prev ? { ...prev, imageId } : prev))}
                   >
-                    <div className="text-[11px] font-mono text-gray-300 truncate">{row.image_id}</div>
-                    <div className="mt-1 flex items-center gap-2">
-                      <DecisionBadge decision={row.predicted_decision} />
-                      <span className="text-[11px] text-gray-500">
-                        {row.confidence != null ? row.confidence.toFixed(2) : "—"}
-                      </span>
+                    <div className="text-[11px] font-mono text-gray-300 truncate">{imageId}</div>
+                    {firstWithImage?.image_uri ? (
+                      <img
+                        src={firstWithImage.image_uri}
+                        alt={imageId}
+                        className="mt-1 w-full h-16 object-cover rounded border border-gray-700"
+                      />
+                    ) : null}
+                    <div className="mt-1 space-y-1">
+                      {resultEntries.map(([promptId]) => {
+                        const prediction = getPredictionForImage(promptId, imageId);
+                        return (
+                          <div key={`${imageId}-${promptId}`} className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-500 min-w-0 truncate">
+                              {promptLabelById.get(promptId) || promptId.slice(0, 8)}:
+                            </span>
+                            <DecisionBadge decision={prediction?.predicted_decision || "PARSE_FAIL"} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-1 text-[11px] text-gray-500">
+                      GT: {(firstWithImage ? getResolvedGroundTruth(firstWithImage) : null) || "UNSET"}
                     </div>
                   </button>
-                ))}
+                  );
+                })}
+              </div>
+              <div className="space-y-3 min-w-0">
+                <div className="bg-gray-950 rounded border border-gray-800 p-2">
+                  <img
+                    src={activePreviewPrediction.image_uri}
+                    alt={activePreviewPrediction.image_id}
+                    className="w-full max-h-[56vh] object-contain rounded"
+                  />
+                </div>
+                <div className="bg-gray-950 rounded border border-gray-800 p-3 text-xs space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500">Ground Truth:</span>
+                    <DecisionBadge decision={activeGroundTruth} />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-gray-500 mb-1">Outcomes by Version</div>
+                    {activePromptOutcomes.map(({ promptId, prediction }) => (
+                      <div key={promptId} className="border border-gray-800 rounded p-2 space-y-2">
+                        <div className="text-gray-400">{promptLabelById.get(promptId) || promptId.slice(0, 8)}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500">Prediction:</span>
+                          <DecisionBadge decision={prediction?.predicted_decision || "PARSE_FAIL"} />
+                          <span className="text-gray-500">
+                            {prediction?.confidence != null ? Number(prediction.confidence).toFixed(2) : "—"}
+                          </span>
+                          <span className={`${prediction?.parse_ok ? "text-green-400" : "text-red-400"}`}>
+                            {prediction?.parse_ok ? "OK" : "FAIL"}
+                          </span>
+                        </div>
+                        <div>
+                          <div className="text-gray-500 mb-1">Evidence</div>
+                          <div className="max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-gray-300">
+                            {prediction?.evidence || "—"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500 mb-1">Model Output</div>
+                          <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
+                            {formatModelOutput(prediction?.raw_response || "")}
+                          </pre>
+                        </div>
+                        <div className="space-y-1 text-gray-300">
+                          <div><span className="text-gray-500">Parse:</span> {prediction?.parse_ok ? "OK" : "FAIL"}</div>
+                          {!prediction?.parse_ok && (
+                            <>
+                              <div><span className="text-gray-500">Parse Reason:</span> {prediction?.parse_error_reason || "Parse failed"}</div>
+                              <div><span className="text-gray-500">Fix Suggestion:</span> {prediction?.parse_fix_suggestion || "Return strict JSON only."}</div>
+                            </>
+                          )}
+                        </div>
+                        <div className="space-y-1 text-gray-300">
+                          <div className="text-gray-500">HIL Review</div>
+                          <div>Error tag: {prediction?.error_tag || "—"}</div>
+                          <div className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
+                            Reviewer note: {prediction?.reviewer_note || "—"}
+                          </div>
+                          <div>Corrected at: {prediction?.corrected_at ? new Date(prediction.corrected_at).toLocaleString() : "—"}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {!activePromptOutcomes.some((x) => x.prediction) && (
+                    <div className="text-gray-500">No prompt outcomes available for this image.</div>
+                  )}
+                </div>
+              </div>
               </div>
             </div>
           </div>
@@ -536,6 +702,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
 
 function DecisionBadge({ decision }: { decision: string | null }) {
   if (!decision) return <span className="text-gray-600 text-xs">—</span>;
+  if (decision !== "DETECTED" && decision !== "NOT_DETECTED") {
+    return <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/30 text-red-400">{decision}</span>;
+  }
   return (
     <span
       className={`text-xs px-1.5 py-0.5 rounded ${
@@ -544,9 +713,28 @@ function DecisionBadge({ decision }: { decision: string | null }) {
           : "bg-emerald-900/30 text-emerald-300"
       }`}
     >
-      {decision === "DETECTED" ? "DET" : "NOT"}
+      {decision}
     </span>
   );
+}
+
+function getResolvedGroundTruth(prediction: Prediction): string | null {
+  return prediction.corrected_label || prediction.ground_truth_label || null;
+}
+
+function formatModelOutput(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "—";
+  let cleaned = text;
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+  }
+  try {
+    const parsed = JSON.parse(cleaned);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return cleaned;
+  }
 }
 
 function Delta({ value }: { value: number }) {

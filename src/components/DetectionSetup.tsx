@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
-import type { Detection, PromptVersion, Dataset, Prediction } from "@/types";
+import type { Detection, PromptVersion } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 
 const DEFAULT_SYSTEM_PROMPT =
@@ -22,18 +22,11 @@ export function DetectionSetup({
   onRefresh: () => void;
   createTrigger?: number;
 }) {
-  const { apiKey, selectedModel, refreshCounter, triggerRefresh, setSelectedDetectionId, setActiveTab, setSelectedRunForDetection } = useAppStore();
+  const { apiKey, selectedModel, refreshCounter, triggerRefresh, setSelectedDetectionId } = useAppStore();
   const [mode, setMode] = useState<"view" | "create" | "edit">("view");
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
-  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState("");
-  const [selectedDatasetId, setSelectedDatasetId] = useState("");
-  const [iterationRun, setIterationRun] = useState<any>(null);
-  const [iterationPredictions, setIterationPredictions] = useState<Prediction[]>([]);
-  const [iterationFilter, setIterationFilter] = useState<"all" | "fp" | "fn" | "parse_fail" | "correct">("all");
-  const [iterationRunning, setIterationRunning] = useState(false);
-  const [selectedPreviewImage, setSelectedPreviewImage] = useState<string | null>(null);
   const [labelPolicySections, setLabelPolicySections] = useState({
     detected: "",
     notDetected: "",
@@ -88,13 +81,11 @@ export function DetectionSetup({
 
   const loadRelated = useCallback(async () => {
     if (!selectedDetection) return;
-    const [promptsRes, datasetsRes, runsRes] = await Promise.all([
+    const [promptsRes, runsRes] = await Promise.all([
       fetch(`/api/prompts?detection_id=${selectedDetection.detection_id}`),
-      fetch(`/api/datasets?detection_id=${selectedDetection.detection_id}`),
       fetch(`/api/runs?detection_id=${selectedDetection.detection_id}`),
     ]);
     setPrompts(await safeJsonArray<PromptVersion>(promptsRes, "prompts"));
-    setDatasets(await safeJsonArray<Dataset>(datasetsRes, "datasets"));
     setRuns(await safeJsonArray<any>(runsRes, "runs"));
   }, [selectedDetection, refreshCounter]);
 
@@ -119,89 +110,6 @@ export function DetectionSetup({
       setSelectedPromptId(approved.prompt_version_id);
     }
   }, [prompts, selectedDetection?.approved_prompt_version]);
-
-  useEffect(() => {
-    if (datasets.length === 0) return;
-    if (selectedDatasetId && datasets.some((d) => d.dataset_id === selectedDatasetId)) return;
-    const preferred =
-      datasets.find((d) => d.split_type === "ITERATION") ||
-      datasets.find((d) => d.split_type === "CUSTOM") ||
-      datasets[0];
-    setSelectedDatasetId(preferred.dataset_id);
-  }, [datasets, selectedDatasetId]);
-
-  useEffect(() => {
-    setIterationRun(null);
-    setIterationPredictions([]);
-    setSelectedPreviewImage(null);
-    setIterationFilter("all");
-  }, [selectedDetection?.detection_id]);
-
-  const runIteration = async () => {
-    if (!selectedDetection) return;
-    if (!apiKey) {
-      alert("Set your Gemini API key first.");
-      return;
-    }
-    if (!selectedPromptId || !selectedDatasetId) {
-      alert("Choose a prompt and dataset before running.");
-      return;
-    }
-
-    setIterationRunning(true);
-    setIterationRun(null);
-    setIterationPredictions([]);
-    setSelectedPreviewImage(null);
-
-    try {
-      const runRes = await fetch("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: apiKey,
-          model_override: selectedModel,
-          prompt_version_id: selectedPromptId,
-          dataset_id: selectedDatasetId,
-          detection_id: selectedDetection.detection_id,
-        }),
-      });
-      const run = await runRes.json();
-
-      if (!run?.run_id) {
-        alert(run?.error || "Run failed");
-        return;
-      }
-
-      const fullRunRes = await fetch(`/api/runs?run_id=${run.run_id}`);
-      const fullRun = await fullRunRes.json();
-
-      setIterationRun(fullRun);
-      setIterationPredictions(fullRun.predictions || []);
-      setSelectedRunForDetection(selectedDetection.detection_id, fullRun.run_id);
-      triggerRefresh();
-      loadRelated();
-    } catch (err) {
-      console.error(err);
-      alert("Run failed");
-    } finally {
-      setIterationRunning(false);
-    }
-  };
-
-  const filteredIterationPredictions = iterationPredictions.filter((p) => {
-    switch (iterationFilter) {
-      case "fp":
-        return p.parse_ok && p.predicted_decision === "DETECTED" && p.ground_truth_label === "NOT_DETECTED";
-      case "fn":
-        return p.parse_ok && p.predicted_decision === "NOT_DETECTED" && p.ground_truth_label === "DETECTED";
-      case "parse_fail":
-        return !p.parse_ok;
-      case "correct":
-        return p.parse_ok && p.predicted_decision === p.ground_truth_label;
-      default:
-        return true;
-    }
-  });
 
   const handleCreateDetection = async () => {
     if (!form.detection_code.trim()) {
@@ -265,10 +173,6 @@ export function DetectionSetup({
   const generateWithPromptAssist = async () => {
     if (!assistInput.trim()) {
       setAssistError("Describe the detection to generate a template.");
-      return;
-    }
-    if (!apiKey) {
-      setAssistError("Set your Gemini API key first.");
       return;
     }
 
@@ -485,27 +389,55 @@ export function DetectionSetup({
     (activePromptForTopPanel?.prompt_structure as any)?.decision_rubric ||
     (selectedDetection?.decision_rubric || []).map((r, i) => `${i + 1}. ${r}`).join("\n");
   const compiledPromptPreview = useMemo(() => {
-    if (!selectedDetection) return "";
-    const promptForRun = selectedPrompt || activePromptForTopPanel;
-    if (!promptForRun) return "";
+    const detectionCode = mode === "view"
+      ? selectedDetection?.detection_code || ""
+      : form.detection_code || selectedDetection?.detection_code || "";
+    if (!detectionCode) return "";
 
-    const baseUserPrompt = (promptForRun.user_prompt_template || "").replace(
-      "{{DETECTION_CODE}}",
-      selectedDetection.detection_code
-    );
-    const policy = ((promptForRun.prompt_structure as any)?.label_policy || activePromptPolicy || "").trim();
-    const rubric = ((promptForRun.prompt_structure as any)?.decision_rubric || activePromptRubricText || "").trim();
+    let systemPrompt = "";
+    let userTemplate = "";
+    let policy = "";
+    let rubric = "";
+
+    if (mode === "create") {
+      systemPrompt = createSystemPrompt || "";
+      userTemplate = createUserPromptTemplate || "";
+      policy = (form.label_policy || "").trim();
+      rubric = form.decision_rubric.filter((r) => r.trim()).map((r, i) => `${i + 1}. ${r.trim()}`).join("\n");
+    } else if (mode === "edit") {
+      systemPrompt = editSystemPrompt || "";
+      userTemplate = editUserPromptTemplate || "";
+      policy = (form.label_policy || "").trim();
+      rubric = form.decision_rubric.filter((r) => r.trim()).map((r, i) => `${i + 1}. ${r.trim()}`).join("\n");
+    } else {
+      const promptForRun = selectedPrompt || activePromptForTopPanel;
+      if (!promptForRun) return "";
+      systemPrompt = promptForRun.system_prompt || "";
+      userTemplate = promptForRun.user_prompt_template || "";
+      policy = ((promptForRun.prompt_structure as any)?.label_policy || activePromptPolicy || "").trim();
+      rubric = ((promptForRun.prompt_structure as any)?.decision_rubric || activePromptRubricText || "").trim();
+    }
+
+    const baseUserPrompt = userTemplate.replace("{{DETECTION_CODE}}", detectionCode);
     const compiledUser = [baseUserPrompt.trim(), policy ? `Decision Policy:\n${policy}` : "", rubric ? `Decision Rubric:\n${rubric}` : ""]
       .filter(Boolean)
       .join("\n\n");
 
     return [
-      `System Prompt:\n${promptForRun.system_prompt || ""}`.trim(),
+      `System Prompt:\n${systemPrompt}`.trim(),
       `User Prompt (Compiled):\n${compiledUser}`.trim(),
     ]
       .filter(Boolean)
       .join("\n\n");
   }, [
+    mode,
+    form.detection_code,
+    form.label_policy,
+    form.decision_rubric,
+    createSystemPrompt,
+    createUserPromptTemplate,
+    editSystemPrompt,
+    editUserPromptTemplate,
     selectedDetection,
     selectedPrompt,
     activePromptForTopPanel,
@@ -760,6 +692,15 @@ export function DetectionSetup({
             )}
           </div>
 
+          <details className="border border-gray-700 rounded-lg p-3 bg-gray-900/30">
+            <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
+              Compiled Prompt Preview (used at run time)
+            </summary>
+            <pre className="mt-2 text-xs font-mono whitespace-pre-wrap text-gray-300 bg-gray-950/50 border border-gray-800 rounded p-3 max-h-72 overflow-auto">
+              {compiledPromptPreview || "Set detection code and prompt content to preview the compiled prompt."}
+            </pre>
+          </details>
+
           {mode === "create" && (
             <div>
               <label className="text-xs text-gray-400 block mb-2">Metric Thresholds</label>
@@ -895,6 +836,15 @@ export function DetectionSetup({
                   </ol>
                 </div>
               </details>
+
+              <details className="px-1 py-1">
+                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
+                  Compiled Prompt Preview (used at run time)
+                </summary>
+                <pre className="mt-2 text-xs font-mono whitespace-pre-wrap text-gray-300 bg-gray-950/50 border border-gray-800 rounded p-3 max-h-72 overflow-auto">
+                  {compiledPromptPreview || "Select a prompt version to view the compiled prompt."}
+                </pre>
+              </details>
             </div>
           </div>
 
@@ -1008,175 +958,6 @@ export function DetectionSetup({
             </div>
           </div>
 
-          {/* Run + Iterate */}
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-medium">Initial Run and Prompt Iteration</h3>
-                <p className="text-xs text-gray-500 mt-1">
-                  Run on an iteration dataset, inspect outcomes and previews, then iterate quickly.
-                </p>
-              </div>
-              <button
-                onClick={runIteration}
-                disabled={iterationRunning || !selectedPromptId || !selectedDatasetId}
-                className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
-              >
-                {iterationRunning ? "Running..." : "Run Now"}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Prompt Version</label>
-                <select
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-2 text-sm"
-                  value={selectedPromptId}
-                  onChange={(e) => setSelectedPromptId(e.target.value)}
-                >
-                  <option value="">Select prompt</option>
-                  {prompts.map((p) => (
-                    <option key={p.prompt_version_id} value={p.prompt_version_id}>
-                      {p.version_label} | {p.model} | temp={p.temperature}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Dataset</label>
-                <select
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-2 text-sm"
-                  value={selectedDatasetId}
-                  onChange={(e) => setSelectedDatasetId(e.target.value)}
-                >
-                  <option value="">Select dataset</option>
-                  {datasets
-                    .filter((d) => d.split_type !== "HELD_OUT_EVAL")
-                    .map((d) => (
-                      <option key={d.dataset_id} value={d.dataset_id}>
-                        {d.name} ({splitTypeLabel(d.split_type)}, {d.size} images)
-                      </option>
-                    ))}
-                </select>
-              </div>
-            </div>
-
-            <details className="border border-gray-700 rounded-lg p-3 bg-gray-900/30">
-              <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
-                Compiled Prompt Preview (used at run time)
-              </summary>
-              <pre className="mt-2 text-xs font-mono whitespace-pre-wrap text-gray-300 bg-gray-950/50 border border-gray-800 rounded p-3 max-h-72 overflow-auto">
-                {compiledPromptPreview || "Select a prompt version to view the compiled prompt."}
-              </pre>
-            </details>
-
-            {iterationRun && iterationRun.metrics_summary && (
-              <MetricsDisplay metrics={iterationRun.metrics_summary} label={`Run ${iterationRun.run_id.slice(0, 8)} Results`} />
-            )}
-
-            {iterationPredictions.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex gap-2 flex-wrap">
-                  {([
-                    ["all", "All"],
-                    ["fp", "False Positives"],
-                    ["fn", "False Negatives"],
-                    ["parse_fail", "Parse Failures"],
-                    ["correct", "Correct"],
-                  ] as const).map(([key, label]) => (
-                    <button
-                      key={key}
-                      onClick={() => setIterationFilter(key)}
-                      className={`text-xs px-2.5 py-1 rounded-full ${
-                        iterationFilter === key
-                          ? "bg-blue-600 text-white"
-                          : "bg-gray-900 text-gray-400 border border-gray-700 hover:bg-gray-800"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="overflow-x-auto max-h-[420px] overflow-y-auto border border-gray-700 rounded-lg">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-gray-800 z-10">
-                      <tr className="text-gray-500 border-b border-gray-700">
-                        <th className="text-left py-2 px-3">Image</th>
-                        <th className="text-left py-2 px-3">Preview</th>
-                        <th className="text-center py-2 px-3">Ground Truth</th>
-                        <th className="text-center py-2 px-3">Prediction</th>
-                        <th className="text-right py-2 px-3">Confidence</th>
-                        <th className="text-left py-2 px-3">Evidence</th>
-                        <th className="text-center py-2 px-3">Parse</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredIterationPredictions.map((p) => (
-                        <tr key={p.prediction_id} className="border-b border-gray-800/60 hover:bg-gray-800/40">
-                          <td className="py-2 px-3 font-mono text-gray-300">{p.image_id}</td>
-                          <td className="py-2 px-3">
-                            <img
-                              src={p.image_uri}
-                              alt={p.image_id}
-                              className="w-12 h-9 object-cover rounded cursor-pointer hover:opacity-80"
-                              onClick={() => setSelectedPreviewImage(p.image_uri)}
-                            />
-                          </td>
-                          <td className="text-center py-2 px-3">
-                            <span
-                              className={`px-1.5 py-0.5 rounded ${
-                                p.ground_truth_label === "DETECTED"
-                                  ? "bg-purple-900/30 text-purple-300"
-                                  : "bg-emerald-900/30 text-emerald-300"
-                              }`}
-                            >
-                              {p.ground_truth_label}
-                            </span>
-                          </td>
-                          <td className="text-center py-2 px-3">
-                            <span
-                              className={`px-1.5 py-0.5 rounded ${
-                                p.predicted_decision === "DETECTED"
-                                  ? "bg-purple-900/30 text-purple-300"
-                                  : p.predicted_decision === "NOT_DETECTED"
-                                  ? "bg-emerald-900/30 text-emerald-300"
-                                  : "bg-red-900/30 text-red-400"
-                              }`}
-                            >
-                              {p.predicted_decision || "PARSE_FAIL"}
-                            </span>
-                          </td>
-                          <td className="text-right py-2 px-3 text-gray-300">
-                            {p.confidence != null ? p.confidence.toFixed(2) : "—"}
-                          </td>
-                          <td className="py-2 px-3 text-gray-400 truncate max-w-[340px]">{p.evidence || "—"}</td>
-                          <td className="text-center py-2 px-3">
-                            <span className={p.parse_ok ? "text-green-400" : "text-red-400"}>
-                              {p.parse_ok ? "OK" : "FAIL"}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setActiveTab(1)}
-                    className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded"
-                  >
-                    Continue to HIL Review
-                  </button>
-                  <p className="text-xs text-gray-500">
-                    The latest run is carried into HIL and Prompt Feedback.
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* Recent Runs */}
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
             <h3 className="text-sm font-medium mb-4">Recent Runs ({runs.length})</h3>
@@ -1218,18 +999,6 @@ export function DetectionSetup({
         </>
       )}
 
-      {selectedPreviewImage && (
-        <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6"
-          onClick={() => setSelectedPreviewImage(null)}
-        >
-          <img
-            src={selectedPreviewImage}
-            alt="Preview"
-            className="max-h-[90vh] max-w-[90vw] rounded-lg border border-gray-700"
-          />
-        </div>
-      )}
     </div>
   );
 }

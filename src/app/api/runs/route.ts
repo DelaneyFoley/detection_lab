@@ -64,14 +64,15 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const db = getDb();
 
-    const { api_key, prompt_version_id, dataset_id, detection_id, model_override } = body;
+    const { prompt_version_id, dataset_id, detection_id, model_override } = body;
+    const apiKey = String(body.api_key || process.env.GEMINI_API_KEY || "").trim();
     const requestedConcurrency = Number(body.max_concurrency);
     const maxConcurrency = Number.isFinite(requestedConcurrency)
       ? Math.max(1, Math.min(12, Math.floor(requestedConcurrency)))
       : 4;
 
-    if (!api_key) {
-      return NextResponse.json({ error: "API key required" }, { status: 400 });
+    if (!apiKey) {
+      return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
     }
 
     // Fetch prompt
@@ -124,9 +125,9 @@ export async function POST(req: NextRequest) {
     const insertPrediction = db.prepare(`
     INSERT INTO predictions (
       prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence,
-      parse_ok, raw_response, parse_error_reason, parse_fix_suggestion
+      parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const parsedPrompt = {
@@ -142,7 +143,7 @@ export async function POST(req: NextRequest) {
     const processItem = async (item: any): Promise<Prediction> => {
     try {
       const result = await runDetectionInference(
-        api_key,
+        apiKey,
         parsedPrompt,
         detection.detection_code,
         item.image_uri
@@ -161,6 +162,8 @@ export async function POST(req: NextRequest) {
         raw_response: result.raw,
         parse_error_reason: result.parseErrorReason,
         parse_fix_suggestion: result.parseFixSuggestion,
+        inference_runtime_ms: result.runtimeMs,
+        parse_retry_count: result.retryCount,
         corrected_label: null,
         error_tag: null,
         reviewer_note: null,
@@ -179,7 +182,9 @@ export async function POST(req: NextRequest) {
         pred.parse_ok ? 1 : 0,
         pred.raw_response,
         pred.parse_error_reason ?? null,
-        pred.parse_fix_suggestion ?? null
+        pred.parse_fix_suggestion ?? null,
+        pred.inference_runtime_ms ?? null,
+        pred.parse_retry_count ?? 0
       );
 
       return pred;
@@ -199,6 +204,8 @@ export async function POST(req: NextRequest) {
         parse_error_reason: `Model/API error: ${errMsg}`,
         parse_fix_suggestion:
           "Verify API key/model availability, reduce concurrency, and retry. If this persists, inspect network/API quota errors.",
+        inference_runtime_ms: null,
+        parse_retry_count: 0,
         corrected_label: null,
         error_tag: null,
         reviewer_note: null,
@@ -217,7 +224,9 @@ export async function POST(req: NextRequest) {
         0,
         pred.raw_response,
         pred.parse_error_reason ?? null,
-        pred.parse_fix_suggestion ?? null
+        pred.parse_fix_suggestion ?? null,
+        pred.inference_runtime_ms ?? null,
+        pred.parse_retry_count ?? 0
       );
 
       return pred;

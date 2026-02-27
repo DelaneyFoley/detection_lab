@@ -96,6 +96,133 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
     setDetections(Array.isArray(rows) ? rows : []);
   };
 
+  const fetchDatasetDescriptionByImageId = async (datasetId: string) => {
+    const res = await fetch(`/api/datasets?dataset_id=${datasetId}`);
+    const payload = await res.json();
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const map = new Map<string, string>();
+    for (const item of items) {
+      if (!item?.image_id) continue;
+      map.set(String(item.image_id), String(item.image_description || ""));
+    }
+    return map;
+  };
+
+  const exportRunLogCsv = async (
+    detection: Detection,
+    run: Run,
+    predictions: any[]
+  ) => {
+    const descByImageId = await fetchDatasetDescriptionByImageId(run.dataset_id);
+    const metrics = (run.metrics_summary || {}) as MetricsSummary;
+    const headers = [
+      "run_id",
+      "detection_code",
+      "detection_name",
+      "prompt_version_id",
+      "dataset_id",
+      "split_type",
+      "run_created_at",
+      "metric_accuracy",
+      "metric_precision",
+      "metric_recall",
+      "metric_f1",
+      "metric_prevalence",
+      "metric_parse_failure_rate",
+      "image_id",
+      "image_uri",
+      "dataset_image_description",
+      "ground_truth_label",
+      "predicted_decision",
+      "confidence",
+      "ai_evidence",
+      "parse_ok",
+      "parse_error_reason",
+      "parse_fix_suggestion",
+      "inference_runtime_ms",
+      "parse_retry_count",
+      "error_tag",
+      "reviewer_note",
+      "corrected_label",
+      "corrected_at",
+    ];
+    const rows = predictions.map((p) => [
+      run.run_id,
+      detection.detection_code,
+      detection.display_name,
+      run.prompt_version_id,
+      run.dataset_id,
+      run.split_type,
+      run.created_at,
+      metrics.accuracy ?? "",
+      metrics.precision ?? "",
+      metrics.recall ?? "",
+      metrics.f1 ?? "",
+      metrics.prevalence ?? "",
+      metrics.parse_failure_rate ?? "",
+      p.image_id ?? "",
+      p.image_uri ?? "",
+      descByImageId.get(String(p.image_id || "")) || "",
+      p.ground_truth_label ?? "",
+      p.predicted_decision ?? "PARSE_FAIL",
+      p.confidence ?? "",
+      p.evidence ?? "",
+      p.parse_ok ?? "",
+      p.parse_error_reason ?? "",
+      p.parse_fix_suggestion ?? "",
+      p.inference_runtime_ms ?? "",
+      p.parse_retry_count ?? "",
+      p.error_tag ?? "",
+      p.reviewer_note ?? "",
+      p.corrected_label ?? "",
+      p.corrected_at ?? "",
+    ]);
+
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => csvEscape(cell)).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `run-log-${run.run_id.slice(0, 8)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportRunLogJson = async (
+    detection: Detection,
+    run: Run,
+    predictions: any[]
+  ) => {
+    const descByImageId = await fetchDatasetDescriptionByImageId(run.dataset_id);
+    const enriched = predictions.map((p) => ({
+      ...p,
+      dataset_image_description: descByImageId.get(String(p.image_id || "")) || "",
+    }));
+    const payload = {
+      run: {
+        run_id: run.run_id,
+        detection_id: run.detection_id,
+        detection_code: detection.detection_code,
+        detection_name: detection.display_name,
+        prompt_version_id: run.prompt_version_id,
+        dataset_id: run.dataset_id,
+        split_type: run.split_type,
+        created_at: run.created_at,
+        metrics_summary: run.metrics_summary,
+      },
+      predictions: enriched,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `run-log-${run.run_id.slice(0, 8)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto py-12 text-center text-gray-500">
@@ -365,6 +492,20 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                       )}
                                       {loadingRunId !== r.run_id && (
                                         <div className="space-y-3">
+                                          <div className="flex items-center gap-2">
+                                            <button
+                                              onClick={() => exportRunLogCsv(d, r, details?.predictions || [])}
+                                              className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                            >
+                                              Export Run Log CSV
+                                            </button>
+                                            <button
+                                              onClick={() => exportRunLogJson(d, r, details?.predictions || [])}
+                                              className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                            >
+                                              Export Run Log JSON
+                                            </button>
+                                          </div>
                                           {(accepted.length > 0 || rejected.length > 0) && (
                                             <div className="bg-gray-950/40 border border-gray-800 rounded p-2">
                                               <div className="text-[11px] text-gray-500 mb-1">
@@ -426,6 +567,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                 <th className="text-left px-2 py-1.5">Image</th>
                                                 <th className="text-center px-2 py-1.5">AI Label</th>
                                                 <th className="text-right px-2 py-1.5">Confidence</th>
+                                                <th className="text-right px-2 py-1.5">Runtime (ms)</th>
                                                 <th className="text-left px-2 py-1.5">AI Description</th>
                                                 <th className="text-center px-2 py-1.5">Ground Truth (run snapshot)</th>
                                                 <th className="text-left px-2 py-1.5">Parse Reason</th>
@@ -471,6 +613,9 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                   <td className="px-2 py-1.5 text-right text-gray-300">
                                                     {p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}
                                                   </td>
+                                                  <td className="px-2 py-1.5 text-right text-gray-300">
+                                                    {p.inference_runtime_ms != null ? Number(p.inference_runtime_ms) : "—"}
+                                                  </td>
                                                   <td className="px-2 py-1.5 text-gray-400 max-w-[420px] truncate" title={p.evidence || ""}>
                                                     {p.evidence || "—"}
                                                   </td>
@@ -505,7 +650,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                               ))}
                                               {(details?.predictions || []).length === 0 && (
                                                 <tr>
-                                                  <td colSpan={10} className="px-2 py-4 text-center text-gray-500">
+                                                  <td colSpan={11} className="px-2 py-4 text-center text-gray-500">
                                                     No prediction rows.
                                                   </td>
                                                 </tr>
@@ -582,11 +727,11 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
 
       {previewPrediction && (
         <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6"
+          className="fixed inset-0 bg-black/80 z-50 overflow-y-auto flex items-start justify-center p-6"
           onClick={() => setPreviewPrediction(null)}
         >
           <div
-            className="w-full max-w-5xl max-h-[86vh] bg-gray-900 border border-gray-700 rounded-lg p-4 grid gap-4 overflow-hidden"
+            className="w-full max-w-5xl max-h-[calc(100vh-3rem)] bg-gray-900 border border-gray-700 rounded-lg p-4 grid gap-4 overflow-hidden my-auto"
             style={{ gridTemplateColumns: "minmax(0, 1fr) 340px" }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -619,6 +764,17 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                 <label className="text-xs text-gray-400 block mb-1">Confidence (0-1)</label>
                 <div className="text-sm text-gray-300">
                   {previewPrediction.confidence != null ? Number(previewPrediction.confidence).toFixed(2) : "—"}
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Runtime</label>
+                <div className="text-sm text-gray-300">
+                  {previewPrediction.inference_runtime_ms != null
+                    ? `${Number(previewPrediction.inference_runtime_ms)} ms`
+                    : "—"}
+                  {previewPrediction.parse_retry_count != null
+                    ? ` (retries: ${Number(previewPrediction.parse_retry_count)})`
+                    : ""}
                 </div>
               </div>
               <div>
@@ -713,4 +869,10 @@ function splitColor(t: string) {
     case "HELD_OUT_EVAL": return "bg-purple-900/30 text-purple-400";
     default: return "bg-gray-800 text-gray-400";
   }
+}
+
+function csvEscape(value: unknown): string {
+  const raw = String(value ?? "");
+  const escaped = raw.replace(/"/g, "\"\"");
+  return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
 }

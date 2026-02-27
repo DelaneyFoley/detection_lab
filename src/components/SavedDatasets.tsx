@@ -6,7 +6,7 @@ import type { Dataset, DatasetItem, Detection } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 
 export function SavedDatasets({ detections }: { detections: Detection[] }) {
-  const { triggerRefresh, refreshCounter } = useAppStore();
+  const { triggerRefresh, refreshCounter, apiKey, selectedModel } = useAppStore();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
@@ -18,6 +18,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [itemSortBy, setItemSortBy] = useState<"image_id" | "ground_truth_label">("image_id");
   const [itemSortDir, setItemSortDir] = useState<"asc" | "desc">("asc");
+  const [describingImages, setDescribingImages] = useState(false);
 
   const loadDatasets = async () => {
     const res = await fetch("/api/datasets");
@@ -186,6 +187,34 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     triggerRefresh();
   };
 
+  const populateDescriptionsWithAi = async () => {
+    if (!selectedDatasetId) return;
+    setDescribingImages(true);
+    try {
+      const res = await fetch("/api/gemini/describe-dataset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: apiKey,
+          model_override: selectedModel,
+          dataset_id: selectedDatasetId,
+          overwrite: false,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error || "Failed to generate descriptions");
+      await loadDatasets();
+      await loadDatasetItems(selectedDatasetId);
+      triggerRefresh();
+      alert(`Generated ${payload.updated || 0} descriptions.`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Failed to generate descriptions";
+      alert(msg);
+    } finally {
+      setDescribingImages(false);
+    }
+  };
+
   const toggleItemSort = (field: "image_id" | "ground_truth_label") => {
     if (itemSortBy === field) {
       setItemSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
@@ -276,6 +305,13 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
               >
                 {isSavingDetails ? "Saving..." : isEditingDetails ? "Save" : "Edit"}
+              </button>
+              <button
+                onClick={populateDescriptionsWithAi}
+                disabled={describingImages || datasetItems.length === 0}
+                className="text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded"
+              >
+                {describingImages ? "Generating..." : "Populate Descriptions with AI"}
               </button>
               <button
                 onClick={deleteDataset}
@@ -411,11 +447,11 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
       {selectedPreviewIndex != null && sortedDatasetItems[selectedPreviewIndex] && (
         <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6"
+          className="fixed inset-0 bg-black/80 z-50 overflow-y-auto flex items-start justify-center p-6"
           onClick={() => setSelectedPreviewIndex(null)}
         >
           <div
-            className="w-full max-w-5xl max-h-[86vh] bg-gray-900 border border-gray-700 rounded-lg p-4 grid gap-4 overflow-hidden"
+            className="w-full max-w-5xl max-h-[calc(100vh-3rem)] bg-gray-900 border border-gray-700 rounded-lg p-4 grid gap-4 overflow-hidden my-auto"
             style={{ gridTemplateColumns: "minmax(0, 1fr) 340px" }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -805,9 +841,9 @@ function GlobalDatasetUploadForm({
       </button>
 
       {expandedIndex != null && fileRows[expandedIndex] && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+        <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto flex items-start justify-center p-6">
           <button className="absolute inset-0" onClick={() => setExpandedIndex(null)} aria-label="Close preview" />
-          <div className="relative z-10 w-full max-w-5xl">
+          <div className="relative z-10 w-full max-w-5xl max-h-[calc(100vh-3rem)] overflow-y-auto my-auto">
             <img
               src={fileRows[expandedIndex].preview}
               alt={fileRows[expandedIndex].file.name}

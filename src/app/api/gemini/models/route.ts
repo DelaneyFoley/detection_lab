@@ -10,10 +10,12 @@ type GeminiModelsResponse = {
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  const apiKey = typeof body?.api_key === "string" ? body.api_key : "";
+  const apiKey = String(
+    (typeof body?.api_key === "string" ? body.api_key : "") || process.env.GEMINI_API_KEY || ""
+  ).trim();
 
   if (!apiKey) {
-    return NextResponse.json({ error: "API key required" }, { status: 400 });
+    return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
   }
 
   try {

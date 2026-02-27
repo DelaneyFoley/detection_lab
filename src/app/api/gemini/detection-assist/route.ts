@@ -10,12 +10,12 @@ import {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const apiKey = body?.api_key as string | undefined;
+    const apiKey = String(body?.api_key || process.env.GEMINI_API_KEY || "").trim();
     const requestText = body?.request as string | undefined;
     const modelOverride = body?.model_override as string | undefined;
 
     if (!apiKey) {
-      return NextResponse.json({ error: "API key required" }, { status: 400 });
+      return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
     }
     if (!requestText || !requestText.trim()) {
       return NextResponse.json({ error: "request is required" }, { status: 400 });

@@ -86,10 +86,6 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
   };
 
   const getPromptSuggestions = async () => {
-    if (!apiKey) {
-      alert("Set your Gemini API key first");
-      return;
-    }
     if (!runData) return;
 
     setLoadingSuggestions(true);
@@ -214,7 +210,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       const datasets = await datasetsRes.json();
       const goldenDataset = datasets.find((d: any) => d.split_type === "GOLDEN");
 
-      if (goldenDataset && apiKey) {
+      if (goldenDataset) {
         const regRes = await fetch("/api/runs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

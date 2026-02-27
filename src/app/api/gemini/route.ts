@@ -8,10 +8,11 @@ import path from "path";
 // Prompt improvement assistant
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { api_key, predictions, prompt, detection, model_override } = body;
+  const { predictions, prompt, detection, model_override } = body;
+  const apiKey = String(body.api_key || process.env.GEMINI_API_KEY || "").trim();
 
-  if (!api_key) {
-    return NextResponse.json({ error: "API key required" }, { status: 400 });
+  if (!apiKey) {
+    return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
   }
 
   // Cluster errors
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
   });
 
   try {
-    const genAI = new GoogleGenerativeAI(api_key);
+    const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: model_override || "gemini-2.5-flash" });
     const multimodalParts: any[] = [analysisPrompt];
     const sampledForVision = samplePredictionsForVision(predictions);

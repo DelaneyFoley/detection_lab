@@ -39,10 +39,6 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
   }, [loadData]);
 
   const runEval = async () => {
-    if (!apiKey) {
-      alert("Set your Gemini API key first");
-      return;
-    }
     if (!selectedPromptId || !selectedDatasetId) {
       alert("Select a prompt version and dataset");
       return;
@@ -116,7 +112,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     const allDatasets = await datasetsRes.json();
     const goldenDataset = allDatasets.find((d: any) => d.split_type === "GOLDEN");
 
-    if (goldenDataset && apiKey) {
+    if (goldenDataset) {
       const regRes = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -186,13 +182,61 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     loadData();
   };
 
-  const exportCSV = () => {
+  const exportCSV = async () => {
     if (!latestResult?.predictions) return;
-    const headers = ["image_id", "ground_truth", "prediction", "confidence", "evidence", "parse_ok"];
-    const rows = latestResult.predictions.map((p: any) =>
-      [p.image_id, p.ground_truth_label, p.predicted_decision || "PARSE_FAIL", p.confidence ?? "", p.evidence || "", p.parse_ok].join(",")
-    );
-    const csv = [headers.join(","), ...rows].join("\n");
+    const descriptionByImageId = await fetchDatasetDescriptions(latestResult.dataset_id);
+    const m = latestResult.metrics_summary || {};
+    const headers: unknown[] = [
+      "run_id",
+      "dataset_id",
+      "prompt_version_id",
+      "created_at",
+      "metric_accuracy",
+      "metric_precision",
+      "metric_recall",
+      "metric_f1",
+      "metric_prevalence",
+      "metric_parse_failure_rate",
+      "image_id",
+      "image_uri",
+      "dataset_image_description",
+      "ground_truth",
+      "prediction",
+      "confidence",
+      "evidence",
+      "parse_ok",
+      "parse_error_reason",
+      "parse_fix_suggestion",
+      "inference_runtime_ms",
+      "parse_retry_count",
+    ];
+    const rows: unknown[][] = latestResult.predictions.map((p: any) => [
+      latestResult.run_id,
+      latestResult.dataset_id,
+      latestResult.prompt_version_id,
+      latestResult.created_at,
+      m.accuracy ?? "",
+      m.precision ?? "",
+      m.recall ?? "",
+      m.f1 ?? "",
+      m.prevalence ?? "",
+      m.parse_failure_rate ?? "",
+      p.image_id,
+      p.image_uri,
+      descriptionByImageId.get(String(p.image_id || "")) || "",
+      p.ground_truth_label,
+      p.predicted_decision || "PARSE_FAIL",
+      p.confidence ?? "",
+      p.evidence || "",
+      p.parse_ok,
+      p.parse_error_reason || "",
+      p.parse_fix_suggestion || "",
+      p.inference_runtime_ms ?? "",
+      p.parse_retry_count ?? "",
+    ]);
+    const csv = [headers, ...rows]
+      .map((row: unknown[]) => row.map((cell: unknown) => csvEscape(cell)).join(","))
+      .join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -201,9 +245,17 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     a.click();
   };
 
-  const exportJSON = () => {
+  const exportJSON = async () => {
     if (!latestResult) return;
-    const blob = new Blob([JSON.stringify(latestResult, null, 2)], { type: "application/json" });
+    const descriptionByImageId = await fetchDatasetDescriptions(latestResult.dataset_id);
+    const payload = {
+      ...latestResult,
+      predictions: (latestResult.predictions || []).map((p: any) => ({
+        ...p,
+        dataset_image_description: descriptionByImageId.get(String(p.image_id || "")) || "",
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -442,6 +494,29 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
       )}
     </div>
   );
+}
+
+async function fetchDatasetDescriptions(datasetId: string): Promise<Map<string, string>> {
+  if (!datasetId) return new Map();
+  try {
+    const res = await fetch(`/api/datasets?dataset_id=${datasetId}`);
+    const payload = await res.json();
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const map = new Map<string, string>();
+    for (const item of items) {
+      if (!item?.image_id) continue;
+      map.set(String(item.image_id), String(item.image_description || ""));
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+function csvEscape(value: unknown): string {
+  const raw = String(value ?? "");
+  const escaped = raw.replace(/"/g, "\"\"");
+  return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
 }
 
 function ThresholdRow({ label, value, threshold }: { label: string; value: number; threshold: number }) {

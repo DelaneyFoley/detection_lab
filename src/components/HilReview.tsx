@@ -495,6 +495,10 @@ function ImageReviewMode({
 }) {
   const [note, setNote] = useState(p.reviewer_note || "");
   const [noteDirty, setNoteDirty] = useState(false);
+  const [imageZoom, setImageZoom] = useState(1);
+  const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
+  const [draggingImage, setDraggingImage] = useState(false);
+  const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const lastPredictionIdRef = useRef(p.prediction_id);
   const lastNoteRef = useRef(note);
 
@@ -512,6 +516,13 @@ function ImageReviewMode({
   useEffect(() => {
     lastNoteRef.current = note;
   }, [note]);
+
+  useEffect(() => {
+    setImageZoom(1);
+    setImagePan({ x: 0, y: 0 });
+    setDraggingImage(false);
+    dragStartRef.current = null;
+  }, [p.prediction_id]);
 
   useEffect(() => {
     // Persist pending note when leaving image review (switching mode/tab/unmount).
@@ -549,6 +560,33 @@ function ImageReviewMode({
     onNext();
   };
 
+  const startImageDrag = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (imageZoom <= 1) return;
+    e.preventDefault();
+    dragStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      panX: imagePan.x,
+      panY: imagePan.y,
+    };
+    setDraggingImage(true);
+  };
+
+  const moveImageDrag = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || !draggingImage) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    setImagePan({
+      x: dragStartRef.current.panX + dx,
+      y: dragStartRef.current.panY + dy,
+    });
+  };
+
+  const endImageDrag = () => {
+    setDraggingImage(false);
+    dragStartRef.current = null;
+  };
+
   return (
     <div className="grid grid-cols-2 gap-6" onKeyDown={handleKeyDown} tabIndex={0}>
       {/* Image */}
@@ -558,6 +596,30 @@ function ImageReviewMode({
             {index + 1} / {total} — {p.image_id}
           </span>
           <div className="flex gap-2">
+            <button
+              onClick={() => setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))}
+              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+              disabled={imageZoom >= 4}
+            >
+              Zoom +
+            </button>
+            <button
+              onClick={() => setImageZoom((z) => Math.max(1, Number((z - 0.25).toFixed(2))))}
+              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+              disabled={imageZoom <= 1}
+            >
+              Zoom -
+            </button>
+            <button
+              onClick={() => {
+                setImageZoom(1);
+                setImagePan({ x: 0, y: 0 });
+              }}
+              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+              disabled={imageZoom === 1 && imagePan.x === 0 && imagePan.y === 0}
+            >
+              Reset
+            </button>
             <button onClick={handlePrev} disabled={index === 0} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-30 rounded text-xs">
               ← Prev
             </button>
@@ -566,11 +628,27 @@ function ImageReviewMode({
             </button>
           </div>
         </div>
-        <img
-          src={p.image_uri}
-          alt={p.image_id}
-          className="w-full max-h-[500px] object-contain rounded bg-gray-900"
-        />
+        <div
+          className="w-full h-[500px] overflow-hidden rounded bg-gray-900 flex items-center justify-center"
+          onMouseDown={startImageDrag}
+          onMouseMove={moveImageDrag}
+          onMouseUp={endImageDrag}
+          onMouseLeave={endImageDrag}
+          style={{ cursor: imageZoom > 1 ? (draggingImage ? "grabbing" : "grab") : "default" }}
+        >
+          <img
+            src={p.image_uri}
+            alt={p.image_id}
+            className="max-h-[500px] max-w-full object-contain rounded select-none"
+            style={{
+              transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`,
+              transformOrigin: "center center",
+            }}
+            draggable={false}
+            onDragStart={(e) => e.preventDefault()}
+          />
+        </div>
+        <p className="mt-2 text-xs text-gray-500">Zoom: {(imageZoom * 100).toFixed(0)}%</p>
       </div>
 
       {/* Review Panel */}
