@@ -1,0 +1,11 @@
+{
+  "/api/detections/route": "app/api/detections/route.js",
+  "/api/gemini/route": "app/api/gemini/route.js",
+  "/api/gemini/models/route": "app/api/gemini/models/route.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/datasets/route": "app/api/datasets/route.js",
+  "/api/hil/route": "app/api/hil/route.js",
+  "/api/runs/route": "app/api/runs/route.js",
+  "/api/prompts/route": "app/api/prompts/route.js",
+  "/page": "app/page.js"
+}
