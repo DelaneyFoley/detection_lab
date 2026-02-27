@@ -18,8 +18,9 @@ const ERROR_TAGS: ErrorTag[] = [
 type FilterType = "all" | "fp" | "fn" | "parse_fail" | "correct" | "corrected";
 
 export function HilReview({ detection }: { detection: Detection }) {
-  const { selectedRunByDetection, setSelectedRunForDetection, triggerRefresh } = useAppStore();
+  const { selectedRunByDetection, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
   const [runs, setRuns] = useState<Run[]>([]);
+  const [promptLabelById, setPromptLabelById] = useState<Record<string, string>>({});
   const persistedRunId = selectedRunByDetection[detection.detection_id] || "";
   const [selectedRunId, setSelectedRunId] = useState(persistedRunId);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
@@ -41,10 +42,21 @@ export function HilReview({ detection }: { detection: Detection }) {
   );
 
   const loadRuns = useCallback(async () => {
-    const res = await fetch(`/api/runs?detection_id=${detection.detection_id}`);
-    const data = await res.json();
+    const [runsRes, promptsRes] = await Promise.all([
+      fetch(`/api/runs?detection_id=${detection.detection_id}`),
+      fetch(`/api/prompts?detection_id=${detection.detection_id}`),
+    ]);
+    const data = await runsRes.json();
+    const prompts = await promptsRes.json();
     setRuns(data.filter((r: Run) => r.status === "completed"));
-  }, [detection.detection_id]);
+    const next: Record<string, string> = {};
+    if (Array.isArray(prompts)) {
+      for (const p of prompts) {
+        if (p?.prompt_version_id && p?.version_label) next[p.prompt_version_id] = p.version_label;
+      }
+    }
+    setPromptLabelById(next);
+  }, [detection.detection_id, refreshCounter]);
 
   useEffect(() => {
     loadRuns();
@@ -204,7 +216,7 @@ export function HilReview({ detection }: { detection: Detection }) {
             <option value="">Choose a run...</option>
             {runs.map((r: any) => (
               <option key={r.run_id} value={r.run_id}>
-                {r.run_id.slice(0, 8)} — {splitTypeLabel(r.split_type)} — F1: {((r.metrics_summary?.f1 || 0) * 100).toFixed(1)}% — {new Date(r.created_at).toLocaleString()}
+                {(promptLabelById[r.prompt_version_id] || r.prompt_version_id?.slice(0, 8) || "Unknown prompt")} — {r.run_id.slice(0, 8)} — {splitTypeLabel(r.split_type)} — F1: {((r.metrics_summary?.f1 || 0) * 100).toFixed(1)}% — {new Date(r.created_at).toLocaleString()}
               </option>
             ))}
           </select>
@@ -392,7 +404,7 @@ function PredictionRow({
       <td className="text-center py-2 px-3">
         <span className={`text-xs px-1.5 py-0.5 rounded ${
           p.predicted_decision === "DETECTED" ? "bg-purple-900/30 text-purple-300" :
-          p.predicted_decision === "NOT_DETECTED" ? "bg-gray-800 text-gray-400" :
+          p.predicted_decision === "NOT_DETECTED" ? "bg-emerald-900/30 text-emerald-300" :
           "bg-red-900/30 text-red-400"
         }`}>
           {p.predicted_decision || "PARSE_FAIL"}
@@ -404,7 +416,7 @@ function PredictionRow({
             p.ground_truth_label === "DETECTED"
               ? "text-purple-300"
               : p.ground_truth_label === "NOT_DETECTED"
-                ? "text-gray-300"
+                ? "text-emerald-300"
                 : "text-gray-400"
           }`}
           value={p.ground_truth_label || ""}
@@ -444,7 +456,12 @@ function PredictionRow({
         {p.parse_ok ? (
           <span className="text-green-400 text-xs">OK</span>
         ) : (
-          <span className="text-red-400 text-xs">FAIL</span>
+          <span
+            className="text-red-400 text-xs"
+            title={`${p.parse_error_reason || "Parse failed"}${p.parse_fix_suggestion ? `\nFix: ${p.parse_fix_suggestion}` : ""}`}
+          >
+            FAIL
+          </span>
         )}
       </td>
       <td className="text-center py-2 px-3">
@@ -570,7 +587,7 @@ function ImageReviewMode({
                   p.predicted_decision === "DETECTED"
                     ? "bg-purple-900/30 text-purple-300"
                     : p.predicted_decision === "NOT_DETECTED"
-                      ? "bg-gray-800 text-gray-300"
+                      ? "bg-emerald-900/30 text-emerald-300"
                       : "bg-red-900/30 text-red-400"
                 }`}
               >
@@ -609,7 +626,7 @@ function ImageReviewMode({
               }
               className={`px-3 py-1.5 rounded text-xs border ${
                 p.ground_truth_label === "NOT_DETECTED"
-                  ? "bg-gray-800 text-gray-200 border-gray-500"
+                  ? "bg-emerald-900/30 text-emerald-200 border-emerald-600/50"
                   : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"
               }`}
             >
@@ -634,7 +651,11 @@ function ImageReviewMode({
           {p.corrected_label && (
             <div className="flex items-center gap-3 mt-1">
               <span className="text-xs text-gray-400">Corrected to:</span>
-              <span className={`text-sm font-medium ${p.corrected_label === "DETECTED" ? "text-green-400" : "text-gray-400"}`}>
+              <span
+                className={`text-sm font-medium ${
+                  p.corrected_label === "DETECTED" ? "text-purple-300" : "text-emerald-300"
+                }`}
+              >
                 {p.corrected_label}
               </span>
             </div>
@@ -694,7 +715,16 @@ function ImageReviewMode({
             {p.raw_response}
           </pre>
           {!p.parse_ok && (
-            <p className="text-xs text-red-400 mt-2">Parse failed — response did not match expected schema</p>
+            <div className="mt-2 space-y-2">
+              <p className="text-xs text-red-400">Parse failed.</p>
+              <div className="text-xs text-gray-300">
+                <span className="text-gray-500">Why:</span> {p.parse_error_reason || "Response did not match expected schema."}
+              </div>
+              <div className="text-xs text-gray-300">
+                <span className="text-gray-500">How to fix:</span>{" "}
+                {p.parse_fix_suggestion || "Return strict JSON only with detection_code, decision, confidence, evidence."}
+              </div>
+            </div>
           )}
         </div>
       </div>

@@ -122,8 +122,11 @@ export async function POST(req: NextRequest) {
 
     // Run inference for each image
     const insertPrediction = db.prepare(`
-    INSERT INTO predictions (prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence, parse_ok, raw_response)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO predictions (
+      prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence,
+      parse_ok, raw_response, parse_error_reason, parse_fix_suggestion
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const parsedPrompt = {
@@ -156,6 +159,8 @@ export async function POST(req: NextRequest) {
         evidence: result.parsed?.evidence || null,
         parse_ok: result.parseOk,
         raw_response: result.raw,
+        parse_error_reason: result.parseErrorReason,
+        parse_fix_suggestion: result.parseFixSuggestion,
         corrected_label: null,
         error_tag: null,
         reviewer_note: null,
@@ -172,7 +177,9 @@ export async function POST(req: NextRequest) {
         pred.confidence,
         pred.evidence,
         pred.parse_ok ? 1 : 0,
-        pred.raw_response
+        pred.raw_response,
+        pred.parse_error_reason ?? null,
+        pred.parse_fix_suggestion ?? null
       );
 
       return pred;
@@ -189,6 +196,9 @@ export async function POST(req: NextRequest) {
         evidence: null,
         parse_ok: false,
         raw_response: `ERROR: ${errMsg}`,
+        parse_error_reason: `Model/API error: ${errMsg}`,
+        parse_fix_suggestion:
+          "Verify API key/model availability, reduce concurrency, and retry. If this persists, inspect network/API quota errors.",
         corrected_label: null,
         error_tag: null,
         reviewer_note: null,
@@ -205,7 +215,9 @@ export async function POST(req: NextRequest) {
         null,
         null,
         0,
-        pred.raw_response
+        pred.raw_response,
+        pred.parse_error_reason ?? null,
+        pred.parse_fix_suggestion ?? null
       );
 
       return pred;

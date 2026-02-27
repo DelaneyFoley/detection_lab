@@ -12,6 +12,7 @@ import { PostHilMetrics } from "@/components/PostHilMetrics";
 import { HeldOutEval } from "@/components/HeldOutEval";
 import { DetectionDashboard } from "@/components/DetectionDashboard";
 import { SavedDatasets } from "@/components/SavedDatasets";
+import { AdminPrompts } from "@/components/AdminPrompts";
 
 const TABS = [
   { label: "Detection Setup", id: 0, step: "1", description: "Configure detection and prompt versions" },
@@ -22,10 +23,11 @@ const TABS = [
   { label: "Held-Out Eval", id: 5, step: "6", description: "Run final evaluation and regression checks" },
   { label: "Detections & Logs", id: 6, step: "", description: "Manage detections and inspect run logs" },
   { label: "Datasets", id: 7, step: "", description: "Manage datasets, items, and labels" },
+  { label: "Admin", id: 8, step: "", description: "Manage Prompt Assist and Prompt Feedback templates" },
 ];
 
 export default function Home() {
-  const { activeTab, setActiveTab, selectedDetectionId, setSelectedDetectionId, apiKey, setApiKey, selectedModel, setSelectedModel } =
+  const { activeTab, setActiveTab, selectedDetectionId, setSelectedDetectionId, apiKey, setApiKey, selectedModel, setSelectedModel, refreshCounter } =
     useAppStore();
   const [detections, setDetections] = useState<Detection[]>([]);
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
@@ -42,7 +44,7 @@ export default function Home() {
 
   useEffect(() => {
     loadDetections();
-  }, [loadDetections]);
+  }, [loadDetections, refreshCounter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -291,7 +293,7 @@ export default function Home() {
 
         {/* Tab Content */}
         <div className="flex-1 overflow-auto p-6">
-          {!hasStarted && activeTab !== 6 && activeTab !== 7 ? (
+          {!hasStarted && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
             <div className="max-w-3xl mx-auto pt-16">
               <div className="bg-gray-800/40 border border-gray-700 rounded-lg p-8 text-center">
                 <h3 className="text-2xl font-semibold text-white">Getting Started</h3>
@@ -313,7 +315,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          ) : !selectedDetectionId && activeTab !== 0 && activeTab !== 6 && activeTab !== 7 ? (
+          ) : !selectedDetectionId && activeTab !== 0 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
             <div className="text-center py-20 text-gray-500">
               <p className="text-lg">Select a detection to get started</p>
               <p className="text-sm mt-2">
@@ -360,6 +362,9 @@ export default function Home() {
               </div>
               <div className={activeTab === 7 ? "block" : "hidden"}>
                 <SavedDatasets detections={detections} />
+              </div>
+              <div className={activeTab === 8 ? "block" : "hidden"}>
+                <AdminPrompts />
               </div>
             </>
           )}

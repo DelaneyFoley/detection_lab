@@ -1,13 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-
-const REQUIRED_USER_PROMPT_JSON_BLOCK = `Return ONLY this JSON:
-{
-  "detection_code": "{{DETECTION_CODE}}",
-  "decision": "DETECTED" or "NOT_DETECTED",
-  "confidence": <float 0-1>,
-  "evidence": "<short phrase describing visual basis>"
-}`;
+import { getDb } from "@/lib/db";
+import {
+  DEFAULT_PROMPT_ASSIST_TEMPLATE,
+  REQUIRED_USER_PROMPT_JSON_BLOCK,
+  renderPromptAssistTemplate,
+} from "@/lib/adminPrompts";
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,37 +21,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "request is required" }, { status: 400 });
     }
 
-    const prompt = `You are a senior property insurance underwriting and computer-vision policy expert.
-
-Create a production-ready binary detection specification for home-inspection imagery.
-The detection should follow strict underwriting standards for safety, hazard, and loss prevention.
-
-User request:
-${requestText}
-
-Return ONLY valid JSON with this exact shape:
-{
-  "display_name": "human readable title",
-  "detection_code": "UPPER_SNAKE_CASE_CODE",
-  "description": "one concise paragraph",
-  "system_prompt": "system prompt text",
-  "user_prompt_template": "user prompt template text containing {{DETECTION_CODE}}",
-  "label_policy_detected": "criteria for DETECTED",
-  "label_policy_not_detected": "criteria for NOT_DETECTED",
-  "decision_rubric": ["criterion 1", "criterion 2", "criterion 3", "criterion 4"],
-  "version_label": "Detection baseline"
-}
-
-Rules:
-- detection_code must be uppercase letters, numbers, underscore only.
-- decision_rubric must contain 4-7 actionable checks.
-- label policies must be strict and auditable.
-- user_prompt_template must require JSON-only response with:
-  detection_code, decision, confidence (0-1), evidence.
-- user_prompt_template must include exactly this block:
-${REQUIRED_USER_PROMPT_JSON_BLOCK}
-- Use clear, concise, professional language.
-- Do not add markdown, commentary, or extra keys.`;
+    const db = getDb();
+    const stored = db
+      .prepare("SELECT value FROM app_settings WHERE key = ?")
+      .get("prompt_assist_template") as { value?: string } | undefined;
+    const template = stored?.value || DEFAULT_PROMPT_ASSIST_TEMPLATE;
+    const prompt = renderPromptAssistTemplate(template, requestText.trim());
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: modelOverride || "gemini-2.5-pro" });

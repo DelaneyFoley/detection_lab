@@ -22,7 +22,7 @@ export function DetectionSetup({
   onRefresh: () => void;
   createTrigger?: number;
 }) {
-  const { apiKey, selectedModel, refreshCounter, setSelectedDetectionId, setActiveTab, setSelectedRunForDetection } = useAppStore();
+  const { apiKey, selectedModel, refreshCounter, triggerRefresh, setSelectedDetectionId, setActiveTab, setSelectedRunForDetection } = useAppStore();
   const [mode, setMode] = useState<"view" | "create" | "edit">("view");
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -178,6 +178,7 @@ export function DetectionSetup({
       setIterationRun(fullRun);
       setIterationPredictions(fullRun.predictions || []);
       setSelectedRunForDetection(selectedDetection.detection_id, fullRun.run_id);
+      triggerRefresh();
       loadRelated();
     } catch (err) {
       console.error(err);
@@ -258,6 +259,7 @@ export function DetectionSetup({
     setSelectedDetectionId(data.detection_id);
     setMode("view");
     onRefresh();
+    triggerRefresh();
   };
 
   const generateWithPromptAssist = async () => {
@@ -380,6 +382,7 @@ export function DetectionSetup({
     setMode("view");
     await loadRelated();
     onRefresh();
+    triggerRefresh();
   };
 
   const deletePromptVersion = async (promptVersionId: string) => {
@@ -404,6 +407,7 @@ export function DetectionSetup({
 
     await loadRelated();
     onRefresh();
+    triggerRefresh();
   };
 
   const startEdit = () => {
@@ -491,7 +495,7 @@ export function DetectionSetup({
     );
     const policy = ((promptForRun.prompt_structure as any)?.label_policy || activePromptPolicy || "").trim();
     const rubric = ((promptForRun.prompt_structure as any)?.decision_rubric || activePromptRubricText || "").trim();
-    const compiledUser = [baseUserPrompt.trim(), policy ? `Label Policy:\n${policy}` : "", rubric ? `Decision Rubric:\n${rubric}` : ""]
+    const compiledUser = [baseUserPrompt.trim(), policy ? `Decision Policy:\n${policy}` : "", rubric ? `Decision Rubric:\n${rubric}` : ""]
       .filter(Boolean)
       .join("\n\n");
 
@@ -684,7 +688,7 @@ export function DetectionSetup({
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">User Prompt Template</label>
+                <label className="text-xs text-gray-400 block mb-1">User Prompt</label>
                 <textarea
                   className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-32"
                   value={mode === "create" ? createUserPromptTemplate : editUserPromptTemplate}
@@ -699,7 +703,7 @@ export function DetectionSetup({
           )}
 
           <div>
-            <label className="text-xs text-gray-400 block mb-2">Label Policy</label>
+            <label className="text-xs text-gray-400 block mb-2">Decision Policy</label>
             <div className="space-y-2">
               <div className="grid grid-cols-[140px,1fr] gap-2 items-start">
                 <span className="text-xs text-gray-500 mt-2">DETECTED:</span>
@@ -853,7 +857,7 @@ export function DetectionSetup({
               </details>
 
               <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">User Prompt Template</summary>
+                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">User Prompt</summary>
                 <div className="mt-2">
                   <div className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono min-h-32 whitespace-pre-wrap text-gray-300">
                     {promptEditorDraft.user_prompt_template || "No user prompt template."}
@@ -862,7 +866,7 @@ export function DetectionSetup({
               </details>
 
               <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">Label Policy</summary>
+                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">Decision Policy</summary>
                 <div className="mt-2 space-y-2">
                   <div className="grid grid-cols-[130px,1fr] gap-2 items-start">
                     <div className="text-xs text-gray-400">DETECTED:</div>
@@ -922,7 +926,11 @@ export function DetectionSetup({
                 detectionDecisionRubric={selectedDetection.decision_rubric}
                 suggestedVersionLabel={promptFormSuggestedVersionLabel}
                 initialData={promptFormInitialData}
-                onSaved={() => { setShowPromptForm(false); loadRelated(); }}
+                onSaved={() => {
+                  setShowPromptForm(false);
+                  loadRelated();
+                  triggerRefresh();
+                }}
               />
             )}
 
@@ -966,13 +974,13 @@ export function DetectionSetup({
                   {p.change_notes && <p className="text-xs text-gray-400 mt-1">{p.change_notes}</p>}
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
-                      View Label Policy & Decision Rubric Snapshot
+                      View Decision Policy & Decision Rubric Snapshot
                     </summary>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="bg-gray-950/40 border border-gray-700 rounded p-3">
-                        <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Label Policy</h4>
+                        <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Policy</h4>
                         <p className="text-xs text-gray-300 whitespace-pre-wrap">
-                          {p.prompt_structure?.label_policy || "No label policy snapshot saved in this version."}
+                          {p.prompt_structure?.label_policy || "No decision policy snapshot saved in this version."}
                         </p>
                       </div>
                       <div className="bg-gray-950/40 border border-gray-700 rounded p-3">
@@ -1116,7 +1124,13 @@ export function DetectionSetup({
                             />
                           </td>
                           <td className="text-center py-2 px-3">
-                            <span className={`px-1.5 py-0.5 rounded ${p.ground_truth_label === "DETECTED" ? "bg-green-900/30 text-green-400" : "bg-gray-800 text-gray-400"}`}>
+                            <span
+                              className={`px-1.5 py-0.5 rounded ${
+                                p.ground_truth_label === "DETECTED"
+                                  ? "bg-purple-900/30 text-purple-300"
+                                  : "bg-emerald-900/30 text-emerald-300"
+                              }`}
+                            >
                               {p.ground_truth_label}
                             </span>
                           </td>
@@ -1124,9 +1138,9 @@ export function DetectionSetup({
                             <span
                               className={`px-1.5 py-0.5 rounded ${
                                 p.predicted_decision === "DETECTED"
-                                  ? "bg-green-900/30 text-green-400"
+                                  ? "bg-purple-900/30 text-purple-300"
                                   : p.predicted_decision === "NOT_DETECTED"
-                                  ? "bg-gray-800 text-gray-400"
+                                  ? "bg-emerald-900/30 text-emerald-300"
                                   : "bg-red-900/30 text-red-400"
                               }`}
                             >
@@ -1399,7 +1413,7 @@ function PromptForm({
 
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <label className="text-xs text-gray-400 block">Label Policy</label>
+          <label className="text-xs text-gray-400 block">Decision Policy</label>
           <span className="text-[10px] text-gray-600">Primary iteration target</span>
         </div>
         <div className="space-y-2">
@@ -1452,7 +1466,7 @@ function PromptForm({
 
       <div>
         <label className="text-xs text-gray-400 block mb-1">
-          User Prompt Template <span className="text-gray-600">(use {"{{DETECTION_CODE}}"} as placeholder)</span>
+          User Prompt <span className="text-gray-600">(use {"{{DETECTION_CODE}}"} as placeholder)</span>
         </label>
         <textarea
           className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-40"

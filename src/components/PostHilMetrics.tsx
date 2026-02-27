@@ -7,7 +7,7 @@ import type { Detection, Run, Prediction, PromptVersion, PromptEditSuggestion } 
 import { splitTypeLabel } from "@/lib/splitType";
 
 export function PostHilMetrics({ detection }: { detection: Detection }) {
-  const { apiKey, selectedModel, selectedRunByDetection, setSelectedRunForDetection } = useAppStore();
+  const { apiKey, selectedModel, selectedRunByDetection, setSelectedRunForDetection, refreshCounter, triggerRefresh } = useAppStore();
   const [runs, setRuns] = useState<Run[]>([]);
   const persistedRunId = selectedRunByDetection[detection.detection_id] || "";
   const [selectedRunId, setSelectedRunId] = useState(persistedRunId);
@@ -27,7 +27,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     ]);
     setRuns((await runsRes.json()).filter((r: Run) => r.status === "completed"));
     setPrompts(await promptsRes.json());
-  }, [detection.detection_id]);
+  }, [detection.detection_id, refreshCounter]);
 
   useEffect(() => {
     loadRuns();
@@ -62,7 +62,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       setSelectedSuggestions(new Set());
       setLoadedFromRunLog(false);
     }
-  }, [selectedRunId]);
+  }, [selectedRunId, refreshCounter]);
 
   useEffect(() => {
     loadRun();
@@ -154,7 +154,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
         newSystemPrompt = newSystemPrompt.replace(s.old_text, s.new_text);
       } else if (s.section === "user_prompt_template") {
         newUserPrompt = newUserPrompt.replace(s.old_text, s.new_text);
-      } else if (s.section === "label_policy") {
+      } else if (s.section === "label_policy" || s.section === "decision_policy") {
         newLabelPolicy = newLabelPolicy.replace(s.old_text, s.new_text);
       } else if (s.section === "decision_rubric") {
         newDecisionRubric = newDecisionRubric.replace(s.old_text, s.new_text);
@@ -253,6 +253,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       }
 
       loadRuns();
+      triggerRefresh();
     } catch (err) {
       console.error(err);
     }
@@ -283,7 +284,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
             <option value="">Choose a run...</option>
             {runs.map((r: any) => (
               <option key={r.run_id} value={r.run_id}>
-                {r.run_id.slice(0, 8)} — {splitTypeLabel(r.split_type)} — {new Date(r.created_at).toLocaleString()}
+                {(prompts.find((p) => p.prompt_version_id === r.prompt_version_id)?.version_label || r.prompt_version_id?.slice(0, 8) || "Unknown prompt")} — {r.run_id.slice(0, 8)} — {splitTypeLabel(r.split_type)} — {new Date(r.created_at).toLocaleString()}
               </option>
             ))}
           </select>
@@ -335,8 +336,8 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
           </div>
 
           <p className="text-xs text-gray-400 mb-4">
-            The assistant will analyze clustered FPs, FNs, error tags, and representative correct predictions
-            to propose up to 5 targeted prompt edits. It will not rewrite the entire prompt or change the output schema.
+            The assistant prioritizes parse-failure fixes first, then FP/FN reduction. It analyzes clustered errors,
+            reviewer notes/tags, and sampled images to propose up to 5 targeted prompt edits.
           </p>
           {loadedFromRunLog && (
             <p className="text-xs text-blue-300 mb-3">
@@ -370,6 +371,16 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                           {s.section}
                         </span>
                         <span className="text-xs text-gray-500">→ {s.failure_cluster}</span>
+                        {typeof s.priority === "number" && (
+                          <span className="text-xs bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded">
+                            Priority {s.priority}
+                          </span>
+                        )}
+                        {s.risk && (
+                          <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded">
+                            Risk: {s.risk}
+                          </span>
+                        )}
                       </div>
 
                       <div className="grid grid-cols-2 gap-3 text-xs font-mono">
@@ -388,6 +399,16 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                       </div>
 
                       <p className="text-xs text-gray-400 mt-2">{s.rationale}</p>
+                      {(s.expected_metric_impact || s.expected_parse_fail_impact) && (
+                        <div className="mt-2 text-[11px] text-gray-500 space-y-1">
+                          {s.expected_metric_impact && (
+                            <div>Expected metric impact: {s.expected_metric_impact}</div>
+                          )}
+                          {s.expected_parse_fail_impact && (
+                            <div>Expected parse-fail impact: {s.expected_parse_fail_impact}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

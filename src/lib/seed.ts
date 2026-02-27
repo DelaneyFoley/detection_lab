@@ -87,7 +87,7 @@ export function seedDefaultData() {
       [
         "You are a visual detection system for home-inspection imagery.",
         "Return valid JSON only. No markdown, commentary, or extra keys.",
-        "Follow the label policy and decision rubric exactly.",
+        "Follow the decision policy and decision rubric exactly.",
       ].join("\n"),
       [
         "Analyze this residential exterior image for detection code: {{DETECTION_CODE}}.",
@@ -268,7 +268,7 @@ export function seedPipesRustingDetection() {
         "Detection Code: {{DETECTION_CODE}}",
         "",
         "Analyze the image for rusting on exposed residential plumbing components.",
-        "Follow the label policy and decision rubric exactly.",
+        "Follow the decision policy and decision rubric exactly.",
         "",
         "Return ONLY this JSON:",
         "{",

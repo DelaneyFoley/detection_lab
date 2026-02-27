@@ -17,7 +17,7 @@ type BuildRow = {
 };
 
 export function BuildDataset({ detection }: { detection: Detection }) {
-  const { apiKey, selectedModel, setActiveTab, setSelectedRunForDetection, triggerRefresh } = useAppStore();
+  const { apiKey, selectedModel, setActiveTab, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState("");
@@ -33,6 +33,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [buildMode, setBuildMode] = useState<"save" | "run" | null>(null);
   const [status, setStatus] = useState("");
   const [builtDatasetId, setBuiltDatasetId] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState("");
 
   useEffect(() => {
     const loadData = async () => {
@@ -52,7 +53,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       }
     };
     loadData();
-  }, [detection.detection_id]);
+  }, [detection.detection_id, refreshCounter]);
 
   useEffect(() => {
     if (mode !== "load" || !selectedExistingDatasetId) return;
@@ -87,8 +88,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   }, [rows]);
 
   const canSave = useMemo(
-    () => mode === "build" && rows.length > 0 && datasetName.trim().length > 0,
-    [mode, rows.length, datasetName]
+    () => mode === "build" && rows.length > 0 && datasetName.trim().length > 0 && validateImageIds(rows).ok,
+    [mode, rows, datasetName]
   );
   const canRun = useMemo(
     () => !!apiKey && !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
@@ -112,6 +113,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       };
     });
     setRows((prev) => [...prev, ...next]);
+    setValidationError("");
     event.currentTarget.value = "";
   };
 
@@ -121,9 +123,13 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       if (target?.file && target.preview.startsWith("blob:")) URL.revokeObjectURL(target.preview);
       return prev.filter((r) => r.id !== id);
     });
+    setValidationError("");
   };
 
   const createDatasetOnly = async () => {
+    const validation = validateImageIds(rows);
+    if (!validation.ok) throw new Error(validation.error);
+
     setStatus("Saving dataset...");
     const formData = new FormData();
     formData.append("name", datasetName.trim());
@@ -133,7 +139,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       "items",
       JSON.stringify(
         rows.map((r) => ({
-          image_id: r.imageId,
+          image_id: r.imageId.trim(),
           image_description: "",
           ground_truth_label: null,
         }))
@@ -198,11 +204,35 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     );
 
     setSelectedRunForDetection(detection.detection_id, run.run_id);
+    triggerRefresh();
     setStatus("Run complete. AI outputs are now shown below and persisted in Run Log.");
+  };
+
+  const resetBuilder = () => {
+    if (mode === "load") {
+      setSelectedExistingDatasetId("");
+      setRows([]);
+      setBuiltDatasetId(null);
+      setStatus("");
+      setValidationError("");
+      return;
+    }
+    setDatasetName("");
+    setSplitType("ITERATION");
+    setRows([]);
+    setBuiltDatasetId(null);
+    setStatus("");
+    setValidationError("");
   };
 
   const saveDataset = async () => {
     if (!canSave) return;
+    const validation = validateImageIds(rows);
+    if (!validation.ok) {
+      setValidationError(validation.error);
+      return;
+    }
+    setValidationError("");
     setBuilding(true);
     setBuildMode("save");
     setBuiltDatasetId(null);
@@ -219,6 +249,12 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
   const runDataset = async () => {
     if (!canRun) return;
+    const validation = validateImageIds(rows);
+    if (mode === "build" && !validation.ok) {
+      setValidationError(validation.error);
+      return;
+    }
+    setValidationError("");
     setBuilding(true);
     setBuildMode("run");
     try {
@@ -244,21 +280,30 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       </p>
 
       <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
-        <div className="flex gap-2">
+        <div className="flex items-center justify-between">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setMode("load")}
+              className={`px-3 py-1.5 text-xs rounded ${mode === "load" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+            >
+              Load Dataset
+            </button>
+            <button
+              onClick={() => {
+                setMode("build");
+                setBuiltDatasetId(null);
+              }}
+              className={`px-3 py-1.5 text-xs rounded ${mode === "build" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+            >
+              Build Dataset
+            </button>
+          </div>
           <button
-            onClick={() => setMode("load")}
-            className={`px-3 py-1.5 text-xs rounded ${mode === "load" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+            onClick={resetBuilder}
+            disabled={building}
+            className="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded"
           >
-            Load Dataset
-          </button>
-          <button
-            onClick={() => {
-              setMode("build");
-              setBuiltDatasetId(null);
-            }}
-            className={`px-3 py-1.5 text-xs rounded ${mode === "build" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
-          >
-            Build Dataset
+            Reset
           </button>
         </div>
 
@@ -361,7 +406,9 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                           value={r.imageId}
                           onChange={(e) =>
                             setRows((prev) =>
-                              prev.map((x) => (x.id === r.id ? { ...x, imageId: sanitizeImageId(e.target.value) } : x))
+                              prev.map((x) =>
+                                x.id === r.id ? { ...x, imageId: sanitizeImageId(e.target.value) } : x
+                              )
                             )
                           }
                         />
@@ -415,6 +462,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           )}
         </div>
         {status && <div className="text-xs text-gray-400">{status}</div>}
+        {validationError && <div className="text-xs text-red-400">{validationError}</div>}
       </div>
     </div>
   );
@@ -422,4 +470,15 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
 function sanitizeImageId(input: string) {
   return input.trim().replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+function validateImageIds(rows: BuildRow[]): { ok: true } | { ok: false; error: string } {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const imageId = row.imageId.trim();
+    if (!imageId) return { ok: false, error: "Each image needs a non-blank Image ID." };
+    if (seen.has(imageId)) return { ok: false, error: `Duplicate image_id: ${imageId}` };
+    seen.add(imageId);
+  }
+  return { ok: true };
 }

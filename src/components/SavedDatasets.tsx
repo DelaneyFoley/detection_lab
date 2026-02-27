@@ -116,6 +116,11 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const saveDatasetMeta = async () => {
     if (!selectedDataset) return;
+    const imageIdValidation = validateDatasetItemImageIds(datasetItems);
+    if (!imageIdValidation.ok) {
+      alert(imageIdValidation.error);
+      return;
+    }
     setIsSavingDetails(true);
     try {
       const metaRes = await fetch("/api/datasets", {
@@ -139,7 +144,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             item_id: item.item_id,
-            image_id: item.image_id,
+            image_id: item.image_id.trim(),
             image_uri: item.image_uri,
             image_description: item.image_description || "",
             ground_truth_label: item.ground_truth_label,
@@ -573,15 +578,16 @@ function GlobalDatasetUploadForm({
         }
         const imageIds = new Set<string>();
         for (const row of fileRows) {
-          if (!row.imageId.trim()) {
+          const imageId = row.imageId.trim();
+          if (!imageId) {
             setError("Each image needs an image_id");
             return;
           }
-          if (imageIds.has(row.imageId)) {
-            setError(`Duplicate image_id: ${row.imageId}`);
+          if (imageIds.has(imageId)) {
+            setError(`Duplicate image_id: ${imageId}`);
             return;
           }
-          imageIds.add(row.imageId);
+          imageIds.add(imageId);
         }
 
         const formData = new FormData();
@@ -607,10 +613,20 @@ function GlobalDatasetUploadForm({
           return;
         }
         for (const item of items) {
-          if (!item.image_id || !item.image_uri) {
+          const imageId = String(item.image_id ?? "").trim();
+          if (!imageId || !item.image_uri) {
             setError("Each item must include image_id and image_uri");
             return;
           }
+          item.image_id = imageId;
+        }
+        const jsonImageIds = new Set<string>();
+        for (const item of items) {
+          if (jsonImageIds.has(item.image_id)) {
+            setError(`Duplicate image_id: ${item.image_id}`);
+            return;
+          }
+          jsonImageIds.add(item.image_id);
           if (
             item.ground_truth_label != null &&
             !["DETECTED", "NOT_DETECTED"].includes(item.ground_truth_label)
@@ -806,4 +822,17 @@ function GlobalDatasetUploadForm({
 
 function sanitizeImageId(input: string) {
   return input.trim().replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+function validateDatasetItemImageIds(
+  items: DatasetItem[]
+): { ok: true } | { ok: false; error: string } {
+  const seen = new Set<string>();
+  for (const item of items) {
+    const imageId = String(item.image_id ?? "").trim();
+    if (!imageId) return { ok: false, error: "Image ID cannot be blank." };
+    if (seen.has(imageId)) return { ok: false, error: `Duplicate image_id: ${imageId}` };
+    seen.add(imageId);
+  }
+  return { ok: true };
 }

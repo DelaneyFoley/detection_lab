@@ -379,15 +379,15 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                         <td className="py-1.5 px-3 font-mono">{p.image_id}</td>
                         <td className="text-center py-1.5 px-3">
                           <span className={`px-1.5 py-0.5 rounded ${
-                            p.ground_truth_label === "DETECTED" ? "bg-green-900/30 text-green-400" : "bg-gray-800 text-gray-400"
+                            p.ground_truth_label === "DETECTED" ? "bg-purple-900/30 text-purple-300" : "bg-emerald-900/30 text-emerald-300"
                           }`}>
                             {p.ground_truth_label === "DETECTED" ? "DET" : "NOT"}
                           </span>
                         </td>
                         <td className="text-center py-1.5 px-3">
                           <span className={`px-1.5 py-0.5 rounded ${
-                            p.predicted_decision === "DETECTED" ? "bg-green-900/30 text-green-400" :
-                            p.predicted_decision === "NOT_DETECTED" ? "bg-gray-800 text-gray-400" :
+                            p.predicted_decision === "DETECTED" ? "bg-purple-900/30 text-purple-300" :
+                            p.predicted_decision === "NOT_DETECTED" ? "bg-emerald-900/30 text-emerald-300" :
                             "bg-red-900/30 text-red-400"
                           }`}>
                             {p.predicted_decision || "FAIL"}

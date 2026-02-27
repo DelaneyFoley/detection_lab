@@ -107,6 +107,8 @@ function initSchema(db: Database.Database) {
       evidence TEXT,
       parse_ok INTEGER NOT NULL DEFAULT 1,
       raw_response TEXT NOT NULL DEFAULT '',
+      parse_error_reason TEXT,
+      parse_fix_suggestion TEXT,
       corrected_label TEXT,
       error_tag TEXT,
       reviewer_note TEXT,
@@ -119,11 +121,18 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_prompt_versions_detection_id ON prompt_versions(detection_id);
     CREATE INDEX IF NOT EXISTS idx_datasets_detection_id ON datasets(detection_id);
     CREATE INDEX IF NOT EXISTS idx_runs_detection_id ON runs(detection_id);
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   ensureDatasetItemColumns(db);
   ensureNullableGroundTruthColumns(db);
   ensureRunsColumns(db);
+  ensurePredictionParseColumns(db);
 }
 
 function ensureDatasetItemColumns(db: Database.Database) {
@@ -198,6 +207,8 @@ function ensureNullableGroundTruthColumns(db: Database.Database) {
         evidence TEXT,
         parse_ok INTEGER NOT NULL DEFAULT 1,
         raw_response TEXT NOT NULL DEFAULT '',
+        parse_error_reason TEXT,
+        parse_fix_suggestion TEXT,
         corrected_label TEXT,
         error_tag TEXT,
         reviewer_note TEXT,
@@ -207,11 +218,11 @@ function ensureNullableGroundTruthColumns(db: Database.Database) {
 
       INSERT INTO predictions_new (
         prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence,
-        evidence, parse_ok, raw_response, corrected_label, error_tag, reviewer_note, corrected_at
+        evidence, parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, corrected_label, error_tag, reviewer_note, corrected_at
       )
       SELECT
         prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence,
-        evidence, parse_ok, raw_response, corrected_label, error_tag, reviewer_note, corrected_at
+        evidence, parse_ok, raw_response, NULL, NULL, corrected_label, error_tag, reviewer_note, corrected_at
       FROM predictions;
 
       DROP TABLE predictions;
@@ -230,5 +241,17 @@ function ensureRunsColumns(db: Database.Database) {
   const hasPromptFeedbackLog = columns.some((c) => c.name === "prompt_feedback_log");
   if (!hasPromptFeedbackLog) {
     db.exec("ALTER TABLE runs ADD COLUMN prompt_feedback_log TEXT NOT NULL DEFAULT '{}'");
+  }
+}
+
+function ensurePredictionParseColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(predictions)").all() as Array<{ name: string }>;
+  const hasParseReason = columns.some((c) => c.name === "parse_error_reason");
+  const hasParseFix = columns.some((c) => c.name === "parse_fix_suggestion");
+  if (!hasParseReason) {
+    db.exec("ALTER TABLE predictions ADD COLUMN parse_error_reason TEXT");
+  }
+  if (!hasParseFix) {
+    db.exec("ALTER TABLE predictions ADD COLUMN parse_fix_suggestion TEXT");
   }
 }

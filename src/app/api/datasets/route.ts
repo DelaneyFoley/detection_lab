@@ -46,62 +46,64 @@ export async function POST(req: NextRequest) {
     let items: any[] = [];
 
     if (contentType.includes("multipart/form-data")) {
-    const formData = await req.formData();
-    name = String(formData.get("name") || "").trim();
-    detectionId = String(formData.get("detection_id") || "").trim();
-    splitType = String(formData.get("split_type") || "ITERATION").trim();
+      const formData = await req.formData();
+      name = String(formData.get("name") || "").trim();
+      detectionId = String(formData.get("detection_id") || "").trim();
+      splitType = String(formData.get("split_type") || "ITERATION").trim();
 
-    const metaRaw = String(formData.get("items") || "[]");
-    const itemMeta = JSON.parse(metaRaw) as Array<{
-      image_id: string;
-      image_description?: string;
-      ai_assigned_label?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL";
-      ai_confidence?: number | null;
-      ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
-    }>;
-    const files = formData.getAll("files") as File[];
+      const metaRaw = String(formData.get("items") || "[]");
+      const itemMeta = JSON.parse(metaRaw) as Array<{
+        image_id: string;
+        image_description?: string;
+        ai_assigned_label?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL";
+        ai_confidence?: number | null;
+        ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
+      }>;
+      const files = formData.getAll("files") as File[];
 
-    if (!name || !detectionId) {
-      return NextResponse.json({ error: "name and detection_id are required" }, { status: 400 });
-    }
-    if (!Array.isArray(itemMeta) || itemMeta.length === 0 || files.length === 0) {
-      return NextResponse.json({ error: "files and items are required" }, { status: 400 });
-    }
-    if (itemMeta.length !== files.length) {
-      return NextResponse.json({ error: "items/files length mismatch" }, { status: 400 });
-    }
-
-    const uploadDir = path.join(process.cwd(), "public", "uploads", "datasets", id);
-    await fs.mkdir(uploadDir, { recursive: true });
-
-    const savedItems: any[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const meta = itemMeta[i];
-      const gt =
-        meta?.ground_truth_label === "DETECTED" || meta?.ground_truth_label === "NOT_DETECTED"
-          ? meta.ground_truth_label
-          : null;
-      if (!meta?.image_id) {
-        return NextResponse.json({ error: `Invalid item at index ${i}` }, { status: 400 });
+      if (!name || !detectionId) {
+        return NextResponse.json({ error: "name and detection_id are required" }, { status: 400 });
+      }
+      if (!Array.isArray(itemMeta) || itemMeta.length === 0 || files.length === 0) {
+        return NextResponse.json({ error: "files and items are required" }, { status: 400 });
+      }
+      if (itemMeta.length !== files.length) {
+        return NextResponse.json({ error: "items/files length mismatch" }, { status: 400 });
       }
 
-      const ext = path.extname(file.name || "").toLowerCase() || ".jpg";
-      const safeBase = sanitizeName(meta.image_id);
-      const safeFilename = `${safeBase}${ext}`;
-      const absPath = path.join(uploadDir, safeFilename);
-      const buffer = Buffer.from(await file.arrayBuffer());
-      await fs.writeFile(absPath, buffer);
+      const metaValidation = validateAndNormalizeItemMetas(itemMeta);
+      if (!metaValidation.ok) {
+        return NextResponse.json({ error: metaValidation.error }, { status: 400 });
+      }
 
-      savedItems.push({
-        image_id: meta.image_id,
-        image_uri: `/uploads/datasets/${id}/${safeFilename}`,
-        image_description: meta.image_description || "",
-        ai_assigned_label: null,
-        ai_confidence: null,
-        ground_truth_label: gt,
-      });
-    }
+      const uploadDir = path.join(process.cwd(), "public", "uploads", "datasets", id);
+      await fs.mkdir(uploadDir, { recursive: true });
+
+      const savedItems: any[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const meta = itemMeta[i];
+        const gt =
+          meta?.ground_truth_label === "DETECTED" || meta?.ground_truth_label === "NOT_DETECTED"
+            ? meta.ground_truth_label
+            : null;
+
+        const ext = path.extname(file.name || "").toLowerCase() || ".jpg";
+        const safeBase = sanitizeName(meta.image_id);
+        const safeFilename = `${safeBase}${ext}`;
+        const absPath = path.join(uploadDir, safeFilename);
+        const buffer = Buffer.from(await file.arrayBuffer());
+        await fs.writeFile(absPath, buffer);
+
+        savedItems.push({
+          image_id: meta.image_id,
+          image_uri: `/uploads/datasets/${id}/${safeFilename}`,
+          image_description: meta.image_description || "",
+          ai_assigned_label: null,
+          ai_confidence: null,
+          ground_truth_label: gt,
+        });
+      }
 
       items = savedItems;
     } else {
@@ -111,6 +113,12 @@ export async function POST(req: NextRequest) {
       splitType = body.split_type;
       items = body.items || [];
     }
+
+    const postValidation = validateAndNormalizeItems(items);
+    if (!postValidation.ok) {
+      return NextResponse.json({ error: postValidation.error }, { status: 400 });
+    }
+    items = postValidation.items;
 
     const hashContent = JSON.stringify(items.map((i: any) => ({ image_id: i.image_id, label: i.ground_truth_label })));
     const hash = crypto.createHash("sha256").update(hashContent).digest("hex").slice(0, 16);
@@ -204,7 +212,16 @@ export async function PUT(req: NextRequest) {
     }
 
     let nextImageUri = body.image_uri ?? existing.image_uri;
-    const nextImageId = body.image_id ?? existing.image_id;
+    const nextImageId = normalizeImageId(body.image_id ?? existing.image_id);
+    if (!nextImageId) {
+      return NextResponse.json({ error: "image_id cannot be blank" }, { status: 400 });
+    }
+    const duplicate = db
+      .prepare("SELECT item_id FROM dataset_items WHERE dataset_id = ? AND image_id = ? AND item_id != ? LIMIT 1")
+      .get(existing.dataset_id, nextImageId, body.item_id) as { item_id: string } | undefined;
+    if (duplicate) {
+      return NextResponse.json({ error: `Duplicate image_id: ${nextImageId}` }, { status: 400 });
+    }
     const nextImageDescription = body.image_description ?? existing.image_description ?? "";
     const nextGroundTruth =
       Object.prototype.hasOwnProperty.call(body, "ground_truth_label")
@@ -291,4 +308,46 @@ function localUriToAbsPath(uri: string): string | null {
 function absPathToLocalUri(absPath: string): string {
   const rel = path.relative(path.join(process.cwd(), "public"), absPath);
   return `/${rel.split(path.sep).join("/")}`;
+}
+
+function normalizeImageId(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function validateAndNormalizeItemMetas(
+  items: Array<{
+    image_id: string;
+    image_description?: string;
+    ai_assigned_label?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL";
+    ai_confidence?: number | null;
+    ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
+  }>
+): { ok: true } | { ok: false; error: string } {
+  const seen = new Set<string>();
+  for (let i = 0; i < items.length; i++) {
+    const imageId = normalizeImageId(items[i]?.image_id);
+    if (!imageId) return { ok: false, error: `image_id cannot be blank (item ${i + 1})` };
+    if (seen.has(imageId)) return { ok: false, error: `Duplicate image_id: ${imageId}` };
+    seen.add(imageId);
+    items[i].image_id = imageId;
+  }
+  return { ok: true };
+}
+
+function validateAndNormalizeItems(
+  items: any[]
+): { ok: true; items: any[] } | { ok: false; error: string } {
+  if (!Array.isArray(items) || items.length === 0) {
+    return { ok: false, error: "items must be a non-empty array" };
+  }
+  const seen = new Set<string>();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i] || {};
+    const imageId = normalizeImageId(item.image_id);
+    if (!imageId) return { ok: false, error: `image_id cannot be blank (item ${i + 1})` };
+    if (seen.has(imageId)) return { ok: false, error: `Duplicate image_id: ${imageId}` };
+    seen.add(imageId);
+    item.image_id = imageId;
+  }
+  return { ok: true, items };
 }

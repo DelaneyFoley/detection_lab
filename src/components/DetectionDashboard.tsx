@@ -1,10 +1,12 @@
 "use client";
 
 import { Fragment, useState, useEffect, useCallback } from "react";
+import { useAppStore } from "@/lib/store";
 import type { Detection, Run, PromptVersion, Dataset, MetricsSummary } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 
 export function DetectionDashboard({ detections: initialDetections }: { detections: Detection[] }) {
+  const { refreshCounter } = useAppStore();
   const [detections, setDetections] = useState<Detection[]>(initialDetections);
   const [detectionData, setDetectionData] = useState<
     Map<string, { prompts: PromptVersion[]; datasets: Dataset[]; runs: Run[] }>
@@ -71,7 +73,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
   useEffect(() => {
     if (detections.length > 0) loadAllData();
     else setLoading(false);
-  }, [detections, loadAllData]);
+  }, [detections, loadAllData, refreshCounter]);
 
   const deleteDetection = async (detectionId: string, displayName: string) => {
     if (!confirm(`Delete detection "${displayName}" and all related prompts/runs/datasets? This cannot be undone.`)) {
@@ -426,6 +428,8 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                 <th className="text-right px-2 py-1.5">Confidence</th>
                                                 <th className="text-left px-2 py-1.5">AI Description</th>
                                                 <th className="text-center px-2 py-1.5">Ground Truth (run snapshot)</th>
+                                                <th className="text-left px-2 py-1.5">Parse Reason</th>
+                                                <th className="text-left px-2 py-1.5">Fix Suggestion</th>
                                                 <th className="text-left px-2 py-1.5">Error Tag</th>
                                                 <th className="text-left px-2 py-1.5">Reviewer Note</th>
                                               </tr>
@@ -452,7 +456,17 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                   </td>
                                                   <td className="px-2 py-1.5 font-mono text-gray-300">{p.image_id}</td>
                                                   <td className="px-2 py-1.5 text-center text-gray-300">
-                                                    {p.predicted_decision || "PARSE_FAIL"}
+                                                    <span
+                                                      className={`px-1.5 py-0.5 rounded ${
+                                                        p.predicted_decision === "DETECTED"
+                                                          ? "bg-purple-900/30 text-purple-300"
+                                                          : p.predicted_decision === "NOT_DETECTED"
+                                                          ? "bg-emerald-900/30 text-emerald-300"
+                                                          : "bg-red-900/30 text-red-400"
+                                                      }`}
+                                                    >
+                                                      {p.predicted_decision || "PARSE_FAIL"}
+                                                    </span>
                                                   </td>
                                                   <td className="px-2 py-1.5 text-right text-gray-300">
                                                     {p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}
@@ -461,7 +475,25 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                     {p.evidence || "—"}
                                                   </td>
                                                   <td className="px-2 py-1.5 text-center text-gray-300">
-                                                    {p.ground_truth_label || "UNSET"}
+                                                    {p.ground_truth_label ? (
+                                                      <span
+                                                        className={`px-1.5 py-0.5 rounded ${
+                                                          p.ground_truth_label === "DETECTED"
+                                                            ? "bg-purple-900/30 text-purple-300"
+                                                            : "bg-emerald-900/30 text-emerald-300"
+                                                        }`}
+                                                      >
+                                                        {p.ground_truth_label}
+                                                      </span>
+                                                    ) : (
+                                                      "UNSET"
+                                                    )}
+                                                  </td>
+                                                  <td className="px-2 py-1.5 text-gray-300 max-w-[280px] truncate" title={p.parse_error_reason || ""}>
+                                                    {!p.parse_ok ? p.parse_error_reason || "Parse failed" : "—"}
+                                                  </td>
+                                                  <td className="px-2 py-1.5 text-gray-400 max-w-[320px] truncate" title={p.parse_fix_suggestion || ""}>
+                                                    {!p.parse_ok ? p.parse_fix_suggestion || "Return strict JSON only." : "—"}
                                                   </td>
                                                   <td className="px-2 py-1.5 text-gray-300">
                                                     {p.error_tag || "—"}
@@ -473,7 +505,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                               ))}
                                               {(details?.predictions || []).length === 0 && (
                                                 <tr>
-                                                  <td colSpan={8} className="px-2 py-4 text-center text-gray-500">
+                                                  <td colSpan={10} className="px-2 py-4 text-center text-gray-500">
                                                     No prediction rows.
                                                   </td>
                                                 </tr>
@@ -569,7 +601,19 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
               <div className="text-xs text-gray-500 font-mono">{previewPrediction.image_id}</div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">AI Label</label>
-                <div className="text-sm text-gray-300">{previewPrediction.predicted_decision || "PARSE_FAIL"}</div>
+                <div>
+                  <span
+                    className={`text-sm px-1.5 py-0.5 rounded ${
+                      previewPrediction.predicted_decision === "DETECTED"
+                        ? "bg-purple-900/30 text-purple-300"
+                        : previewPrediction.predicted_decision === "NOT_DETECTED"
+                        ? "bg-emerald-900/30 text-emerald-300"
+                        : "bg-red-900/30 text-red-400"
+                    }`}
+                  >
+                    {previewPrediction.predicted_decision || "PARSE_FAIL"}
+                  </span>
+                </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Confidence (0-1)</label>
@@ -583,12 +627,42 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Ground Truth (run snapshot)</label>
-                <div className="text-sm text-gray-300">{previewPrediction.ground_truth_label || "UNSET"}</div>
+                <div>
+                  {previewPrediction.ground_truth_label ? (
+                    <span
+                      className={`text-sm px-1.5 py-0.5 rounded ${
+                        previewPrediction.ground_truth_label === "DETECTED"
+                          ? "bg-purple-900/30 text-purple-300"
+                          : "bg-emerald-900/30 text-emerald-300"
+                      }`}
+                    >
+                      {previewPrediction.ground_truth_label}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-gray-300">UNSET</span>
+                  )}
+                </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Error Tag</label>
                 <div className="text-sm text-gray-300">{previewPrediction.error_tag || "—"}</div>
               </div>
+              {!previewPrediction.parse_ok && (
+                <>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Parse Reason</label>
+                    <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                      {previewPrediction.parse_error_reason || "Response did not match expected schema."}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">How to Fix</label>
+                    <div className="text-sm text-gray-300 whitespace-pre-wrap">
+                      {previewPrediction.parse_fix_suggestion || "Return strict JSON only with required keys."}
+                    </div>
+                  </div>
+                </>
+              )}
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Reviewer Note</label>
                 <div className="text-sm text-gray-300 whitespace-pre-wrap">{previewPrediction.reviewer_note || "—"}</div>

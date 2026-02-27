@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
 import type { Detection, PromptVersion, Dataset, MetricsSummary, Run, Prediction } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 
 export function PromptCompare({ detection }: { detection: Detection }) {
-  const { apiKey, selectedModel, refreshCounter } = useAppStore();
+  const { refreshCounter } = useAppStore();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>([]);
@@ -15,6 +15,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [results, setResults] = useState<Map<string, { run: any; predictions: Prediction[] }>>(new Map());
+  const [previewState, setPreviewState] = useState<{ promptId: string; index: number } | null>(null);
+  const runningRef = useRef(false);
 
   const loadData = useCallback(async () => {
     const [pRes, dRes] = await Promise.all([
@@ -40,10 +42,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   };
 
   const runComparison = async () => {
-    if (!apiKey) {
-      alert("Set your Gemini API key first");
-      return;
-    }
+    if (runningRef.current) return;
     if (selectedPromptIds.length < 1) {
       alert("Select at least 1 prompt version");
       return;
@@ -53,47 +52,92 @@ export function PromptCompare({ detection }: { detection: Detection }) {
       return;
     }
 
+    runningRef.current = true;
     setRunning(true);
     setResults(new Map());
+    try {
+      const runsRes = await fetch(`/api/runs?detection_id=${detection.detection_id}`);
+      const runs = await safeJsonArray<Run>(runsRes, "runs");
 
-    for (let i = 0; i < selectedPromptIds.length; i++) {
-      const promptId = selectedPromptIds[i];
-      const prompt = prompts.find((p) => p.prompt_version_id === promptId);
-      setProgress(`Running prompt ${i + 1}/${selectedPromptIds.length}: ${prompt?.version_label || promptId.slice(0, 8)}...`);
+      const nextResults = new Map<string, { run: any; predictions: Prediction[] }>();
 
-      try {
-        const res = await fetch("/api/runs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: apiKey,
-            model_override: selectedModel,
-            prompt_version_id: promptId,
-            dataset_id: selectedDatasetId,
-            detection_id: detection.detection_id,
-          }),
-        });
-        const runData = await res.json();
+      for (let i = 0; i < selectedPromptIds.length; i++) {
+        const promptId = selectedPromptIds[i];
+        const prompt = prompts.find((p) => p.prompt_version_id === promptId);
+        setProgress(
+          `Loading latest run ${i + 1}/${selectedPromptIds.length}: ${prompt?.version_label || promptId.slice(0, 8)}...`
+        );
 
-        // Fetch full run with predictions
-        const fullRes = await fetch(`/api/runs?run_id=${runData.run_id}`);
+        const latest = runs.find(
+          (r) =>
+            r.status === "completed" &&
+            r.dataset_id === selectedDatasetId &&
+            r.prompt_version_id === promptId
+        );
+        if (!latest) continue;
+
+        const fullRes = await fetch(`/api/runs?run_id=${latest.run_id}`);
         const fullRun = await fullRes.json();
-
-        setResults((prev) => {
-          const next = new Map(prev);
-          next.set(promptId, { run: fullRun, predictions: fullRun.predictions });
-          return next;
+        if (!fullRes.ok) continue;
+        nextResults.set(promptId, {
+          run: fullRun,
+          predictions: Array.isArray(fullRun?.predictions) ? fullRun.predictions : [],
         });
-      } catch (err) {
-        console.error("Run failed:", err);
       }
-    }
 
-    setRunning(false);
-    setProgress("");
+      setResults(nextResults);
+      if (nextResults.size === 0) {
+        alert("No completed runs found for the selected prompt(s) + dataset. Run them first in Detection Setup or Build Dataset.");
+      }
+    } catch (err) {
+      console.error("Failed to load comparison runs:", err);
+      alert("Failed to load comparison runs.");
+    } finally {
+      setRunning(false);
+      setProgress("");
+      runningRef.current = false;
+    }
   };
 
   const resultEntries = Array.from(results.entries());
+  const promptLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of prompts) map.set(p.prompt_version_id, p.version_label);
+    return map;
+  }, [prompts]);
+
+  const activePreviewRows = useMemo(() => {
+    if (!previewState) return [];
+    const entry = results.get(previewState.promptId);
+    return (entry?.predictions || []).filter((p) => !!p.image_uri);
+  }, [previewState, results]);
+
+  useEffect(() => {
+    if (!previewState) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewState(null);
+        return;
+      }
+      if (activePreviewRows.length === 0) return;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        event.preventDefault();
+        setPreviewState((prev) => {
+          if (!prev) return prev;
+          return { ...prev, index: Math.min(activePreviewRows.length - 1, prev.index + 1) };
+        });
+      }
+      if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setPreviewState((prev) => {
+          if (!prev) return prev;
+          return { ...prev, index: Math.max(0, prev.index - 1) };
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewState, activePreviewRows.length]);
 
   // Find disagreement cases
   const disagreements: Map<string, Map<string, string | null>> = new Map();
@@ -180,8 +224,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
             </div>
 
             <div className="mt-3 p-2 bg-gray-900/50 rounded border border-gray-700 text-xs text-gray-400">
-              <b>Locked params:</b> All prompts will run with the same dataset and images.
-              Temperature/top_p stay per-prompt. Model uses the app-level selection.
+              <b>Comparison mode:</b> Uses the latest existing completed run for each selected prompt + dataset.
+              Prompt Compare does not create new runs.
             </div>
           </div>
         </div>
@@ -192,7 +236,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
             disabled={running || selectedPromptIds.length < 1 || !selectedDatasetId}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium"
           >
-            {running ? "Running..." : "Run Comparison"}
+            {running ? "Loading..." : "Compare Latest Runs"}
           </button>
           {progress && <span className="text-sm text-gray-400">{progress}</span>}
         </div>
@@ -309,9 +353,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                               <span
                                 className={`px-1.5 py-0.5 rounded text-xs ${
                                   decision === "DETECTED"
-                                    ? "bg-green-900/30 text-green-400"
+                                    ? "bg-purple-900/30 text-purple-300"
                                     : decision === "NOT_DETECTED"
-                                    ? "bg-gray-800 text-gray-400"
+                                    ? "bg-emerald-900/30 text-emerald-300"
                                     : "bg-red-900/30 text-red-400"
                                 }`}
                               >
@@ -342,8 +386,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-gray-800">
                         <tr className="text-gray-500 border-b border-gray-700">
-                          <th className="text-left py-1.5 px-2">Image</th>
-                          <th className="text-center py-1.5 px-2">Ground Truth</th>
+                      <th className="text-left py-1.5 px-2">Image</th>
+                      <th className="text-left py-1.5 px-2">Preview</th>
+                      <th className="text-center py-1.5 px-2">Ground Truth</th>
                           <th className="text-center py-1.5 px-2">Prediction</th>
                           <th className="text-center py-1.5 px-2">Correct</th>
                           <th className="text-right py-1.5 px-2">Confidence</th>
@@ -360,6 +405,25 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                           return (
                             <tr key={p.prediction_id} className="border-b border-gray-800/50">
                               <td className="py-1.5 px-2 font-mono">{p.image_id}</td>
+                              <td className="py-1.5 px-2">
+                                {p.image_uri ? (
+                                  <img
+                                    src={p.image_uri}
+                                    alt={p.image_id}
+                                    className="w-12 h-9 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                                    onClick={() => {
+                                      const rows = predictions.filter((row) => !!row.image_uri);
+                                      const idx = Math.max(
+                                        0,
+                                        rows.findIndex((row) => row.prediction_id === p.prediction_id)
+                                      );
+                                      setPreviewState({ promptId, index: idx });
+                                    }}
+                                  />
+                                ) : (
+                                  <span className="text-gray-600">—</span>
+                                )}
+                              </td>
                               <td className="text-center py-1.5 px-2">
                                 <DecisionBadge decision={p.ground_truth_label || null} />
                               </td>
@@ -398,6 +462,74 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           </div>
         </div>
       )}
+
+      {previewState && activePreviewRows.length > 0 && activePreviewRows[previewState.index] && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
+          <button className="absolute inset-0" onClick={() => setPreviewState(null)} aria-label="Close preview" />
+          <div className="relative z-10 w-full max-w-6xl bg-gray-900 border border-gray-700 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs text-gray-400">
+                {promptLabelById.get(previewState.promptId) || previewState.promptId.slice(0, 8)} ·{" "}
+                {previewState.index + 1}/{activePreviewRows.length}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+                  onClick={() =>
+                    setPreviewState((prev) =>
+                      prev ? { ...prev, index: Math.max(0, prev.index - 1) } : prev
+                    )
+                  }
+                  disabled={previewState.index === 0}
+                >
+                  Prev
+                </button>
+                <button
+                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+                  onClick={() =>
+                    setPreviewState((prev) =>
+                      prev ? { ...prev, index: Math.min(activePreviewRows.length - 1, prev.index + 1) } : prev
+                    )
+                  }
+                  disabled={previewState.index >= activePreviewRows.length - 1}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-[1fr_260px] gap-4">
+              <div className="bg-gray-950 rounded border border-gray-800 p-2">
+                <img
+                  src={activePreviewRows[previewState.index].image_uri}
+                  alt={activePreviewRows[previewState.index].image_id}
+                  className="w-full max-h-[70vh] object-contain rounded"
+                />
+              </div>
+              <div className="space-y-2 max-h-[70vh] overflow-y-auto">
+                {activePreviewRows.map((row, idx) => (
+                  <button
+                    key={row.prediction_id}
+                    className={`w-full text-left p-2 rounded border ${
+                      idx === previewState.index
+                        ? "border-blue-500 bg-blue-900/20"
+                        : "border-gray-700 bg-gray-900/40 hover:border-gray-600"
+                    }`}
+                    onClick={() => setPreviewState((prev) => (prev ? { ...prev, index: idx } : prev))}
+                  >
+                    <div className="text-[11px] font-mono text-gray-300 truncate">{row.image_id}</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <DecisionBadge decision={row.predicted_decision} />
+                      <span className="text-[11px] text-gray-500">
+                        {row.confidence != null ? row.confidence.toFixed(2) : "—"}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -408,8 +540,8 @@ function DecisionBadge({ decision }: { decision: string | null }) {
     <span
       className={`text-xs px-1.5 py-0.5 rounded ${
         decision === "DETECTED"
-          ? "bg-green-900/30 text-green-400"
-          : "bg-gray-800 text-gray-400"
+          ? "bg-purple-900/30 text-purple-300"
+          : "bg-emerald-900/30 text-emerald-300"
       }`}
     >
       {decision === "DETECTED" ? "DET" : "NOT"}

@@ -127,6 +127,8 @@ export interface Prediction {
   evidence: string | null;
   parse_ok: boolean;
   raw_response: string;
+  parse_error_reason?: string | null;
+  parse_fix_suggestion?: string | null;
   corrected_label: Decision | null;
   error_tag: ErrorTag | null;
   reviewer_note: string | null;
@@ -166,4 +168,8 @@ export interface PromptEditSuggestion {
   new_text: string;
   rationale: string;
   failure_cluster: string;
+  priority?: number;
+  risk?: "low" | "medium" | "high" | string;
+  expected_metric_impact?: string;
+  expected_parse_fail_impact?: string;
 }
