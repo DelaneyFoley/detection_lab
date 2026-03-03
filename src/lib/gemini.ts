@@ -4,6 +4,63 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  ".avif": "image/avif",
+};
+
+function stripMimeParams(mimeType: string | null | undefined): string {
+  return String(mimeType || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+}
+
+function inferImageMimeTypeFromPath(sourcePath: string): string | null {
+  const ext = path.extname(sourcePath).toLowerCase();
+  return IMAGE_MIME_BY_EXT[ext] || null;
+}
+
+function resolveImageMimeType({
+  headerMimeType,
+  sourcePath,
+}: {
+  headerMimeType?: string | null;
+  sourcePath: string;
+}): string {
+  const normalizedHeader = stripMimeParams(headerMimeType);
+  if (normalizedHeader.startsWith("image/")) {
+    return normalizedHeader;
+  }
+
+  const inferred = inferImageMimeTypeFromPath(sourcePath);
+  if (inferred) {
+    return inferred;
+  }
+
+  if (normalizedHeader === "application/octet-stream") {
+    throw new Error(
+      `Unsupported MIME type: application/octet-stream for ${sourcePath}. Set a valid image content-type or use an image file extension.`
+    );
+  }
+
+  if (normalizedHeader) {
+    throw new Error(`Unsupported MIME type: ${normalizedHeader} for ${sourcePath}.`);
+  }
+
+  throw new Error(`Unable to determine image MIME type for ${sourcePath}.`);
+}
+
 export function getGeminiClient(apiKey: string) {
   return new GoogleGenerativeAI(apiKey);
 }
@@ -164,10 +221,11 @@ export async function buildImagePart(imageUri: string) {
   if (imageUri.startsWith("data:")) {
     const match = imageUri.match(/^data:([^;]+);base64,(.+)$/);
     if (match) {
+      const mimeType = resolveImageMimeType({ headerMimeType: match[1], sourcePath: "data-uri" });
       return [
         {
           inlineData: {
-            mimeType: match[1],
+            mimeType,
             data: match[2],
           },
         },
@@ -179,19 +237,11 @@ export async function buildImagePart(imageUri: string) {
   if (imageUri.startsWith("/") || imageUri.startsWith("./")) {
     const resolvedPath = resolveLocalImagePath(imageUri);
     const data = fs.readFileSync(resolvedPath);
-    const ext = path.extname(resolvedPath).toLowerCase();
-    const mimeMap: Record<string, string> = {
-      ".jpg": "image/jpeg",
-      ".jpeg": "image/jpeg",
-      ".png": "image/png",
-      ".gif": "image/gif",
-      ".webp": "image/webp",
-      ".svg": "image/svg+xml",
-    };
+    const mimeType = resolveImageMimeType({ sourcePath: resolvedPath });
     return [
       {
         inlineData: {
-          mimeType: mimeMap[ext] || "image/jpeg",
+          mimeType,
           data: data.toString("base64"),
         },
       },
@@ -213,12 +263,26 @@ export async function buildImagePart(imageUri: string) {
   // HTTP URL - fetch and convert
   if (imageUri.startsWith("http")) {
     const response = await fetch(imageUri);
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      throw new Error(`Failed to fetch image URL ${imageUri}: ${response.status} ${response.statusText} ${text}`.trim());
+    }
     const buffer = await response.arrayBuffer();
-    const contentType = response.headers.get("content-type") || "image/jpeg";
+    const urlPath = (() => {
+      try {
+        return new URL(imageUri).pathname;
+      } catch {
+        return imageUri;
+      }
+    })();
+    const mimeType = resolveImageMimeType({
+      headerMimeType: response.headers.get("content-type"),
+      sourcePath: urlPath,
+    });
     return [
       {
         inlineData: {
-          mimeType: contentType,
+          mimeType,
           data: Buffer.from(buffer).toString("base64"),
         },
       },
@@ -229,11 +293,11 @@ export async function buildImagePart(imageUri: string) {
   const resolvedPath = path.join(process.cwd(), "data", "uploads", imageUri);
   if (fs.existsSync(resolvedPath)) {
     const data = fs.readFileSync(resolvedPath);
-    const ext = path.extname(resolvedPath).toLowerCase();
+    const mimeType = resolveImageMimeType({ sourcePath: resolvedPath });
     return [
       {
         inlineData: {
-          mimeType: ext === ".png" ? "image/png" : "image/jpeg",
+          mimeType,
           data: data.toString("base64"),
         },
       },
@@ -259,7 +323,10 @@ async function fetchGcsImage(gsUri: string): Promise<{ data: Buffer; mimeType: s
     const text = await response.text().catch(() => "");
     throw new Error(`Failed to fetch GCS object ${gsUri}: ${response.status} ${response.statusText} ${text}`.trim());
   }
-  const mimeType = response.headers.get("content-type") || detectMimeTypeFromPath(objectPath);
+  const mimeType = resolveImageMimeType({
+    headerMimeType: response.headers.get("content-type"),
+    sourcePath: objectPath,
+  });
   const data = Buffer.from(await response.arrayBuffer());
   return { data, mimeType };
 }
@@ -274,19 +341,6 @@ function parseGsUri(gsUri: string): { bucket: string; objectPath: string } {
     bucket: withoutScheme.slice(0, slashIdx),
     objectPath: withoutScheme.slice(slashIdx + 1),
   };
-}
-
-function detectMimeTypeFromPath(objectPath: string): string {
-  const ext = path.extname(objectPath).toLowerCase();
-  const mimeMap: Record<string, string> = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".svg": "image/svg+xml",
-  };
-  return mimeMap[ext] || "image/jpeg";
 }
 
 async function getGcsAccessToken(): Promise<string> {

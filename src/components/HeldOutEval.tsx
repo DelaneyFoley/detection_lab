@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
 import type { Detection, PromptVersion, Dataset, Run } from "@/types";
@@ -18,6 +18,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
   const [latestResult, setLatestResult] = useState<any>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelingRun, setCancelingRun] = useState(false);
+  const [previewImageId, setPreviewImageId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     const [pRes, dRes, rRes] = await Promise.all([
@@ -194,6 +195,64 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     a.click();
   };
 
+  const predictions = useMemo(() => (Array.isArray(latestResult?.predictions) ? latestResult.predictions : []), [latestResult]);
+
+  const disagreementCases = useMemo(() => {
+    return predictions.filter((p: any) => {
+      const gt = getResolvedGroundTruth(p);
+      if (!gt) return false;
+      if (!p?.image_uri) return false;
+      if (!p.parse_ok) return true;
+      return p.predicted_decision !== gt;
+    });
+  }, [predictions]);
+
+  const previewImageIds: string[] = useMemo(
+    () => disagreementCases.filter((p: any) => !!p?.image_uri).map((p: any) => String(p.image_id || "")),
+    [disagreementCases]
+  );
+
+  const previewIndex = useMemo(
+    () => (previewImageId ? previewImageIds.findIndex((id: string) => id === previewImageId) : -1),
+    [previewImageId, previewImageIds]
+  );
+
+  const activePreviewPrediction = useMemo(() => {
+    if (previewIndex < 0) return null;
+    const imageId = previewImageIds[previewIndex];
+    return disagreementCases.find((p: any) => String(p.image_id || "") === imageId) || null;
+  }, [previewIndex, previewImageIds, disagreementCases]);
+
+  useEffect(() => {
+    if (!previewImageId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setPreviewImageId(null);
+        return;
+      }
+      if (previewImageIds.length === 0) return;
+      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        event.preventDefault();
+        setPreviewImageId((prev) => {
+          if (!prev) return prev;
+          const i = previewImageIds.findIndex((id: string) => id === prev);
+          const next = Math.min(previewImageIds.length - 1, Math.max(0, i) + 1);
+          return previewImageIds[next] || prev;
+        });
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setPreviewImageId((prev) => {
+          if (!prev) return prev;
+          const i = previewImageIds.findIndex((id: string) => id === prev);
+          const next = Math.max(0, i <= 0 ? 0 : i - 1);
+          return previewImageIds[next] || prev;
+        });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewImageId, previewImageIds]);
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
       <h2 className="text-xl font-semibold">Held-Out Evaluation</h2>
@@ -344,6 +403,55 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           </div>
 
           {/* Predictions table */}
+          {disagreementCases.length > 0 && (
+            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+              <h3 className="text-sm font-medium mb-3">
+                Disagreement Cases ({disagreementCases.length})
+              </h3>
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-800">
+                    <tr className="text-gray-500 border-b border-gray-700">
+                      <th className="text-left py-2 px-3">Preview</th>
+                      <th className="text-left py-2 px-3">Image ID</th>
+                      <th className="text-center py-2 px-3">Ground Truth</th>
+                      <th className="text-center py-2 px-3">Prediction</th>
+                      <th className="text-right py-2 px-3">Confidence</th>
+                      <th className="text-center py-2 px-3">Parse</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {disagreementCases.map((p: any) => (
+                      <tr key={p.prediction_id} className="border-b border-gray-800">
+                        <td className="py-2 px-3">
+                          <img
+                            src={p.image_uri}
+                            alt={p.image_id}
+                            className="w-14 h-10 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                            onClick={() => setPreviewImageId(String(p.image_id || ""))}
+                          />
+                        </td>
+                        <td className="py-2 px-3 font-mono max-w-[260px] truncate" title={String(p.image_id || "")}>
+                          {p.image_id}
+                        </td>
+                        <td className="text-center py-2 px-3">
+                          <DecisionBadge decision={getResolvedGroundTruth(p)} />
+                        </td>
+                        <td className="text-center py-2 px-3">
+                          <DecisionBadge decision={p.parse_ok ? p.predicted_decision : "PARSE_FAIL"} />
+                        </td>
+                        <td className="text-right py-2 px-3">{p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}</td>
+                        <td className="text-center py-2 px-3">
+                          {p.parse_ok ? <span className="text-green-400">OK</span> : <span className="text-red-400">FAIL</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
             <h3 className="text-sm font-medium mb-3">Image-Level Results ({latestResult.predictions?.length || 0})</h3>
             <div className="overflow-x-auto max-h-96 overflow-y-auto">
@@ -364,7 +472,21 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                     const correct = p.parse_ok && p.predicted_decision === p.ground_truth_label;
                     return (
                       <tr key={p.prediction_id} className={`border-b border-gray-800/50 ${!correct ? "bg-red-900/5" : ""}`}>
-                        <td className="py-1.5 px-3 font-mono">{p.image_id}</td>
+                        <td className="py-1.5 px-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {p.image_uri ? (
+                              <img
+                                src={p.image_uri}
+                                alt={p.image_id}
+                                className="w-10 h-8 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                                onClick={() => setPreviewImageId(String(p.image_id || ""))}
+                              />
+                            ) : null}
+                            <span className="font-mono truncate max-w-[220px]" title={String(p.image_id || "")}>
+                              {p.image_id}
+                            </span>
+                          </div>
+                        </td>
                         <td className="text-center py-1.5 px-3">
                           <span className={`px-1.5 py-0.5 rounded ${
                             p.ground_truth_label === "DETECTED" ? "bg-purple-900/30 text-purple-300" : "bg-emerald-900/30 text-emerald-300"
@@ -394,6 +516,141 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                   })}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewImageId && previewImageIds.length > 0 && activePreviewPrediction && (
+        <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto flex items-start justify-center p-6">
+          <button className="absolute inset-0" onClick={() => setPreviewImageId(null)} aria-label="Close preview" />
+          <div className="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs text-gray-400">
+                Disagreement Cases · {Math.max(previewIndex, 0) + 1}/{previewImageIds.length} · {activePreviewPrediction.image_id}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+                  onClick={() => {
+                    if (previewIndex < 0) return;
+                    const nextIndex = Math.max(0, previewIndex - 1);
+                    setPreviewImageId(previewImageIds[nextIndex] || previewImageId);
+                  }}
+                  disabled={previewIndex <= 0}
+                >
+                  Prev
+                </button>
+                <button
+                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+                  onClick={() => {
+                    if (previewIndex < 0) return;
+                    const nextIndex = Math.min(previewImageIds.length - 1, previewIndex + 1);
+                    setPreviewImageId(previewImageIds[nextIndex] || previewImageId);
+                  }}
+                  disabled={previewIndex >= previewImageIds.length - 1}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-4 min-w-[980px]">
+                <div className="space-y-3 min-w-0">
+                  <div className="bg-gray-950 rounded border border-gray-800 p-2">
+                    <img
+                      src={activePreviewPrediction.image_uri}
+                      alt={activePreviewPrediction.image_id}
+                      className="w-full max-h-[56vh] object-contain rounded"
+                    />
+                  </div>
+                  <div className="bg-gray-950 rounded border border-gray-800 p-3 text-xs space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500">Ground Truth:</span>
+                      <DecisionBadge decision={getResolvedGroundTruth(activePreviewPrediction)} />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-gray-500">Model Outcome</div>
+                      <div className="border border-gray-800 rounded p-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500">Prediction:</span>
+                          <DecisionBadge
+                            decision={activePreviewPrediction.parse_ok ? activePreviewPrediction.predicted_decision : "PARSE_FAIL"}
+                          />
+                          <span className="text-gray-500">
+                            {activePreviewPrediction.confidence != null
+                              ? Number(activePreviewPrediction.confidence).toFixed(2)
+                              : "—"}
+                          </span>
+                          <span className={`${activePreviewPrediction.parse_ok ? "text-green-400" : "text-red-400"}`}>
+                            {activePreviewPrediction.parse_ok ? "OK" : "FAIL"}
+                          </span>
+                        </div>
+                        <div>
+                          <div className="text-gray-500 mb-1">Evidence</div>
+                          <div className="max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-gray-300">
+                            {activePreviewPrediction.evidence || "—"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-gray-500 mb-1">Model Output</div>
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
+                            {formatModelOutput(activePreviewPrediction.raw_response || "")}
+                          </pre>
+                        </div>
+                        {!activePreviewPrediction.parse_ok && (
+                          <div className="space-y-1 text-gray-300">
+                            <div><span className="text-gray-500">Parse Reason:</span> {activePreviewPrediction.parse_error_reason || "Parse failed"}</div>
+                            <div><span className="text-gray-500">Fix Suggestion:</span> {activePreviewPrediction.parse_fix_suggestion || "Return strict JSON only."}</div>
+                          </div>
+                        )}
+                        <div className="space-y-1 text-gray-300">
+                          <div className="text-gray-500">HIL Review</div>
+                          <div>Error tag: {activePreviewPrediction.error_tag || "—"}</div>
+                          <div className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
+                            Reviewer note: {activePreviewPrediction.reviewer_note || "—"}
+                          </div>
+                          <div>Corrected at: {activePreviewPrediction.corrected_at ? new Date(activePreviewPrediction.corrected_at).toLocaleString() : "—"}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-2 max-h-[70vh] overflow-y-auto w-80 shrink-0">
+                  {previewImageIds.map((imageId: string, idx: number) => {
+                    const row = disagreementCases.find((p: any) => String(p.image_id || "") === imageId);
+                    if (!row) return null;
+                    return (
+                      <button
+                        key={`${imageId}-${idx}`}
+                        className={`w-full text-left p-2 rounded border ${
+                          idx === previewIndex
+                            ? "border-blue-500 bg-blue-900/20"
+                            : "border-gray-700 bg-gray-900/40 hover:border-gray-600"
+                        }`}
+                        onClick={() => setPreviewImageId(imageId)}
+                      >
+                        <div className="text-[11px] font-mono text-gray-300 truncate" title={imageId}>{imageId}</div>
+                        <img
+                          src={row.image_uri}
+                          alt={imageId}
+                          className="mt-1 w-full h-16 object-cover rounded border border-gray-700"
+                        />
+                        <div className="mt-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-500">GT:</span>
+                            <DecisionBadge decision={getResolvedGroundTruth(row)} />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-500">Model:</span>
+                            <DecisionBadge decision={row.parse_ok ? row.predicted_decision : "PARSE_FAIL"} />
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -490,6 +747,43 @@ function ThresholdRow({ label, value, threshold }: { label: string; value: numbe
       <span className="font-mono text-gray-400">{(threshold * 100).toFixed(1)}%</span>
     </div>
   );
+}
+
+function DecisionBadge({ decision }: { decision: string | null }) {
+  if (!decision) return <span className="text-gray-600 text-xs">—</span>;
+  if (decision !== "DETECTED" && decision !== "NOT_DETECTED") {
+    return <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/30 text-red-400">{decision}</span>;
+  }
+  return (
+    <span
+      className={`text-xs px-1.5 py-0.5 rounded ${
+        decision === "DETECTED"
+          ? "bg-purple-900/30 text-purple-300"
+          : "bg-emerald-900/30 text-emerald-300"
+      }`}
+    >
+      {decision}
+    </span>
+  );
+}
+
+function getResolvedGroundTruth(prediction: any): string | null {
+  return prediction?.corrected_label || prediction?.ground_truth_label || null;
+}
+
+function formatModelOutput(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "—";
+  let cleaned = text;
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+  }
+  try {
+    const parsed = JSON.parse(cleaned);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return cleaned;
+  }
 }
 
 async function safeJsonArray<T>(res: Response, label: string): Promise<T[]> {

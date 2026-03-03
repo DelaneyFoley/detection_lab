@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getDb } from "@/lib/db";
 import { DEFAULT_PROMPT_FEEDBACK_TEMPLATE, renderPromptFeedbackTemplate } from "@/lib/adminPrompts";
-import fs from "fs";
-import path from "path";
+import { buildImagePart } from "@/lib/gemini";
 
 // Prompt improvement assistant
 export async function POST(req: NextRequest) {
@@ -126,48 +125,4 @@ function samplePredictionsForVision(predictions: any[]): any[] {
     .slice(0, 3)
     .map((p) => ({ ...p, cluster: "false_negative" }));
   return [...parseFails, ...fps, ...fns].filter((p) => !!p.image_uri);
-}
-
-async function buildImagePart(imageUri: string) {
-  if (imageUri.startsWith("data:")) {
-    const match = imageUri.match(/^data:([^;]+);base64,(.+)$/);
-    if (match) {
-      return [{ inlineData: { mimeType: match[1], data: match[2] } }];
-    }
-  }
-
-  if (imageUri.startsWith("/") || imageUri.startsWith("./")) {
-    const resolvedPath = resolveLocalImagePath(imageUri);
-    if (!fs.existsSync(resolvedPath)) return [];
-    const data = fs.readFileSync(resolvedPath);
-    const ext = path.extname(resolvedPath).toLowerCase();
-    const mimeMap: Record<string, string> = {
-      ".jpg": "image/jpeg",
-      ".jpeg": "image/jpeg",
-      ".png": "image/png",
-      ".webp": "image/webp",
-      ".gif": "image/gif",
-      ".svg": "image/svg+xml",
-    };
-    return [{ inlineData: { mimeType: mimeMap[ext] || "image/jpeg", data: data.toString("base64") } }];
-  }
-
-  if (imageUri.startsWith("http")) {
-    const response = await fetch(imageUri);
-    if (!response.ok) return [];
-    const buffer = await response.arrayBuffer();
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    return [{ inlineData: { mimeType: contentType, data: Buffer.from(buffer).toString("base64") } }];
-  }
-
-  return [];
-}
-
-function resolveLocalImagePath(imageUri: string): string {
-  if (path.isAbsolute(imageUri)) {
-    if (fs.existsSync(imageUri)) return imageUri;
-    const publicPath = path.join(process.cwd(), "public", imageUri.replace(/^\//, ""));
-    if (fs.existsSync(publicPath)) return publicPath;
-  }
-  return path.join(process.cwd(), imageUri);
 }
