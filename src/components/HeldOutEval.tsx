@@ -14,6 +14,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
   const [selectedPromptId, setSelectedPromptId] = useState("");
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [running, setRunning] = useState(false);
+  const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
   const [progress, setProgress] = useState("");
   const [latestResult, setLatestResult] = useState<any>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -193,6 +194,30 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     a.href = url;
     a.download = `held-out-eval-${latestResult.run_id.slice(0, 8)}.json`;
     a.click();
+  };
+
+  const loadHistoricalRun = async (runId: string) => {
+    setLoadingRunId(runId);
+    setProgress(`Loading held-out run ${runId.slice(0, 8)}...`);
+    try {
+      const res = await fetch(`/api/runs?run_id=${runId}`);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Failed to load run");
+      }
+      setLatestResult(data);
+      if (data?.prompt_version_id) setSelectedPromptId(String(data.prompt_version_id));
+      if (data?.dataset_id) setSelectedDatasetId(String(data.dataset_id));
+      const processed = Number(data?.processed_images || 0);
+      const total = Number(data?.total_images || 0);
+      setProgress(`Loaded held-out run ${runId.slice(0, 8)} (${processed}/${total} images).`);
+    } catch (err) {
+      console.error(err);
+      setProgress("");
+      alert("Failed to load held-out run details.");
+    } finally {
+      setLoadingRunId(null);
+    }
   };
 
   const predictions = useMemo(() => (Array.isArray(latestResult?.predictions) ? latestResult.predictions : []), [latestResult]);
@@ -670,7 +695,16 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                       <span className="font-mono text-xs text-gray-400">{r.run_id.slice(0, 8)}</span>
                       <span className="text-xs">{prompt?.version_label || "?"}</span>
                     </div>
-                    <span className="text-xs text-gray-500">{new Date(r.created_at).toLocaleString()}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">{new Date(r.created_at).toLocaleString()}</span>
+                      <button
+                        onClick={() => loadHistoricalRun(String(r.run_id))}
+                        disabled={loadingRunId === r.run_id}
+                        className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
+                      >
+                        {loadingRunId === r.run_id ? "Loading..." : "Load"}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex gap-4 mt-1 text-xs text-gray-400">
                     <span>Accuracy: <b className="text-gray-300">{((r.metrics_summary?.accuracy || 0) * 100).toFixed(1)}%</b></span>
