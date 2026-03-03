@@ -6,18 +6,15 @@ export const REQUIRED_USER_PROMPT_JSON_BLOCK = `Return ONLY this JSON:
   "evidence": "<short phrase describing visual basis>"
 }`;
 
-export const DEFAULT_PROMPT_ASSIST_TEMPLATE = `You are a principal staff-level prompt engineer and property insurance underwriting SME.
-
-Goal:
-Generate a production-grade binary detection spec for VLM evaluation in underwriting workflows.
-Optimize for:
-- high precision under ambiguity
-- auditability
-- reproducibility
-- strict JSON-output compliance in downstream inference
+export const DEFAULT_PROMPT_ASSIST_TEMPLATE = `You are generating a lean, production-ready binary vision detection spec for underwriting.
 
 User request:
 {{USER_REQUEST}}
+
+Important mode handling:
+- If the request is "incorrect capture"/context-match style, DETECTED means the image fails the required context and NOT_DETECTED means the image matches context.
+- If the request is object/condition detection style, DETECTED means the target condition is present and NOT_DETECTED means absent/not confirmable.
+- Infer mode from the request and write policies/rubric accordingly.
 
 Return ONLY valid JSON with this exact shape:
 {
@@ -26,36 +23,33 @@ Return ONLY valid JSON with this exact shape:
   "description": "one concise paragraph",
   "system_prompt": "system prompt text",
   "user_prompt_template": "user prompt template text containing {{DETECTION_CODE}}",
-  "label_policy_detected": "criteria for DETECTED",
-  "label_policy_not_detected": "criteria for NOT_DETECTED",
+  "label_policy_detected": "one sentence",
+  "label_policy_not_detected": "one sentence",
   "decision_rubric": ["criterion 1", "criterion 2", "criterion 3", "criterion 4"],
   "version_label": "Detection baseline"
 }
 
-Hard requirements:
-- detection_code: uppercase letters/numbers/underscores only; stable and specific.
-- decision_rubric: 4-7 atomic, observable checks in decision order.
-- Policies must be mutually exclusive and collectively exhaustive for DETECTED vs NOT_DETECTED.
-- Include explicit anti-confusion guidance (common lookalikes, occlusion, blur, glare, shadows, artifacts).
-- Default behavior under uncertainty must be conservative and deterministic.
-- Language must be concise, auditable, and testable (no vague words like "maybe", "appears" without criteria).
-- user_prompt_template must require strict JSON-only output and include exactly this block:
+Hard output constraints:
+- Be concise; no redundancy.
+- system_prompt: 2-4 short lines, <= 320 chars total.
+- user_prompt_template (excluding the required JSON block): <= 700 chars.
+- label_policy_detected: exactly 1 sentence.
+- label_policy_not_detected: exactly 1 sentence.
+- decision_rubric: 4-6 short, atomic checks in decision order; no numbering prefixes.
+- detection_code: uppercase letters/numbers/underscores only.
+- Policies must be mutually exclusive and collectively exhaustive.
+- Under uncertainty/insufficient evidence use a deterministic conservative default aligned to the chosen mode.
+- Explicitly handle lookalikes and image-quality limits in rubric (not by bloating policies).
+
+The user_prompt_template must include exactly this block:
 
 {{REQUIRED_USER_PROMPT_JSON_BLOCK}}
 
-System prompt quality requirements:
-- Enforce: no markdown, no commentary, no extra keys.
-- Enforce exact schema and allowed decision values.
-- Enforce confidence range 0..1 numeric.
-- Instruct model to choose one decision even under uncertainty (no null/unknown).
-- Keep instructions short, unambiguous, and operational.
-
-Before finalizing internally, run this checklist:
-1) Is DETECTED threshold visually explicit and strict?
-2) Is NOT_DETECTED default clear for ambiguous/insufficient evidence?
-3) Are lookalikes explicitly excluded?
-4) Does rubric map directly to policy and final decision?
-5) Is downstream JSON parse success highly likely?
+System prompt must enforce:
+- JSON only, no markdown/commentary/extra keys.
+- Allowed decision values only: DETECTED or NOT_DETECTED.
+- confidence must be numeric 0..1.
+- Must choose one decision (no null/unknown).
 
 Output only the final JSON object. No markdown. No extra keys.`;
 

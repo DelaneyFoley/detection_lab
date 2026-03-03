@@ -7,6 +7,23 @@ import {
   renderPromptAssistTemplate,
 } from "@/lib/adminPrompts";
 
+function normalizeSpaces(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function toSingleSentence(value: string): string {
+  const compact = normalizeSpaces(value);
+  if (!compact) return "";
+  const firstSentence = compact.match(/^.*?[.!?](?=\s|$)/)?.[0] || compact;
+  return firstSentence.replace(/[.!?]*$/, "").trim() + ".";
+}
+
+function cleanRubricItem(value: string): string {
+  return normalizeSpaces(value)
+    .replace(/^[-*]\s*/, "")
+    .replace(/^\d+[.)]\s*/, "");
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -50,15 +67,18 @@ export async function POST(req: NextRequest) {
       : `${generatedUserPromptTemplate ? `${generatedUserPromptTemplate}\n\n` : ""}${REQUIRED_USER_PROMPT_JSON_BLOCK}`;
 
     return NextResponse.json({
-      display_name: String(parsed.display_name || ""),
+      display_name: normalizeSpaces(String(parsed.display_name || "")),
       detection_code: detectionCode,
-      description: String(parsed.description || ""),
-      system_prompt: String(parsed.system_prompt || ""),
+      description: normalizeSpaces(String(parsed.description || "")),
+      system_prompt: String(parsed.system_prompt || "").trim(),
       user_prompt_template: userPromptTemplate,
-      label_policy_detected: String(parsed.label_policy_detected || ""),
-      label_policy_not_detected: String(parsed.label_policy_not_detected || ""),
-      decision_rubric: decisionRubric.map((r: unknown) => String(r || "")).filter(Boolean),
-      version_label: String(parsed.version_label || "Detection baseline"),
+      label_policy_detected: toSingleSentence(String(parsed.label_policy_detected || "")),
+      label_policy_not_detected: toSingleSentence(String(parsed.label_policy_not_detected || "")),
+      decision_rubric: decisionRubric
+        .map((r: unknown) => cleanRubricItem(String(r || "")))
+        .filter(Boolean)
+        .slice(0, 6),
+      version_label: normalizeSpaces(String(parsed.version_label || "Detection baseline")),
     });
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
