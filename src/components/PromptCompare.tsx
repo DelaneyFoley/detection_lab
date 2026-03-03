@@ -317,7 +317,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                 <MetricsDisplay
                   key={promptId}
                   metrics={run.metrics_summary}
-                  label={`${prompt?.version_label || promptId.slice(0, 8)} — ${prompt?.model}`}
+                  label={`${prompt?.version_label || promptId.slice(0, 8)} — ${run?.model_used || prompt?.model || "unknown-model"}`}
                 />
               );
             })}
@@ -466,8 +466,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-gray-800">
                         <tr className="text-gray-500 border-b border-gray-700">
-                      <th className="text-left py-1.5 px-2">Image</th>
                       <th className="text-left py-1.5 px-2">Preview</th>
+                      <th className="text-left py-1.5 px-2">Image ID</th>
                       <th className="text-center py-1.5 px-2">Ground Truth</th>
                           <th className="text-center py-1.5 px-2">Prediction</th>
                           <th className="text-center py-1.5 px-2">Correct</th>
@@ -485,7 +485,6 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                             p.predicted_decision === resolvedGroundTruth;
                           return (
                             <tr key={p.prediction_id} className="border-b border-gray-800/50">
-                              <td className="py-1.5 px-2 font-mono">{p.image_id}</td>
                               <td className="py-1.5 px-2">
                                 {p.image_uri ? (
                                   <img
@@ -498,6 +497,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                                   <span className="text-gray-600">—</span>
                                 )}
                               </td>
+                              <td className="py-1.5 px-2 font-mono">{p.image_id}</td>
                               <td className="text-center py-1.5 px-2">
                                 <DecisionBadge decision={resolvedGroundTruth} />
                               </td>
@@ -578,55 +578,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
               </div>
             </div>
             <div className="overflow-x-auto">
-              <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4 min-w-[980px]">
-              <div className="space-y-2 max-h-[70vh] overflow-y-auto w-80 shrink-0">
-                {activePreviewImageIds.map((imageId, idx) => {
-                  const row = getPredictionForImage(previewState.promptId, imageId);
-                  const firstWithImage =
-                    row ||
-                    resultEntries
-                      .map(([promptId]) => getPredictionForImage(promptId, imageId))
-                      .find((p) => !!p?.image_uri) ||
-                    null;
-                  return (
-                  <button
-                    key={`${imageId}-${idx}`}
-                    className={`w-full text-left p-2 rounded border ${
-                      idx === activePreviewIndex
-                        ? "border-blue-500 bg-blue-900/20"
-                        : "border-gray-700 bg-gray-900/40 hover:border-gray-600"
-                    }`}
-                    onClick={() => setPreviewState((prev) => (prev ? { ...prev, imageId } : prev))}
-                  >
-                    <div className="text-[11px] font-mono text-gray-300 truncate">{imageId}</div>
-                    {firstWithImage?.image_uri ? (
-                      <img
-                        src={firstWithImage.image_uri}
-                        alt={imageId}
-                        className="mt-1 w-full h-16 object-cover rounded border border-gray-700"
-                      />
-                    ) : null}
-                    <div className="mt-1 space-y-1">
-                      {resultEntries.map(([promptId]) => {
-                        const prediction = getPredictionForImage(promptId, imageId);
-                        return (
-                          <div key={`${imageId}-${promptId}`} className="flex items-center gap-2">
-                            <span className="text-[10px] text-gray-500 min-w-0 truncate">
-                              {promptLabelById.get(promptId) || promptId.slice(0, 8)}:
-                            </span>
-                            <DecisionBadge decision={prediction?.predicted_decision || "PARSE_FAIL"} />
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-1 text-[11px] text-gray-500">
-                      GT: {(firstWithImage ? getResolvedGroundTruth(firstWithImage) : null) || "UNSET"}
-                    </div>
-                  </button>
-                  );
-                })}
-              </div>
-              <div className="space-y-3 min-w-0">
+              <div className="space-y-3 min-w-[980px]">
                 <div className="bg-gray-950 rounded border border-gray-800 p-2">
                   <img
                     src={activePreviewPrediction.image_uri}
@@ -690,7 +642,6 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     <div className="text-gray-500">No prompt outcomes available for this image.</div>
                   )}
                 </div>
-              </div>
               </div>
             </div>
           </div>

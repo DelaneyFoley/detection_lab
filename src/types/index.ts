@@ -98,6 +98,7 @@ export interface Run {
   run_id: string;
   detection_id: string;
   prompt_version_id: string;
+  model_used: string;
   prompt_snapshot: string; // JSON serialized full prompt
   decoding_params: string; // JSON serialized
   dataset_id: string;

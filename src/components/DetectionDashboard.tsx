@@ -17,8 +17,13 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
     Map<string, { predictions: any[]; prompt_feedback_log?: any }>
   >(new Map());
   const [loadingRunId, setLoadingRunId] = useState<string | null>(null);
-  const [previewPrediction, setPreviewPrediction] = useState<any | null>(null);
+  const [previewState, setPreviewState] = useState<{ runId: string; imageIds: string[]; activeIndex: number } | null>(null);
   const [loading, setLoading] = useState(true);
+  const activePreviewPrediction =
+    previewState && runDetails.get(previewState.runId)?.predictions
+      ? runDetails.get(previewState.runId)?.predictions
+          .find((p: any) => String(p.image_id || "") === previewState.imageIds[previewState.activeIndex]) || null
+      : null;
 
   useEffect(() => {
     setDetections(initialDetections);
@@ -75,6 +80,33 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
     else setLoading(false);
   }, [detections, loadAllData, refreshCounter]);
 
+  useEffect(() => {
+    if (!previewState) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPreviewState(null);
+        return;
+      }
+      if (previewState.imageIds.length === 0) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setPreviewState((prev) => {
+          if (!prev) return prev;
+          return { ...prev, activeIndex: Math.max(0, prev.activeIndex - 1) };
+        });
+      } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        event.preventDefault();
+        setPreviewState((prev) => {
+          if (!prev) return prev;
+          return { ...prev, activeIndex: Math.min(prev.imageIds.length - 1, prev.activeIndex + 1) };
+        });
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [previewState]);
+
   const deleteDetection = async (detectionId: string, displayName: string) => {
     if (!confirm(`Delete detection "${displayName}" and all related prompts/runs/datasets? This cannot be undone.`)) {
       return;
@@ -120,6 +152,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
       "detection_code",
       "detection_name",
       "prompt_version_id",
+      "model_used",
       "dataset_id",
       "split_type",
       "run_created_at",
@@ -151,6 +184,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
       detection.detection_code,
       detection.display_name,
       run.prompt_version_id,
+      run.model_used || "",
       run.dataset_id,
       run.split_type,
       run.created_at,
@@ -207,6 +241,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
         detection_code: detection.detection_code,
         detection_name: detection.display_name,
         prompt_version_id: run.prompt_version_id,
+        model_used: run.model_used || "",
         dataset_id: run.dataset_id,
         split_type: run.split_type,
         created_at: run.created_at,
@@ -272,11 +307,20 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
       <div className="space-y-3">
         {detections.map((d) => {
           const data = detectionData.get(d.detection_id);
-          const latestRun = data?.runs[0] as any;
-          const latestMetrics: MetricsSummary | null = latestRun?.metrics_summary || null;
           const approvedPrompt = data?.prompts.find(
             (p) => p.prompt_version_id === d.approved_prompt_version
           );
+          const primaryMetric = d.metric_thresholds?.primary_metric || "f1";
+          const approvedRuns = (data?.runs || []).filter((r: any) => r.prompt_version_id === d.approved_prompt_version);
+          const candidateRuns = d.approved_prompt_version ? approvedRuns : data?.runs || [];
+          const bestRun =
+            [...candidateRuns].sort((left: any, right: any) => {
+              const leftScore = Number(left?.metrics_summary?.[primaryMetric] ?? -1);
+              const rightScore = Number(right?.metrics_summary?.[primaryMetric] ?? -1);
+              if (rightScore !== leftScore) return rightScore - leftScore;
+              return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+            })[0] || null;
+          const bestMetrics: MetricsSummary | null = bestRun?.metrics_summary || null;
           const isExpanded = expandedId === d.detection_id;
 
           return (
@@ -308,7 +352,9 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                           {d.detection_code}
                         </code>
                       </div>
-                      <p className="text-xs text-gray-500 truncate mt-0.5">{d.description}</p>
+                      <p className="text-xs text-gray-500 truncate mt-0.5" title={d.description}>
+                        {d.description}
+                      </p>
                     </div>
                   </div>
 
@@ -325,30 +371,30 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                       </span>
                     )}
 
-                    {/* Quick metrics from latest run */}
-                    {latestMetrics && (
-                      <div className="flex gap-3 text-xs">
+                    {/* Quick metrics from best run */}
+                    {bestMetrics && (
+                      <div className="flex items-center gap-3 text-xs">
                         <span>
                           P:{" "}
                           <b className="text-blue-400">
-                            {(latestMetrics.precision * 100).toFixed(1)}%
+                            {(bestMetrics.precision * 100).toFixed(1)}%
                           </b>
                         </span>
                         <span>
                           R:{" "}
                           <b className="text-green-400">
-                            {(latestMetrics.recall * 100).toFixed(1)}%
+                            {(bestMetrics.recall * 100).toFixed(1)}%
                           </b>
                         </span>
                         <span>
                           F1:{" "}
                           <b className="text-yellow-400">
-                            {(latestMetrics.f1 * 100).toFixed(1)}%
+                            {(bestMetrics.f1 * 100).toFixed(1)}%
                           </b>
                         </span>
                       </div>
                     )}
-                    {!latestMetrics && (
+                    {!bestMetrics && (
                       <span className="text-xs text-gray-600">No runs yet</span>
                     )}
 
@@ -387,21 +433,21 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                         <ThresholdPill
                           label="Precision"
                           threshold={d.metric_thresholds.min_precision}
-                          actual={latestMetrics?.precision}
+                          actual={bestMetrics?.precision}
                         />
                       )}
                       {d.metric_thresholds.min_recall != null && (
                         <ThresholdPill
                           label="Recall"
                           threshold={d.metric_thresholds.min_recall}
-                          actual={latestMetrics?.recall}
+                          actual={bestMetrics?.recall}
                         />
                       )}
                       {d.metric_thresholds.min_f1 != null && (
                         <ThresholdPill
                           label="F1"
                           threshold={d.metric_thresholds.min_f1}
-                          actual={latestMetrics?.f1}
+                          actual={bestMetrics?.f1}
                         />
                       )}
                     </div>
@@ -418,6 +464,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                           <tr className="text-gray-500 border-b border-gray-700">
                             <th className="text-left py-2 px-3">Run</th>
                             <th className="text-left py-2 px-3">Prompt</th>
+                            <th className="text-left py-2 px-3">Model Used</th>
                             <th className="text-center py-2 px-3">Split</th>
                             <th className="text-right py-2 px-3">Accuracy</th>
                             <th className="text-right py-2 px-3">Precision</th>
@@ -435,6 +482,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                             const prompt = data.prompts.find(
                               (p) => p.prompt_version_id === r.prompt_version_id
                             );
+                            const dataset = data.datasets.find((ds) => ds.dataset_id === r.dataset_id);
                             const details = runDetails.get(r.run_id);
                             const feedback = details?.prompt_feedback_log || r.prompt_feedback_log || {};
                             const accepted = Array.isArray(feedback.accepted) ? feedback.accepted : [];
@@ -453,6 +501,9 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                   </td>
                                   <td className="py-2 px-3">
                                     <span className="text-gray-300">{prompt?.version_label || "?"}</span>
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-400">
+                                    {r.model_used || "—"}
                                   </td>
                                   <td className="text-center py-2 px-3">
                                     <span className={`px-1.5 py-0.5 rounded ${splitColor(r.split_type)}`}>
@@ -486,12 +537,18 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                 </tr>
                                 {expandedRunId === r.run_id && (
                                   <tr className="border-b border-gray-800/50 bg-gray-900/30">
-                                    <td colSpan={11} className="px-3 py-3">
+                                    <td colSpan={12} className="px-3 py-3">
                                       {loadingRunId === r.run_id && (
                                         <p className="text-xs text-gray-500">Loading run items...</p>
                                       )}
                                       {loadingRunId !== r.run_id && (
                                         <div className="space-y-3">
+                                          <div className="text-[11px] text-gray-500">
+                                            Dataset used for this run:{" "}
+                                            <span className="text-gray-300">
+                                              {dataset?.name || r.dataset_id} ({splitTypeLabel(r.split_type)})
+                                            </span>
+                                          </div>
                                           <div className="flex items-center gap-2">
                                             <button
                                               onClick={() => exportRunLogCsv(d, r, details?.predictions || [])}
@@ -593,7 +650,18 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                       src={p.image_uri}
                                                       alt={p.image_id}
                                                       className="w-12 h-9 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
-                                                      onClick={() => setPreviewPrediction(p)}
+                                                      onClick={() => {
+                                                        const imageIds = (details?.predictions || [])
+                                                          .filter((row: any) => !!row?.image_uri)
+                                                          .map((row: any) => String(row.image_id || ""));
+                                                        const activeIndex = imageIds.findIndex((id: string) => id === String(p.image_id || ""));
+                                                        if (imageIds.length === 0) return;
+                                                        setPreviewState({
+                                                          runId: r.run_id,
+                                                          imageIds,
+                                                          activeIndex: Math.max(0, activeIndex),
+                                                        });
+                                                      }}
                                                     />
                                                   </td>
                                                   <td className="px-2 py-1.5 font-mono text-gray-300">{p.image_id}</td>
@@ -725,10 +793,10 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
         </div>
       )}
 
-      {previewPrediction && (
+      {previewState && activePreviewPrediction && (
         <div
           className="fixed inset-0 bg-black/80 z-50 overflow-y-auto flex items-start justify-center p-6"
-          onClick={() => setPreviewPrediction(null)}
+          onClick={() => setPreviewState(null)}
         >
           <div
             className="w-full max-w-5xl max-h-[calc(100vh-3rem)] bg-gray-900 border border-gray-700 rounded-lg p-4 grid gap-4 overflow-hidden my-auto"
@@ -737,62 +805,87 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
           >
             <div className="flex items-center justify-center">
               <img
-                src={previewPrediction.image_uri}
-                alt={previewPrediction.image_id}
+                src={activePreviewPrediction.image_uri}
+                alt={activePreviewPrediction.image_id}
                 className="max-h-[72vh] max-w-full rounded-lg border border-gray-700"
               />
             </div>
             <div className="space-y-3 overflow-y-auto pr-1">
-              <div className="text-xs text-gray-500 font-mono">{previewPrediction.image_id}</div>
+              <div className="text-xs text-gray-500">
+                {previewState.activeIndex + 1} / {previewState.imageIds.length} (Use arrow keys to navigate)
+              </div>
+              <div className="flex justify-between gap-2">
+                <button
+                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded disabled:opacity-40"
+                  onClick={() =>
+                    setPreviewState((prev) => (prev ? { ...prev, activeIndex: Math.max(0, prev.activeIndex - 1) } : prev))
+                  }
+                  disabled={previewState.activeIndex <= 0}
+                >
+                  Prev
+                </button>
+                <button
+                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded disabled:opacity-40"
+                  onClick={() =>
+                    setPreviewState((prev) =>
+                      prev ? { ...prev, activeIndex: Math.min(prev.imageIds.length - 1, prev.activeIndex + 1) } : prev
+                    )
+                  }
+                  disabled={previewState.activeIndex >= previewState.imageIds.length - 1}
+                >
+                  Next
+                </button>
+              </div>
+              <div className="text-xs text-gray-500 font-mono">{activePreviewPrediction.image_id}</div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">AI Label</label>
                 <div>
                   <span
                     className={`text-sm px-1.5 py-0.5 rounded ${
-                      previewPrediction.predicted_decision === "DETECTED"
+                      activePreviewPrediction.predicted_decision === "DETECTED"
                         ? "bg-purple-900/30 text-purple-300"
-                        : previewPrediction.predicted_decision === "NOT_DETECTED"
+                        : activePreviewPrediction.predicted_decision === "NOT_DETECTED"
                         ? "bg-emerald-900/30 text-emerald-300"
                         : "bg-red-900/30 text-red-400"
                     }`}
                   >
-                    {previewPrediction.predicted_decision || "PARSE_FAIL"}
+                    {activePreviewPrediction.predicted_decision || "PARSE_FAIL"}
                   </span>
                 </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Confidence (0-1)</label>
                 <div className="text-sm text-gray-300">
-                  {previewPrediction.confidence != null ? Number(previewPrediction.confidence).toFixed(2) : "—"}
+                  {activePreviewPrediction.confidence != null ? Number(activePreviewPrediction.confidence).toFixed(2) : "—"}
                 </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Runtime</label>
                 <div className="text-sm text-gray-300">
-                  {previewPrediction.inference_runtime_ms != null
-                    ? `${Number(previewPrediction.inference_runtime_ms)} ms`
+                  {activePreviewPrediction.inference_runtime_ms != null
+                    ? `${Number(activePreviewPrediction.inference_runtime_ms)} ms`
                     : "—"}
-                  {previewPrediction.parse_retry_count != null
-                    ? ` (retries: ${Number(previewPrediction.parse_retry_count)})`
+                  {activePreviewPrediction.parse_retry_count != null
+                    ? ` (retries: ${Number(activePreviewPrediction.parse_retry_count)})`
                     : ""}
                 </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">AI Description</label>
-                <div className="text-sm text-gray-300 whitespace-pre-wrap">{previewPrediction.evidence || "—"}</div>
+                <div className="text-sm text-gray-300 whitespace-pre-wrap">{activePreviewPrediction.evidence || "—"}</div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Ground Truth (run snapshot)</label>
                 <div>
-                  {previewPrediction.ground_truth_label ? (
+                  {activePreviewPrediction.ground_truth_label ? (
                     <span
                       className={`text-sm px-1.5 py-0.5 rounded ${
-                        previewPrediction.ground_truth_label === "DETECTED"
+                        activePreviewPrediction.ground_truth_label === "DETECTED"
                           ? "bg-purple-900/30 text-purple-300"
                           : "bg-emerald-900/30 text-emerald-300"
                       }`}
                     >
-                      {previewPrediction.ground_truth_label}
+                      {activePreviewPrediction.ground_truth_label}
                     </span>
                   ) : (
                     <span className="text-sm text-gray-300">UNSET</span>
@@ -801,27 +894,27 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Error Tag</label>
-                <div className="text-sm text-gray-300">{previewPrediction.error_tag || "—"}</div>
+                <div className="text-sm text-gray-300">{activePreviewPrediction.error_tag || "—"}</div>
               </div>
-              {!previewPrediction.parse_ok && (
+              {!activePreviewPrediction.parse_ok && (
                 <>
                   <div>
                     <label className="text-xs text-gray-400 block mb-1">Parse Reason</label>
                     <div className="text-sm text-gray-300 whitespace-pre-wrap">
-                      {previewPrediction.parse_error_reason || "Response did not match expected schema."}
+                      {activePreviewPrediction.parse_error_reason || "Response did not match expected schema."}
                     </div>
                   </div>
                   <div>
                     <label className="text-xs text-gray-400 block mb-1">How to Fix</label>
                     <div className="text-sm text-gray-300 whitespace-pre-wrap">
-                      {previewPrediction.parse_fix_suggestion || "Return strict JSON only with required keys."}
+                      {activePreviewPrediction.parse_fix_suggestion || "Return strict JSON only with required keys."}
                     </div>
                   </div>
                 </>
               )}
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Reviewer Note</label>
-                <div className="text-sm text-gray-300 whitespace-pre-wrap">{previewPrediction.reviewer_note || "—"}</div>
+                <div className="text-sm text-gray-300 whitespace-pre-wrap">{activePreviewPrediction.reviewer_note || "—"}</div>
               </div>
             </div>
           </div>

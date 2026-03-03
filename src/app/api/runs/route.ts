@@ -103,8 +103,9 @@ export async function POST(req: NextRequest) {
 
     const runId = uuid();
     const now = new Date().toISOString();
+    const modelUsed = model_override || prompt.model;
     const decodingParams = {
-      model: model_override || prompt.model,
+      model: modelUsed,
       temperature: prompt.temperature,
       top_p: prompt.top_p,
       max_output_tokens: prompt.max_output_tokens,
@@ -112,12 +113,13 @@ export async function POST(req: NextRequest) {
 
     // Create run record
     db.prepare(`
-    INSERT INTO runs (run_id, detection_id, prompt_version_id, prompt_snapshot, decoding_params, dataset_id, dataset_hash, split_type, created_at, status, total_images, processed_images)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 0)
+    INSERT INTO runs (run_id, detection_id, prompt_version_id, model_used, prompt_snapshot, decoding_params, dataset_id, dataset_hash, split_type, created_at, status, total_images, processed_images)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 0)
     `).run(
     runId,
     detection_id,
     prompt_version_id,
+    modelUsed,
     JSON.stringify({ system_prompt: prompt.system_prompt, user_prompt_template: prompt.user_prompt_template }),
     JSON.stringify(decodingParams),
     dataset_id,
@@ -135,7 +137,7 @@ export async function POST(req: NextRequest) {
       parsedPrompt: {
         ...prompt,
         prompt_structure: JSON.parse(prompt.prompt_structure || "{}"),
-        model: model_override || prompt.model,
+        model: modelUsed,
       },
       detectionCode: detection.detection_code,
       items,

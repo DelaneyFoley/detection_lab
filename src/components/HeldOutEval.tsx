@@ -483,7 +483,8 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-gray-800">
                   <tr className="text-gray-500 border-b border-gray-700">
-                    <th className="text-left py-2 px-3">Image</th>
+                    <th className="text-left py-2 px-3">Preview</th>
+                    <th className="text-left py-2 px-3">Image ID</th>
                     <th className="text-center py-2 px-3">Ground Truth</th>
                     <th className="text-center py-2 px-3">Prediction</th>
                     <th className="text-center py-2 px-3">Correct</th>
@@ -498,19 +499,21 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                     return (
                       <tr key={p.prediction_id} className={`border-b border-gray-800/50 ${!correct ? "bg-red-900/5" : ""}`}>
                         <td className="py-1.5 px-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            {p.image_uri ? (
-                              <img
-                                src={p.image_uri}
-                                alt={p.image_id}
-                                className="w-10 h-8 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
-                                onClick={() => setPreviewImageId(String(p.image_id || ""))}
-                              />
-                            ) : null}
-                            <span className="font-mono truncate max-w-[220px]" title={String(p.image_id || "")}>
-                              {p.image_id}
-                            </span>
-                          </div>
+                          {p.image_uri ? (
+                            <img
+                              src={p.image_uri}
+                              alt={p.image_id}
+                              className="w-10 h-8 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                              onClick={() => setPreviewImageId(String(p.image_id || ""))}
+                            />
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
+                        <td className="py-1.5 px-3">
+                          <span className="font-mono truncate max-w-[220px]" title={String(p.image_id || "")}>
+                            {p.image_id}
+                          </span>
                         </td>
                         <td className="text-center py-1.5 px-3">
                           <span className={`px-1.5 py-0.5 rounded ${
@@ -580,100 +583,64 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
               </div>
             </div>
             <div className="overflow-x-auto">
-              <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-4 min-w-[980px]">
-                <div className="space-y-3 min-w-0">
-                  <div className="bg-gray-950 rounded border border-gray-800 p-2">
-                    <img
-                      src={activePreviewPrediction.image_uri}
-                      alt={activePreviewPrediction.image_id}
-                      className="w-full max-h-[56vh] object-contain rounded"
-                    />
+              <div className="space-y-3 min-w-[980px]">
+                <div className="bg-gray-950 rounded border border-gray-800 p-2">
+                  <img
+                    src={activePreviewPrediction.image_uri}
+                    alt={activePreviewPrediction.image_id}
+                    className="w-full max-h-[56vh] object-contain rounded"
+                  />
+                </div>
+                <div className="bg-gray-950 rounded border border-gray-800 p-3 text-xs space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500">Ground Truth:</span>
+                    <DecisionBadge decision={getResolvedGroundTruth(activePreviewPrediction)} />
                   </div>
-                  <div className="bg-gray-950 rounded border border-gray-800 p-3 text-xs space-y-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-500">Ground Truth:</span>
-                      <DecisionBadge decision={getResolvedGroundTruth(activePreviewPrediction)} />
-                    </div>
-                    <div className="space-y-2">
-                      <div className="text-gray-500">Model Outcome</div>
-                      <div className="border border-gray-800 rounded p-2 space-y-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-500">Prediction:</span>
-                          <DecisionBadge
-                            decision={activePreviewPrediction.parse_ok ? activePreviewPrediction.predicted_decision : "PARSE_FAIL"}
-                          />
-                          <span className="text-gray-500">
-                            {activePreviewPrediction.confidence != null
-                              ? Number(activePreviewPrediction.confidence).toFixed(2)
-                              : "—"}
-                          </span>
-                          <span className={`${activePreviewPrediction.parse_ok ? "text-green-400" : "text-red-400"}`}>
-                            {activePreviewPrediction.parse_ok ? "OK" : "FAIL"}
-                          </span>
+                  <div className="space-y-2">
+                    <div className="text-gray-500">Model Outcome</div>
+                    <div className="border border-gray-800 rounded p-2 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500">Prediction:</span>
+                        <DecisionBadge
+                          decision={activePreviewPrediction.parse_ok ? activePreviewPrediction.predicted_decision : "PARSE_FAIL"}
+                        />
+                        <span className="text-gray-500">
+                          {activePreviewPrediction.confidence != null
+                            ? Number(activePreviewPrediction.confidence).toFixed(2)
+                            : "—"}
+                        </span>
+                        <span className={`${activePreviewPrediction.parse_ok ? "text-green-400" : "text-red-400"}`}>
+                          {activePreviewPrediction.parse_ok ? "OK" : "FAIL"}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-gray-500 mb-1">Evidence</div>
+                        <div className="max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-gray-300">
+                          {activePreviewPrediction.evidence || "—"}
                         </div>
-                        <div>
-                          <div className="text-gray-500 mb-1">Evidence</div>
-                          <div className="max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-gray-300">
-                            {activePreviewPrediction.evidence || "—"}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500 mb-1">Model Output</div>
-                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
-                            {formatModelOutput(activePreviewPrediction.raw_response || "")}
-                          </pre>
-                        </div>
-                        {!activePreviewPrediction.parse_ok && (
-                          <div className="space-y-1 text-gray-300">
-                            <div><span className="text-gray-500">Parse Reason:</span> {activePreviewPrediction.parse_error_reason || "Parse failed"}</div>
-                            <div><span className="text-gray-500">Fix Suggestion:</span> {activePreviewPrediction.parse_fix_suggestion || "Return strict JSON only."}</div>
-                          </div>
-                        )}
+                      </div>
+                      <div>
+                        <div className="text-gray-500 mb-1">Model Output</div>
+                        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
+                          {formatModelOutput(activePreviewPrediction.raw_response || "")}
+                        </pre>
+                      </div>
+                      {!activePreviewPrediction.parse_ok && (
                         <div className="space-y-1 text-gray-300">
-                          <div className="text-gray-500">HIL Review</div>
-                          <div>Error tag: {activePreviewPrediction.error_tag || "—"}</div>
-                          <div className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
-                            Reviewer note: {activePreviewPrediction.reviewer_note || "—"}
-                          </div>
-                          <div>Corrected at: {activePreviewPrediction.corrected_at ? new Date(activePreviewPrediction.corrected_at).toLocaleString() : "—"}</div>
+                          <div><span className="text-gray-500">Parse Reason:</span> {activePreviewPrediction.parse_error_reason || "Parse failed"}</div>
+                          <div><span className="text-gray-500">Fix Suggestion:</span> {activePreviewPrediction.parse_fix_suggestion || "Return strict JSON only."}</div>
                         </div>
+                      )}
+                      <div className="space-y-1 text-gray-300">
+                        <div className="text-gray-500">HIL Review</div>
+                        <div>Error tag: {activePreviewPrediction.error_tag || "—"}</div>
+                        <div className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
+                          Reviewer note: {activePreviewPrediction.reviewer_note || "—"}
+                        </div>
+                        <div>Corrected at: {activePreviewPrediction.corrected_at ? new Date(activePreviewPrediction.corrected_at).toLocaleString() : "—"}</div>
                       </div>
                     </div>
                   </div>
-                </div>
-                <div className="space-y-2 max-h-[70vh] overflow-y-auto w-80 shrink-0">
-                  {previewImageIds.map((imageId: string, idx: number) => {
-                    const row = disagreementCases.find((p: any) => String(p.image_id || "") === imageId);
-                    if (!row) return null;
-                    return (
-                      <button
-                        key={`${imageId}-${idx}`}
-                        className={`w-full text-left p-2 rounded border ${
-                          idx === previewIndex
-                            ? "border-blue-500 bg-blue-900/20"
-                            : "border-gray-700 bg-gray-900/40 hover:border-gray-600"
-                        }`}
-                        onClick={() => setPreviewImageId(imageId)}
-                      >
-                        <div className="text-[11px] font-mono text-gray-300 truncate" title={imageId}>{imageId}</div>
-                        <img
-                          src={row.image_uri}
-                          alt={imageId}
-                          className="mt-1 w-full h-16 object-cover rounded border border-gray-700"
-                        />
-                        <div className="mt-1 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-gray-500">GT:</span>
-                            <DecisionBadge decision={getResolvedGroundTruth(row)} />
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] text-gray-500">Model:</span>
-                            <DecisionBadge decision={row.parse_ok ? row.predicted_decision : "PARSE_FAIL"} />
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
                 </div>
               </div>
             </div>
@@ -694,6 +661,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                     <div className="flex gap-3 items-center">
                       <span className="font-mono text-xs text-gray-400">{r.run_id.slice(0, 8)}</span>
                       <span className="text-xs">{prompt?.version_label || "?"}</span>
+                      <span className="text-xs text-gray-500">{r.model_used || "—"}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-500">{new Date(r.created_at).toLocaleString()}</span>

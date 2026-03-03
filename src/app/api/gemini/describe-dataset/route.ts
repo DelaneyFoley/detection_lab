@@ -61,9 +61,9 @@ export async function POST(req: NextRequest) {
     const model = genAI.getGenerativeModel({
       model: modelName,
       generationConfig: {
-        temperature: 0.2,
-        topP: 0.95,
-        maxOutputTokens: 80,
+        temperature: 0.1,
+        topP: 0.9,
+        maxOutputTokens: 120,
       },
     });
 
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
       try {
         const imageParts = await buildImagePart(item.image_uri);
         const result = await model.generateContent([
-          "Describe this image in one concise sentence. Focus only on what is visibly present. Do not infer risk or run detection labels. Return plain text only.",
+          "Describe this image in exactly one complete sentence (about 10-25 words). Focus only on visible content. Do not infer risk or labels. Return plain text only, ending with a period.",
           ...imageParts,
         ]);
         description = normalizeDescription(result.response.text());
@@ -114,5 +114,8 @@ function normalizeDescription(text: string): string {
     .replace(/\s+/g, " ")
     .trim();
   if (!singleLine) return "";
-  return singleLine.length > 240 ? `${singleLine.slice(0, 237)}...` : singleLine;
+  const firstSentenceMatch = singleLine.match(/.+?[.!?](?=\s|$)/);
+  let oneSentence = firstSentenceMatch ? firstSentenceMatch[0].trim() : singleLine;
+  if (!/[.!?]$/.test(oneSentence)) oneSentence = `${oneSentence}.`;
+  return oneSentence;
 }

@@ -5,6 +5,8 @@ import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 
+const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
 export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const { triggerRefresh, refreshCounter, apiKey, selectedModel } = useAppStore();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -56,10 +58,17 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const sortedDatasetItems = useMemo(() => {
     const copy = [...datasetItems];
     copy.sort((a, b) => {
-      const left = String(a[itemSortBy] || "").toLowerCase();
-      const right = String(b[itemSortBy] || "").toLowerCase();
-      if (left < right) return itemSortDir === "asc" ? -1 : 1;
-      if (left > right) return itemSortDir === "asc" ? 1 : -1;
+      let delta = 0;
+      if (itemSortBy === "image_id") {
+        delta = naturalCollator.compare(String(a.image_id || ""), String(b.image_id || ""));
+      } else {
+        delta = naturalCollator.compare(String(a.ground_truth_label || ""), String(b.ground_truth_label || ""));
+      }
+      if (delta < 0) return itemSortDir === "asc" ? -1 : 1;
+      if (delta > 0) return itemSortDir === "asc" ? 1 : -1;
+      const tieBreak = naturalCollator.compare(String(a.image_id || ""), String(b.image_id || ""));
+      if (tieBreak < 0) return itemSortDir === "asc" ? -1 : 1;
+      if (tieBreak > 0) return itemSortDir === "asc" ? 1 : -1;
       return 0;
     });
     return copy;
@@ -79,13 +88,13 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   useEffect(() => {
     if (selectedPreviewIndex == null) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "ArrowUp") {
+      if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
         event.preventDefault();
         setSelectedPreviewIndex((prev) => {
           if (prev == null) return prev;
           return Math.max(0, prev - 1);
         });
-      } else if (event.key === "ArrowDown") {
+      } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
         event.preventDefault();
         setSelectedPreviewIndex((prev) => {
           if (prev == null) return prev;
@@ -518,7 +527,9 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                             <option value="NOT_DETECTED">NOT_DETECTED</option>
                           </select>
                         ) : (
-                          <div className="py-1 text-xs text-gray-300">{item.ground_truth_label || "UNSET"}</div>
+                          <div className="py-1 text-xs">
+                            <GroundTruthBadge value={item.ground_truth_label || null} />
+                          </div>
                         )}
                       </td>
                       {isEditingDetails && (
@@ -566,7 +577,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
             </div>
             <div className="space-y-3 overflow-y-auto pr-1">
               <div className="text-xs text-gray-500">
-                {selectedPreviewIndex + 1} / {sortedDatasetItems.length} (Use Up/Down arrows to navigate)
+                {selectedPreviewIndex + 1} / {sortedDatasetItems.length} (Use arrow keys to navigate)
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Image ID</label>
@@ -622,7 +633,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                   </select>
                 ) : (
                   <div className="w-full px-0 py-1.5 text-xs text-gray-300">
-                    {sortedDatasetItems[selectedPreviewIndex].ground_truth_label || "UNSET"}
+                    <GroundTruthBadge value={sortedDatasetItems[selectedPreviewIndex].ground_truth_label || null} />
                   </div>
                 )}
               </div>
@@ -1128,4 +1139,12 @@ function parseCsvLine(line: string): string[] {
   }
   out.push(cur.trim());
   return out;
+}
+
+function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {
+  if (!value) return <span className="text-gray-400">UNSET</span>;
+  if (value === "DETECTED") {
+    return <span className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300">DETECTED</span>;
+  }
+  return <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300">NOT_DETECTED</span>;
 }

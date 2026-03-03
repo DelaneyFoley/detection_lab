@@ -80,6 +80,7 @@ function initSchema(db: Database.Database) {
       run_id TEXT PRIMARY KEY,
       detection_id TEXT NOT NULL,
       prompt_version_id TEXT NOT NULL,
+      model_used TEXT NOT NULL DEFAULT '',
       prompt_snapshot TEXT NOT NULL,
       decoding_params TEXT NOT NULL,
       dataset_id TEXT NOT NULL,
@@ -244,9 +245,18 @@ function ensureNullableGroundTruthColumns(db: Database.Database) {
 function ensureRunsColumns(db: Database.Database) {
   const columns = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
   const hasPromptFeedbackLog = columns.some((c) => c.name === "prompt_feedback_log");
+  const hasModelUsed = columns.some((c) => c.name === "model_used");
   if (!hasPromptFeedbackLog) {
     db.exec("ALTER TABLE runs ADD COLUMN prompt_feedback_log TEXT NOT NULL DEFAULT '{}'");
   }
+  if (!hasModelUsed) {
+    db.exec("ALTER TABLE runs ADD COLUMN model_used TEXT NOT NULL DEFAULT ''");
+  }
+  db.exec(`
+    UPDATE runs
+    SET model_used = COALESCE(NULLIF(model_used, ''), json_extract(decoding_params, '$.model'), '')
+    WHERE model_used IS NULL OR model_used = ''
+  `);
 }
 
 function ensurePredictionParseColumns(db: Database.Database) {
