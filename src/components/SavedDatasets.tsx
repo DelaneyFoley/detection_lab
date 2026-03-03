@@ -19,6 +19,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [itemSortBy, setItemSortBy] = useState<"image_id" | "ground_truth_label">("image_id");
   const [itemSortDir, setItemSortDir] = useState<"asc" | "desc">("asc");
   const [describingImages, setDescribingImages] = useState(false);
+  const [appendingImages, setAppendingImages] = useState(false);
+  const [appendSelectionCount, setAppendSelectionCount] = useState(0);
 
   const loadDatasets = async () => {
     const res = await fetch("/api/datasets");
@@ -171,6 +173,66 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const updateItemField = (itemId: string, patch: Partial<DatasetItem>) => {
     setDatasetItems((prev) => prev.map((item) => (item.item_id === itemId ? { ...item, ...patch } : item)));
+  };
+
+  const deleteItem = async (item: DatasetItem) => {
+    if (!selectedDatasetId) return;
+    if (!confirm(`Remove image "${item.image_id}" from this dataset?`)) return;
+    const res = await fetch("/api/datasets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete_item", item_id: item.item_id }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      alert(text || "Failed to remove image");
+      return;
+    }
+    await loadDatasets();
+    await loadDatasetItems(selectedDatasetId);
+    triggerRefresh();
+  };
+
+  const appendImages = async (files: FileList | null) => {
+    if (!selectedDatasetId || !files || files.length === 0) return;
+    setAppendingImages(true);
+    try {
+      const picked = Array.from(files);
+      const formData = new FormData();
+      formData.append("action", "append_files");
+      formData.append("dataset_id", selectedDatasetId);
+      formData.append(
+        "items",
+        JSON.stringify(
+          picked.map((file) => {
+            const base = file.name.replace(/\.[^.]+$/, "");
+            return {
+              image_id: sanitizeImageId(base || `image_${Date.now()}`),
+              image_description: "",
+              ground_truth_label: null,
+            };
+          })
+        )
+      );
+      picked.forEach((file) => formData.append("files", file));
+
+      const res = await fetch("/api/datasets", {
+        method: "PUT",
+        body: formData,
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(payload?.error || "Failed to add images");
+      }
+      await loadDatasets();
+      await loadDatasetItems(selectedDatasetId);
+      triggerRefresh();
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to add images";
+      alert(msg);
+    } finally {
+      setAppendingImages(false);
+    }
   };
 
   const deleteDataset = async () => {
@@ -355,6 +417,35 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           </div>
           <div>
             <h4 className="text-xs text-gray-400 font-medium mb-2">Preview ({datasetItems.length} images)</h4>
+            {isEditingDetails && (
+              <div className="mb-2 flex items-center gap-2">
+                <input
+                  id="saved-datasets-append-files-input"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={appendingImages}
+                  onChange={(e) => {
+                    const count = e.target.files?.length || 0;
+                    setAppendSelectionCount(count);
+                    void appendImages(e.target.files);
+                    e.currentTarget.value = "";
+                  }}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="saved-datasets-append-files-input"
+                  className={`px-3 py-1.5 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 ${
+                    appendingImages ? "opacity-50 pointer-events-none" : "cursor-pointer hover:bg-gray-800"
+                  }`}
+                >
+                  Choose Files
+                </label>
+                <span className="text-xs text-gray-500">
+                  {appendSelectionCount > 0 ? `${appendSelectionCount} Files Selected` : "Choose Files"}
+                </span>
+              </div>
+            )}
             <div className="max-h-[360px] overflow-auto border border-gray-800 rounded">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-gray-900/90">
@@ -375,6 +466,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         Ground Truth Label {itemSortBy === "ground_truth_label" ? (itemSortDir === "asc" ? "↑" : "↓") : ""}
                       </button>
                     </th>
+                    {isEditingDetails && <th className="text-right px-2 py-2">Action</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -429,11 +521,21 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="py-1 text-xs text-gray-300">{item.ground_truth_label || "UNSET"}</div>
                         )}
                       </td>
+                      {isEditingDetails && (
+                        <td className="px-2 py-2 text-right">
+                          <button
+                            onClick={() => void deleteItem(item)}
+                            className="text-red-400 hover:text-red-300"
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                   {datasetItems.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-2 py-5 text-center text-gray-500">
+                      <td colSpan={isEditingDetails ? 5 : 4} className="px-2 py-5 text-center text-gray-500">
                         No images in this dataset.
                       </td>
                     </tr>
@@ -542,8 +644,10 @@ function GlobalDatasetUploadForm({
   const [detectionId, setDetectionId] = useState<string>(detections[0]?.detection_id || "");
   const [name, setName] = useState("");
   const [splitType, setSplitType] = useState<string>("ITERATION");
-  const [mode, setMode] = useState<"json" | "files">("files");
+  const [mode, setMode] = useState<"json" | "csv" | "files">("files");
   const [jsonInput, setJsonInput] = useState("");
+  const [csvInput, setCsvInput] = useState("");
+  const [csvFileName, setCsvFileName] = useState("");
   const [fileRows, setFileRows] = useState<
     Array<{ id: string; file: File; preview: string; imageId: string; label: "DETECTED" | "NOT_DETECTED" | "" }>
   >([]);
@@ -642,6 +746,22 @@ function GlobalDatasetUploadForm({
         );
         fileRows.forEach((r) => formData.append("files", r.file));
         await fetch("/api/datasets", { method: "POST", body: formData });
+      } else if (mode === "csv") {
+        const items = parseCsvManifest(csvInput).map((row) => ({
+          image_id: row.image_id,
+          image_uri: row.image_url,
+          ground_truth_label: row.ground_truth_label,
+        }));
+        await fetch("/api/datasets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            detection_id: detectionId,
+            split_type: splitType,
+            items,
+          }),
+        });
       } else {
         const items = JSON.parse(jsonInput);
         if (!Array.isArray(items) || items.length === 0) {
@@ -741,6 +861,13 @@ function GlobalDatasetUploadForm({
         </button>
         <button
           type="button"
+          onClick={() => setMode("csv")}
+          className={`px-3 py-1.5 text-xs rounded ${mode === "csv" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+        >
+          CSV Manifest
+        </button>
+        <button
+          type="button"
           onClick={() => setMode("json")}
           className={`px-3 py-1.5 text-xs rounded ${mode === "json" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
         >
@@ -757,15 +884,59 @@ function GlobalDatasetUploadForm({
   { "image_id": "img_001", "image_uri": "https://...", "ground_truth_label": "DETECTED" }
 ]`}
         />
+      ) : mode === "csv" ? (
+        <div className="space-y-2">
+          <input
+            id="saved-datasets-csv-input"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const text = await file.text();
+              setCsvInput(text);
+              setCsvFileName(file.name);
+              e.currentTarget.value = "";
+            }}
+            className="hidden"
+          />
+          <label
+            htmlFor="saved-datasets-csv-input"
+            className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+          >
+            Choose Files
+          </label>
+          <span className="ml-3 text-xs text-gray-500">
+            {csvFileName ? "1 Files Selected" : "Choose Files"}
+          </span>
+          <textarea
+            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
+            value={csvInput}
+            onChange={(e) => setCsvInput(e.target.value)}
+            placeholder={`image_id,image_url,ground_truth_label
+img_001,https://example.com/img1.jpg,DETECTED
+img_002,gs://my-bucket/path/img2.jpg,NOT_DETECTED`}
+          />
+        </div>
       ) : (
         <div className="space-y-3">
           <input
+            id="saved-datasets-files-input"
             type="file"
             accept="image/*"
             multiple
             onChange={onPickFiles}
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+            className="hidden"
           />
+          <label
+            htmlFor="saved-datasets-files-input"
+            className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+          >
+            Choose Files
+          </label>
+          <span className="ml-3 text-xs text-gray-500">
+            {fileRows.length > 0 ? `${fileRows.length} Files Selected` : "Choose Files"}
+          </span>
           {fileRows.length > 0 && (
             <div className="max-h-72 overflow-y-auto border border-gray-800 rounded">
               <table className="w-full text-xs">
@@ -871,4 +1042,90 @@ function validateDatasetItemImageIds(
     seen.add(imageId);
   }
   return { ok: true };
+}
+
+function parseCsvManifest(input: string): Array<{
+  image_id: string;
+  image_url: string;
+  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+}> {
+  const normalized = String(input || "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    throw new Error("CSV is empty.");
+  }
+
+  const lines = normalized.split("\n").filter((line) => line.trim());
+  if (lines.length < 2) {
+    throw new Error("CSV requires a header and at least one data row.");
+  }
+
+  const headers = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+  const expected = ["image_id", "image_url", "ground_truth_label"];
+  const matchesHeader = headers.length === expected.length && headers.every((h, i) => h === expected[i]);
+  if (!matchesHeader) {
+    throw new Error("CSV header must be exactly: image_id,image_url,ground_truth_label");
+  }
+
+  const rows: Array<{
+    image_id: string;
+    image_url: string;
+    ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  }> = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCsvLine(lines[i]);
+    if (cols.length === 1 && !cols[0].trim()) continue;
+    if (cols.length !== 3) {
+      throw new Error(`CSV row ${i + 1} must have exactly 3 columns.`);
+    }
+    const imageId = sanitizeImageId(cols[0]);
+    const imageUrl = cols[1].trim();
+    const rawLabel = cols[2].trim().toUpperCase();
+    if (!imageId) {
+      throw new Error(`CSV row ${i + 1} has blank image_id.`);
+    }
+    if (!imageUrl) {
+      throw new Error(`CSV row ${i + 1} has blank image_url.`);
+    }
+    let label: "DETECTED" | "NOT_DETECTED" | null = null;
+    if (rawLabel) {
+      if (rawLabel !== "DETECTED" && rawLabel !== "NOT_DETECTED") {
+        throw new Error(`CSV row ${i + 1} has invalid ground_truth_label: ${cols[2]}.`);
+      }
+      label = rawLabel as "DETECTED" | "NOT_DETECTED";
+    }
+    rows.push({
+      image_id: imageId,
+      image_url: imageUrl,
+      ground_truth_label: label,
+    });
+  }
+
+  return rows;
+}
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
 }

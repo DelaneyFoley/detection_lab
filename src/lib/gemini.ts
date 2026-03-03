@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { GeminiDetectionResponse, PromptVersion } from "@/types";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 
 export function getGeminiClient(apiKey: string) {
   return new GoogleGenerativeAI(apiKey);
@@ -197,6 +198,18 @@ export async function buildImagePart(imageUri: string) {
     ];
   }
 
+  if (imageUri.startsWith("gs://")) {
+    const gcs = await fetchGcsImage(imageUri);
+    return [
+      {
+        inlineData: {
+          mimeType: gcs.mimeType,
+          data: gcs.data.toString("base64"),
+        },
+      },
+    ];
+  }
+
   // HTTP URL - fetch and convert
   if (imageUri.startsWith("http")) {
     const response = await fetch(imageUri);
@@ -228,6 +241,144 @@ export async function buildImagePart(imageUri: string) {
   }
 
   return [];
+}
+
+let gcsTokenCache: { token: string; expiresAtMs: number } | null = null;
+
+async function fetchGcsImage(gsUri: string): Promise<{ data: Buffer; mimeType: string }> {
+  const { bucket, objectPath } = parseGsUri(gsUri);
+  const token = await getGcsAccessToken();
+  const objectName = encodeURIComponent(objectPath);
+  const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o/${objectName}?alt=media`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Failed to fetch GCS object ${gsUri}: ${response.status} ${response.statusText} ${text}`.trim());
+  }
+  const mimeType = response.headers.get("content-type") || detectMimeTypeFromPath(objectPath);
+  const data = Buffer.from(await response.arrayBuffer());
+  return { data, mimeType };
+}
+
+function parseGsUri(gsUri: string): { bucket: string; objectPath: string } {
+  const withoutScheme = gsUri.replace(/^gs:\/\//, "");
+  const slashIdx = withoutScheme.indexOf("/");
+  if (slashIdx <= 0 || slashIdx === withoutScheme.length - 1) {
+    throw new Error(`Invalid gs:// URI: ${gsUri}`);
+  }
+  return {
+    bucket: withoutScheme.slice(0, slashIdx),
+    objectPath: withoutScheme.slice(slashIdx + 1),
+  };
+}
+
+function detectMimeTypeFromPath(objectPath: string): string {
+  const ext = path.extname(objectPath).toLowerCase();
+  const mimeMap: Record<string, string> = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+  };
+  return mimeMap[ext] || "image/jpeg";
+}
+
+async function getGcsAccessToken(): Promise<string> {
+  const now = Date.now();
+  if (gcsTokenCache && gcsTokenCache.expiresAtMs > now + 30_000) {
+    return gcsTokenCache.token;
+  }
+
+  const creds = loadServiceAccountCredentials();
+  const iat = Math.floor(now / 1000);
+  const exp = iat + 3600;
+
+  const assertion = signJwtAssertion(
+    {
+      iss: creds.client_email,
+      scope: "https://www.googleapis.com/auth/devstorage.read_only",
+      aud: "https://oauth2.googleapis.com/token",
+      exp,
+      iat,
+    },
+    creds.private_key
+  );
+
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion,
+  });
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  if (!tokenRes.ok) {
+    const text = await tokenRes.text().catch(() => "");
+    throw new Error(`Failed to obtain GCS access token: ${tokenRes.status} ${tokenRes.statusText} ${text}`.trim());
+  }
+  const tokenJson = (await tokenRes.json()) as { access_token?: string; expires_in?: number };
+  if (!tokenJson.access_token) {
+    throw new Error("OAuth token response missing access_token.");
+  }
+  const expiresInSec = Number(tokenJson.expires_in || 3600);
+  gcsTokenCache = {
+    token: tokenJson.access_token,
+    expiresAtMs: now + Math.max(60, expiresInSec - 60) * 1000,
+  };
+  return tokenJson.access_token;
+}
+
+function loadServiceAccountCredentials(): { client_email: string; private_key: string } {
+  const inlineJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  let raw = "";
+
+  if (inlineJson?.trim()) {
+    raw = inlineJson;
+  } else if (credentialPath?.trim()) {
+    raw = fs.readFileSync(credentialPath, "utf8");
+  } else {
+    throw new Error(
+      "Missing service account credentials. Set GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_SERVICE_ACCOUNT_JSON."
+    );
+  }
+
+  const parsed = JSON.parse(raw) as { client_email?: string; private_key?: string };
+  if (!parsed.client_email || !parsed.private_key) {
+    throw new Error("Invalid service account JSON. Expected client_email and private_key.");
+  }
+  return {
+    client_email: parsed.client_email,
+    private_key: parsed.private_key,
+  };
+}
+
+function signJwtAssertion(payload: Record<string, unknown>, privateKey: string): string {
+  const header = { alg: "RS256", typ: "JWT" };
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const unsigned = `${encodedHeader}.${encodedPayload}`;
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(unsigned);
+  signer.end();
+  const signature = signer.sign(privateKey).toString("base64");
+  return `${unsigned}.${signature.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")}`;
+}
+
+function base64UrlEncode(value: string): string {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function resolveLocalImagePath(imageUri: string): string {

@@ -498,6 +498,7 @@ function ImageReviewMode({
   const [imageZoom, setImageZoom] = useState(1);
   const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
   const [draggingImage, setDraggingImage] = useState(false);
+  const [copiedImageId, setCopiedImageId] = useState(false);
   const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const lastPredictionIdRef = useRef(p.prediction_id);
   const lastNoteRef = useRef(note);
@@ -587,15 +588,34 @@ function ImageReviewMode({
     dragStartRef.current = null;
   };
 
+  const copyImageId = async () => {
+    try {
+      await navigator.clipboard.writeText(p.image_id);
+      setCopiedImageId(true);
+      setTimeout(() => setCopiedImageId(false), 1200);
+    } catch {
+      // no-op
+    }
+  };
+
   return (
     <div className="grid grid-cols-2 gap-6" onKeyDown={handleKeyDown} tabIndex={0}>
       {/* Image */}
       <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-        <div className="flex justify-between items-center mb-3">
-          <span className="text-xs text-gray-500">
-            {index + 1} / {total} — {p.image_id}
-          </span>
-          <div className="flex gap-2">
+        <div className="flex justify-between items-start gap-3 mb-3">
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="text-xs text-gray-500 truncate" title={`${index + 1} / ${total} — ${p.image_id}`}>
+              {index + 1} / {total} — {p.image_id}
+            </span>
+            <button
+              onClick={copyImageId}
+              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs shrink-0"
+              title="Copy image ID"
+            >
+              {copiedImageId ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <div className="flex gap-2 shrink-0 flex-wrap justify-end max-w-[420px]">
             <button
               onClick={() => setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))}
               className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"

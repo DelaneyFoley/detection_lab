@@ -69,6 +69,43 @@ export async function PUT(req: NextRequest) {
   const body = await req.json();
   const db = getDb();
   const now = new Date().toISOString();
+  const existing = db
+    .prepare("SELECT * FROM detections WHERE detection_id = ?")
+    .get(body.detection_id) as any;
+  if (!existing) {
+    return NextResponse.json({ error: "Detection not found" }, { status: 404 });
+  }
+
+  const requestedApprovedPromptVersion = body.approved_prompt_version || null;
+  if (requestedApprovedPromptVersion) {
+    const prompt = db
+      .prepare("SELECT prompt_version_id, detection_id FROM prompt_versions WHERE prompt_version_id = ?")
+      .get(requestedApprovedPromptVersion) as { prompt_version_id: string; detection_id: string } | undefined;
+    if (!prompt || prompt.detection_id !== body.detection_id) {
+      return NextResponse.json({ error: "approved_prompt_version does not belong to this detection" }, { status: 400 });
+    }
+
+    const thresholds = (body.metric_thresholds ||
+      safeParseJson(existing.metric_thresholds, {})) as {
+      min_precision?: number;
+      min_recall?: number;
+      min_f1?: number;
+    };
+    const evalRuns = db
+      .prepare(
+        "SELECT metrics_summary FROM runs WHERE detection_id = ? AND prompt_version_id = ? AND split_type = 'HELD_OUT_EVAL' AND status = 'completed' ORDER BY created_at DESC"
+      )
+      .all(body.detection_id, requestedApprovedPromptVersion) as Array<{ metrics_summary: string | null }>;
+    const hasPassingEval = evalRuns.some((r) =>
+      metricsMeetThresholds(safeParseJson(r.metrics_summary, {}), thresholds)
+    );
+    if (!hasPassingEval) {
+      return NextResponse.json(
+        { error: "Prompt can only be approved after a completed EVAL run that meets thresholds." },
+        { status: 400 }
+      );
+    }
+  }
 
   db.prepare(`
     UPDATE detections SET
@@ -86,7 +123,7 @@ export async function PUT(req: NextRequest) {
     body.label_policy || "",
     JSON.stringify(body.decision_rubric || []),
     JSON.stringify(body.metric_thresholds || {}),
-    body.approved_prompt_version || null,
+    requestedApprovedPromptVersion,
     now,
     body.detection_id
   );
@@ -158,4 +195,15 @@ function safeParseJson<T>(value: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function metricsMeetThresholds(
+  metrics: any,
+  thresholds: { min_precision?: number; min_recall?: number; min_f1?: number }
+): boolean {
+  if (!metrics) return false;
+  if (thresholds.min_precision != null && Number(metrics.precision) < thresholds.min_precision) return false;
+  if (thresholds.min_recall != null && Number(metrics.recall) < thresholds.min_recall) return false;
+  if (thresholds.min_f1 != null && Number(metrics.f1) < thresholds.min_f1) return false;
+  return true;
 }

@@ -199,9 +199,97 @@ export async function DELETE(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  const body = await req.json();
   const db = getDb();
   const now = new Date().toISOString();
+  const contentType = req.headers.get("content-type") || "";
+
+  if (contentType.includes("multipart/form-data")) {
+    const formData = await req.formData();
+    const action = String(formData.get("action") || "").trim();
+
+    if (action === "append_files") {
+      const datasetId = String(formData.get("dataset_id") || "").trim();
+      if (!datasetId) {
+        return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
+      }
+      const dataset = db
+        .prepare("SELECT * FROM datasets WHERE dataset_id = ?")
+        .get(datasetId) as any;
+      if (!dataset) {
+        return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
+      }
+
+      const files = formData.getAll("files") as File[];
+      const metaRaw = String(formData.get("items") || "[]");
+      const itemMeta = JSON.parse(metaRaw) as Array<{
+        image_id: string;
+        image_description?: string;
+        ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
+      }>;
+      if (!Array.isArray(files) || files.length === 0) {
+        return NextResponse.json({ error: "No files uploaded" }, { status: 400 });
+      }
+      if (!Array.isArray(itemMeta) || itemMeta.length !== files.length) {
+        return NextResponse.json({ error: "items/files length mismatch" }, { status: 400 });
+      }
+
+      const seen = new Set<string>();
+      const existingIds = new Set<string>(
+        (
+          db.prepare("SELECT image_id FROM dataset_items WHERE dataset_id = ?").all(datasetId) as Array<{ image_id: string }>
+        ).map((r) => String(r.image_id || "").trim())
+      );
+
+      for (let i = 0; i < itemMeta.length; i++) {
+        const imageId = normalizeImageId(itemMeta[i]?.image_id);
+        if (!imageId) return NextResponse.json({ error: `image_id cannot be blank (item ${i + 1})` }, { status: 400 });
+        if (seen.has(imageId) || existingIds.has(imageId)) {
+          return NextResponse.json({ error: `Duplicate image_id: ${imageId}` }, { status: 400 });
+        }
+        seen.add(imageId);
+        itemMeta[i].image_id = imageId;
+      }
+
+      const uploadDir = path.join(process.cwd(), "public", "uploads", "datasets", datasetId);
+      await fs.mkdir(uploadDir, { recursive: true });
+
+      const insertItem = db.prepare(`
+        INSERT INTO dataset_items (
+          item_id, dataset_id, image_id, image_uri, image_description, ai_assigned_label, ai_confidence, ground_truth_label
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const meta = itemMeta[i];
+        const ext = path.extname(file.name || "").toLowerCase() || ".jpg";
+        const safeBase = sanitizeName(meta.image_id);
+        const safeFilename = `${safeBase}${ext}`;
+        const absPath = path.join(uploadDir, safeFilename);
+        const buffer = Buffer.from(await file.arrayBuffer());
+        await fs.writeFile(absPath, buffer);
+
+        insertItem.run(
+          uuid(),
+          datasetId,
+          meta.image_id,
+          `/uploads/datasets/${datasetId}/${safeFilename}`,
+          meta.image_description || "",
+          null,
+          null,
+          meta.ground_truth_label === "DETECTED" || meta.ground_truth_label === "NOT_DETECTED"
+            ? meta.ground_truth_label
+            : null
+        );
+      }
+
+      refreshDatasetStats(db, datasetId, now);
+      return NextResponse.json({ ok: true, added: files.length });
+    }
+  }
+
+  const body = await req.json();
 
   if (body.item_id) {
     const existing = db
@@ -253,6 +341,25 @@ export async function PUT(req: NextRequest) {
       body.item_id
     );
 
+    refreshDatasetStats(db, existing.dataset_id, now);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "delete_item") {
+    if (!body.item_id) {
+      return NextResponse.json({ error: "item_id is required" }, { status: 400 });
+    }
+    const existing = db
+      .prepare("SELECT * FROM dataset_items WHERE item_id = ?")
+      .get(body.item_id) as any;
+    if (!existing) {
+      return NextResponse.json({ error: "Dataset item not found" }, { status: 404 });
+    }
+    db.prepare("DELETE FROM dataset_items WHERE item_id = ?").run(body.item_id);
+    const abs = localUriToAbsPath(existing.image_uri || "");
+    if (abs) {
+      await fs.rm(abs, { force: true });
+    }
     refreshDatasetStats(db, existing.dataset_id, now);
     return NextResponse.json({ ok: true });
   }

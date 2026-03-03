@@ -28,12 +28,16 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [datasetName, setDatasetName] = useState("");
   const [splitType, setSplitType] = useState<"ITERATION" | "CUSTOM">("ITERATION");
   const [rows, setRows] = useState<BuildRow[]>([]);
+  const [buildInputMode, setBuildInputMode] = useState<"files" | "csv">("files");
+  const [csvFileName, setCsvFileName] = useState("");
 
   const [building, setBuilding] = useState(false);
   const [buildMode, setBuildMode] = useState<"save" | "run" | null>(null);
   const [status, setStatus] = useState("");
   const [builtDatasetId, setBuiltDatasetId] = useState<string | null>(null);
   const [validationError, setValidationError] = useState("");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [cancelingRun, setCancelingRun] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -95,6 +99,10 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     () => !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
     [selectedPromptId, mode, selectedExistingDatasetId, canSave]
   );
+  const selectedBuildFileCount = useMemo(
+    () => rows.filter((r) => !!r.file).length,
+    [rows]
+  );
 
   const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files || []);
@@ -117,6 +125,33 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     event.currentTarget.value = "";
   };
 
+  const onPickCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = parseCsvManifest(text);
+      const mapped: BuildRow[] = parsed.map((row, i) => ({
+        id: `${Date.now()}_csv_${i}_${row.image_id}`,
+        preview: row.image_url,
+        imageId: row.image_id,
+        groundTruthLabel: row.ground_truth_label,
+        aiAssignedLabel: "",
+        aiConfidence: null,
+        aiDescription: "",
+      }));
+      setRows(mapped);
+      setCsvFileName(file.name);
+      setValidationError("");
+      setStatus(`Loaded ${mapped.length} rows from ${file.name}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to parse CSV";
+      setValidationError(msg);
+    } finally {
+      event.currentTarget.value = "";
+    }
+  };
+
   const removeRow = (id: string) => {
     setRows((prev) => {
       const target = prev.find((r) => r.id === id);
@@ -131,25 +166,43 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     if (!validation.ok) throw new Error(validation.error);
 
     setStatus("Saving dataset...");
-    const formData = new FormData();
-    formData.append("name", datasetName.trim());
-    formData.append("detection_id", detection.detection_id);
-    formData.append("split_type", splitType);
-    formData.append(
-      "items",
-      JSON.stringify(
-        rows.map((r) => ({
-          image_id: r.imageId.trim(),
-          image_description: "",
-          ground_truth_label: null,
-        }))
-      )
-    );
-    rows.forEach((r) => {
-      if (r.file) formData.append("files", r.file);
-    });
-
-    const createRes = await fetch("/api/datasets", { method: "POST", body: formData });
+    const allRowsHaveFiles = rows.every((r) => !!r.file);
+    const createRes = allRowsHaveFiles
+      ? await (async () => {
+          const formData = new FormData();
+          formData.append("name", datasetName.trim());
+          formData.append("detection_id", detection.detection_id);
+          formData.append("split_type", splitType);
+          formData.append(
+            "items",
+            JSON.stringify(
+              rows.map((r) => ({
+                image_id: r.imageId.trim(),
+                image_description: "",
+                ground_truth_label: r.groundTruthLabel,
+              }))
+            )
+          );
+          rows.forEach((r) => {
+            if (r.file) formData.append("files", r.file);
+          });
+          return fetch("/api/datasets", { method: "POST", body: formData });
+        })()
+      : await fetch("/api/datasets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: datasetName.trim(),
+            detection_id: detection.detection_id,
+            split_type: splitType,
+            items: rows.map((r) => ({
+              image_id: r.imageId.trim(),
+              image_uri: r.preview,
+              image_description: "",
+              ground_truth_label: r.groundTruthLabel,
+            })),
+          }),
+        });
     const created = await createRes.json();
     if (!createRes.ok || !created?.dataset_id) {
       throw new Error(created?.error || "Failed to create dataset");
@@ -162,7 +215,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   };
 
   const runOnDataset = async (datasetId: string) => {
-    setStatus("Running VLM...");
+    setStatus("Starting run...");
     const runRes = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -178,9 +231,16 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     if (!runRes.ok || !run?.run_id) {
       throw new Error(run?.error || "Failed to run inference");
     }
+    setActiveRunId(run.run_id);
 
-    const fullRunRes = await fetch(`/api/runs?run_id=${run.run_id}`);
-    const fullRun = await fullRunRes.json();
+    const fullRun = await pollRunToTerminalState(run.run_id, (snapshot) => {
+      const total = Number(snapshot?.total_images || 0);
+      const processed = Number(snapshot?.processed_images || 0);
+      const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+      const stateLabel = String(snapshot?.status || "running").toUpperCase();
+      setStatus(`Run ${stateLabel}: ${processed}/${total} images (${pct}%)`);
+    });
+
     const predictions = Array.isArray(fullRun?.predictions) ? fullRun.predictions : [];
     const byImageId = new Map<string, any>();
     for (const p of predictions) byImageId.set(p.image_id, p);
@@ -205,7 +265,28 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
     setSelectedRunForDetection(detection.detection_id, run.run_id);
     triggerRefresh();
-    setStatus("Run complete. AI outputs are now shown below and persisted in Run Log.");
+    const processed = Number(fullRun?.processed_images || predictions.length || 0);
+    const total = Number(fullRun?.total_images || rows.length || 0);
+    if (fullRun?.status === "cancelled") {
+      setStatus(`Run cancelled. Saved ${processed}/${total} processed images.`);
+    } else if (fullRun?.status === "failed") {
+      setStatus("Run failed. Partial outputs (if any) were saved.");
+    } else {
+      setStatus(`Run complete. Processed ${processed}/${total} images.`);
+    }
+    setActiveRunId(null);
+    setCancelingRun(false);
+  };
+
+  const cancelRun = async () => {
+    if (!activeRunId) return;
+    setCancelingRun(true);
+    setStatus("Cancel requested. Finishing in-flight images...");
+    await fetch("/api/runs", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: activeRunId, action: "cancel" }),
+    });
   };
 
   const resetBuilder = () => {
@@ -220,6 +301,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setDatasetName("");
     setSplitType("ITERATION");
     setRows([]);
+    setBuildInputMode("files");
+    setCsvFileName("");
     setBuiltDatasetId(null);
     setStatus("");
     setValidationError("");
@@ -266,6 +349,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       setBuiltDatasetId(datasetId);
     } catch (error) {
       setStatus(`Error: ${error instanceof Error ? error.message : "Run failed"}`);
+      setActiveRunId(null);
+      setCancelingRun(false);
     } finally {
       setBuilding(false);
       setBuildMode(null);
@@ -276,7 +361,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     <div className="max-w-6xl mx-auto space-y-4">
       <h2 className="text-xl font-semibold">Build Dataset</h2>
       <p className="text-sm text-gray-500">
-        Option 1: load an existing labeled dataset. Option 2: build a new unlabeled dataset. Then run the selected prompt version.
+        Option 1: load an existing labeled dataset. Option 2: build a new dataset from files or CSV, then run the selected prompt version.
       </p>
 
       <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
@@ -367,15 +452,75 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         </div>
 
         {mode === "build" && (
-          <div>
-            <label className="text-xs text-gray-400 block mb-1">Unlabeled Images</label>
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={onPickFiles}
-              className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
-            />
+          <div className="space-y-3">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setBuildInputMode("files")}
+                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "files" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+              >
+                Upload Images
+              </button>
+              <button
+                type="button"
+                onClick={() => setBuildInputMode("csv")}
+                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "csv" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+              >
+                Upload CSV
+              </button>
+            </div>
+
+            {buildInputMode === "files" ? (
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Image Files</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    id="build-dataset-files-input"
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={onPickFiles}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="build-dataset-files-input"
+                    className="px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+                  >
+                    Choose Files
+                  </label>
+                  <span className="text-xs text-gray-500">
+                    {selectedBuildFileCount > 0 ? `${selectedBuildFileCount} Files Selected` : "Choose Files"}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">
+                  CSV File (`image_id,image_url,ground_truth_label`) {csvFileName ? `• ${csvFileName}` : ""}
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    id="build-dataset-csv-input"
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={onPickCsvFile}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="build-dataset-csv-input"
+                    className="px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+                  >
+                    Choose Files
+                  </label>
+                  <span className="text-xs text-gray-500">
+                    {csvFileName ? "1 Files Selected" : "Choose Files"}
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-500 mt-1">
+                  `ground_truth_label` can be DETECTED, NOT_DETECTED, or blank (stored as UNSET).
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -450,6 +595,15 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           >
             {building && buildMode === "run" ? "Running..." : "Run"}
           </button>
+          {building && buildMode === "run" && activeRunId && (
+            <button
+              onClick={cancelRun}
+              disabled={cancelingRun}
+              className="text-xs px-3 py-1.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded"
+            >
+              {cancelingRun ? "Cancelling..." : "Cancel Run"}
+            </button>
+          )}
           {mode === "build" && (
             <button
               onClick={saveDataset}
@@ -485,6 +639,114 @@ function validateImageIds(rows: BuildRow[]): { ok: true } | { ok: false; error: 
     seen.add(imageId);
   }
   return { ok: true };
+}
+
+function parseCsvManifest(input: string): Array<{
+  image_id: string;
+  image_url: string;
+  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+}> {
+  const normalized = String(input || "").replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    throw new Error("CSV is empty.");
+  }
+
+  const lines = normalized.split("\n").filter((line) => line.trim());
+  if (lines.length < 2) {
+    throw new Error("CSV requires a header and at least one data row.");
+  }
+
+  const headers = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+  const expected = ["image_id", "image_url", "ground_truth_label"];
+  const matchesHeader = headers.length === expected.length && headers.every((h, i) => h === expected[i]);
+  if (!matchesHeader) {
+    throw new Error("CSV header must be exactly: image_id,image_url,ground_truth_label");
+  }
+
+  const rows: Array<{
+    image_id: string;
+    image_url: string;
+    ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  }> = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = parseCsvLine(lines[i]);
+    if (cols.length === 1 && !cols[0].trim()) continue;
+    if (cols.length !== 3) {
+      throw new Error(`CSV row ${i + 1} must have exactly 3 columns.`);
+    }
+    const imageId = sanitizeImageId(cols[0]);
+    const imageUrl = cols[1].trim();
+    const rawLabel = cols[2].trim().toUpperCase();
+    if (!imageId) {
+      throw new Error(`CSV row ${i + 1} has blank image_id.`);
+    }
+    if (!imageUrl) {
+      throw new Error(`CSV row ${i + 1} has blank image_url.`);
+    }
+    let label: "DETECTED" | "NOT_DETECTED" | null = null;
+    if (rawLabel) {
+      if (rawLabel !== "DETECTED" && rawLabel !== "NOT_DETECTED") {
+        throw new Error(`CSV row ${i + 1} has invalid ground_truth_label: ${cols[2]}.`);
+      }
+      label = rawLabel as "DETECTED" | "NOT_DETECTED";
+    }
+    rows.push({
+      image_id: imageId,
+      image_url: imageUrl,
+      ground_truth_label: label,
+    });
+  }
+
+  return rows;
+}
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === "," && !inQuotes) {
+      out.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+async function pollRunToTerminalState(
+  runId: string,
+  onProgress?: (snapshot: any) => void
+): Promise<any> {
+  while (true) {
+    const res = await fetch(`/api/runs?run_id=${runId}`);
+    const snapshot = await res.json();
+    if (!res.ok) {
+      throw new Error(snapshot?.error || "Failed to fetch run status");
+    }
+    onProgress?.(snapshot);
+    if (snapshot?.status === "completed" || snapshot?.status === "cancelled" || snapshot?.status === "failed") {
+      return snapshot;
+    }
+    await delay(1000);
+  }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function LabelBadge({ label }: { label: string }) {

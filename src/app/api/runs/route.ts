@@ -5,6 +5,12 @@ import { runDetectionInference } from "@/lib/gemini";
 import { computeMetrics } from "@/lib/metrics";
 import type { Prediction } from "@/types";
 
+type ActiveRunControl = {
+  cancelRequested: boolean;
+};
+
+const activeRunControls = new Map<string, ActiveRunControl>();
+
 export async function GET(req: NextRequest) {
   try {
     const detectionId = req.nextUrl.searchParams.get("detection_id");
@@ -121,7 +127,65 @@ export async function POST(req: NextRequest) {
     items.length
     );
 
-    // Run inference for each image
+    // Run inference for each image in the background so UI can poll progress.
+    activeRunControls.set(runId, { cancelRequested: false });
+    void executeRunInBackground({
+      runId,
+      apiKey,
+      parsedPrompt: {
+        ...prompt,
+        prompt_structure: JSON.parse(prompt.prompt_structure || "{}"),
+        model: model_override || prompt.model,
+      },
+      detectionCode: detection.detection_code,
+      items,
+      maxConcurrency,
+    });
+
+    return NextResponse.json(
+      {
+        run_id: runId,
+        status: "running",
+        total_images: items.length,
+        processed_images: 0,
+      },
+      { status: 202 }
+    );
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: errMsg }, { status: 500 });
+  }
+}
+
+async function executeRunInBackground({
+  runId,
+  apiKey,
+  parsedPrompt,
+  detectionCode,
+  items,
+  maxConcurrency,
+}: {
+  runId: string;
+  apiKey: string;
+  parsedPrompt: any;
+  detectionCode: string;
+  items: any[];
+  maxConcurrency: number;
+}) {
+  const db = getDb();
+
+  const control = activeRunControls.get(runId) || { cancelRequested: false };
+  activeRunControls.set(runId, control);
+
+  const selectRunStatus = db.prepare("SELECT status FROM runs WHERE run_id = ?");
+
+  const isCancellationRequested = () => {
+    if (control.cancelRequested) return true;
+    const row = selectRunStatus.get(runId) as { status?: string } | undefined;
+    return row?.status === "cancelled";
+  };
+
+  try {
     const insertPrediction = db.prepare(`
     INSERT INTO predictions (
       prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence,
@@ -129,12 +193,6 @@ export async function POST(req: NextRequest) {
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-
-    const parsedPrompt = {
-      ...prompt,
-      prompt_structure: JSON.parse(prompt.prompt_structure || "{}"),
-      model: model_override || prompt.model,
-    };
 
     const predictions: Prediction[] = [];
     let nextIndex = 0;
@@ -145,7 +203,7 @@ export async function POST(req: NextRequest) {
       const result = await runDetectionInference(
         apiKey,
         parsedPrompt,
-        detection.detection_code,
+        detectionCode,
         item.image_uri
       );
 
@@ -235,6 +293,7 @@ export async function POST(req: NextRequest) {
 
     const worker = async () => {
     while (true) {
+      if (isCancellationRequested()) return;
       const currentIndex = nextIndex;
       if (currentIndex >= items.length) return;
       nextIndex += 1;
@@ -250,23 +309,22 @@ export async function POST(req: NextRequest) {
     const workers = Array.from({ length: Math.min(maxConcurrency, items.length) }, () => worker());
     await Promise.all(workers);
 
-    // Compute metrics
+    // Compute metrics on completed subset (full set if not cancelled).
     const metrics = computeMetrics(predictions);
+    const finalStatus = isCancellationRequested() ? "cancelled" : "completed";
 
-    db.prepare("UPDATE runs SET metrics_summary = ?, status = 'completed' WHERE run_id = ?").run(
+    db.prepare("UPDATE runs SET metrics_summary = ?, status = ?, processed_images = ? WHERE run_id = ?").run(
       JSON.stringify(metrics),
+      finalStatus,
+      processed,
       runId
     );
-
-    return NextResponse.json({
-      run_id: runId,
-      metrics,
-      status: "completed",
-      total: items.length,
-    });
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: errMsg }, { status: 500 });
+    db.prepare("UPDATE runs SET status = 'failed' WHERE run_id = ?").run(runId);
+    console.error("Run execution failed:", runId, errMsg);
+  } finally {
+    activeRunControls.delete(runId);
   }
 }
 
@@ -277,6 +335,23 @@ export async function PUT(req: NextRequest) {
 
     if (!body.run_id) {
       return NextResponse.json({ error: "run_id is required" }, { status: 400 });
+    }
+
+    if (body.action === "cancel") {
+      const run = db.prepare("SELECT status FROM runs WHERE run_id = ?").get(body.run_id) as { status?: string } | undefined;
+      if (!run) {
+        return NextResponse.json({ error: "Run not found" }, { status: 404 });
+      }
+      if (run.status !== "running") {
+        return NextResponse.json({ ok: true, status: run.status || "unknown" });
+      }
+
+      const control = activeRunControls.get(body.run_id) || { cancelRequested: false };
+      control.cancelRequested = true;
+      activeRunControls.set(body.run_id, control);
+      db.prepare("UPDATE runs SET status = 'cancelled' WHERE run_id = ?").run(body.run_id);
+
+      return NextResponse.json({ ok: true, status: "cancelled" });
     }
 
     if (body.prompt_feedback_log !== undefined) {

@@ -222,11 +222,18 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
             detection_id: detection.detection_id,
           }),
         });
-        const regRun = await regRes.json();
+        const regStart = await regRes.json();
+        if (!regRes.ok || !regStart?.run_id) {
+          throw new Error(regStart?.error || "Failed to start golden regression run");
+        }
+        const regRun = await pollRunToTerminalState(regStart.run_id);
+        if (!regRun?.metrics_summary) {
+          throw new Error("Golden regression did not produce metrics.");
+        }
 
         // Check regression
         const thresholds = detection.metric_thresholds;
-        const passed = checkThresholds(regRun.metrics, thresholds);
+        const passed = checkThresholds(regRun.metrics_summary, thresholds);
 
         await fetch("/api/prompts", {
           method: "PUT",
@@ -236,7 +243,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
             golden_set_regression_result: {
               passed,
               run_id: regRun.run_id,
-              metrics: regRun.metrics,
+              metrics: regRun.metrics_summary,
               previous_metrics: recomputedMetrics || runData?.metrics_summary,
               evaluated_at: new Date().toISOString(),
             },
@@ -439,4 +446,18 @@ function checkThresholds(metrics: any, thresholds: any): boolean {
 
 function suggestionKey(s: PromptEditSuggestion): string {
   return [s.section, s.old_text, s.new_text, s.rationale, s.failure_cluster].join("|");
+}
+
+async function pollRunToTerminalState(runId: string): Promise<any> {
+  while (true) {
+    const res = await fetch(`/api/runs?run_id=${runId}`);
+    const snapshot = await res.json();
+    if (!res.ok) {
+      throw new Error(snapshot?.error || "Failed to fetch run status");
+    }
+    if (snapshot?.status === "completed" || snapshot?.status === "cancelled" || snapshot?.status === "failed") {
+      return snapshot;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 }

@@ -16,7 +16,8 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [latestResult, setLatestResult] = useState<any>(null);
-  const [approving, setApproving] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [cancelingRun, setCancelingRun] = useState(false);
 
   const loadData = useCallback(async () => {
     const [pRes, dRes, rRes] = await Promise.all([
@@ -52,7 +53,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     }
 
     setRunning(true);
-    setProgress("Running held-out evaluation...");
+    setProgress("Starting held-out evaluation...");
     setLatestResult(null);
 
     try {
@@ -68,118 +69,48 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
         }),
       });
       const data = await res.json();
+      if (!res.ok || !data?.run_id) {
+        throw new Error(data?.error || "Failed to start evaluation run");
+      }
+      setActiveRunId(data.run_id);
 
-      // Fetch full run
-      const fullRes = await fetch(`/api/runs?run_id=${data.run_id}`);
-      const fullRun = await fullRes.json();
+      const fullRun = await pollRunToTerminalState(data.run_id, (snapshot) => {
+        const total = Number(snapshot?.total_images || 0);
+        const processed = Number(snapshot?.processed_images || 0);
+        const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+        const stateLabel = String(snapshot?.status || "running").toUpperCase();
+        setProgress(`Held-out ${stateLabel}: ${processed}/${total} images (${pct}%)`);
+      });
       setLatestResult(fullRun);
       loadData();
+      const processed = Number(fullRun?.processed_images || 0);
+      const total = Number(fullRun?.total_images || 0);
+      if (fullRun?.status === "cancelled") {
+        setProgress(`Held-out run cancelled. Saved ${processed}/${total} processed images.`);
+      } else if (fullRun?.status === "failed") {
+        setProgress("Held-out run failed. Partial outputs (if any) were saved.");
+      } else {
+        setProgress(`Held-out run complete: ${processed}/${total} images.`);
+      }
     } catch (err) {
       console.error(err);
       alert("Evaluation failed");
+      setProgress("");
     }
     setRunning(false);
-    setProgress("");
+    setActiveRunId(null);
+    setCancelingRun(false);
   };
 
-  const approvePrompt = async () => {
-    if (!latestResult) return;
-
-    const thresholds = detection.metric_thresholds;
-    const m = latestResult.metrics_summary;
-
-    // Check thresholds
-    const failures: string[] = [];
-    if (thresholds.min_precision != null && m.precision < thresholds.min_precision) {
-      failures.push(`Precision ${(m.precision * 100).toFixed(1)}% < ${(thresholds.min_precision * 100).toFixed(1)}%`);
-    }
-    if (thresholds.min_recall != null && m.recall < thresholds.min_recall) {
-      failures.push(`Recall ${(m.recall * 100).toFixed(1)}% < ${(thresholds.min_recall * 100).toFixed(1)}%`);
-    }
-    if (thresholds.min_f1 != null && m.f1 < thresholds.min_f1) {
-      failures.push(`F1 ${(m.f1 * 100).toFixed(1)}% < ${(thresholds.min_f1 * 100).toFixed(1)}%`);
-    }
-
-    if (failures.length > 0) {
-      alert(`Cannot approve: thresholds not met.\n\n${failures.join("\n")}`);
-      return;
-    }
-
-    setApproving(true);
-
-    // First, run golden regression
-    const datasetsRes = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
-    const allDatasets = await datasetsRes.json();
-    const goldenDataset = allDatasets.find((d: any) => d.split_type === "GOLDEN");
-
-    if (goldenDataset) {
-      const regRes = await fetch("/api/runs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: apiKey,
-          model_override: selectedModel,
-          prompt_version_id: latestResult.prompt_version_id,
-          dataset_id: goldenDataset.dataset_id,
-          detection_id: detection.detection_id,
-        }),
-      });
-      const regRun = await regRes.json();
-
-      // Check regression against previous approved
-      let previousMetrics = null;
-      if (detection.approved_prompt_version) {
-        const prevRuns = runs.filter(
-          (r: any) => r.prompt_version_id === detection.approved_prompt_version
-        );
-        if (prevRuns.length > 0) {
-          previousMetrics = (prevRuns[0] as any).metrics_summary;
-        }
-      }
-
-      const regressionPassed = checkRegression(regRun.metrics, thresholds, previousMetrics);
-
-      if (!regressionPassed) {
-        alert("Golden regression FAILED. Cannot approve this prompt version.");
-        setApproving(false);
-        return;
-      }
-
-      // Save regression result
-      await fetch("/api/prompts", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt_version_id: latestResult.prompt_version_id,
-          golden_set_regression_result: {
-            passed: true,
-            run_id: regRun.run_id,
-            metrics: regRun.metrics,
-            previous_metrics: previousMetrics,
-            evaluated_at: new Date().toISOString(),
-          },
-        }),
-      });
-    }
-
-    // Mark as approved
-    await fetch("/api/detections", {
+  const cancelRun = async () => {
+    if (!activeRunId) return;
+    setCancelingRun(true);
+    setProgress("Cancel requested. Finishing in-flight images...");
+    await fetch("/api/runs", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        detection_id: detection.detection_id,
-        display_name: detection.display_name,
-        description: detection.description,
-        label_policy: detection.label_policy,
-        decision_rubric: detection.decision_rubric,
-        metric_thresholds: detection.metric_thresholds,
-        approved_prompt_version: latestResult.prompt_version_id,
-      }),
+      body: JSON.stringify({ run_id: activeRunId, action: "cancel" }),
     });
-
-    alert("Prompt version APPROVED!");
-    setApproving(false);
-    loadData();
   };
 
   const exportCSV = async () => {
@@ -350,6 +281,15 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           >
             {running ? "Running..." : "Run Held-Out Evaluation"}
           </button>
+          {running && activeRunId && (
+            <button
+              onClick={cancelRun}
+              disabled={cancelingRun}
+              className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium"
+            >
+              {cancelingRun ? "Cancelling..." : "Cancel Run"}
+            </button>
+          )}
           {progress && <span className="text-sm text-gray-400">{progress}</span>}
         </div>
       </div>
@@ -391,14 +331,10 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           </div>
 
           {/* Actions */}
-          <div className="flex gap-3">
-            <button
-              onClick={approvePrompt}
-              disabled={approving}
-              className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded text-sm font-medium"
-            >
-              {approving ? "Approving..." : "Approve Prompt Version"}
-            </button>
+          <div className="flex gap-3 items-center">
+            <div className="text-xs text-gray-400 px-2">
+              Approval is managed manually in the Detection Setup tab after thresholds are met.
+            </div>
             <button onClick={exportCSV} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">
               Export CSV
             </button>
@@ -519,6 +455,28 @@ function csvEscape(value: unknown): string {
   return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
 }
 
+async function pollRunToTerminalState(
+  runId: string,
+  onProgress?: (snapshot: any) => void
+): Promise<any> {
+  while (true) {
+    const res = await fetch(`/api/runs?run_id=${runId}`);
+    const snapshot = await res.json();
+    if (!res.ok) {
+      throw new Error(snapshot?.error || "Failed to fetch run status");
+    }
+    onProgress?.(snapshot);
+    if (snapshot?.status === "completed" || snapshot?.status === "cancelled" || snapshot?.status === "failed") {
+      return snapshot;
+    }
+    await delay(1000);
+  }
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function ThresholdRow({ label, value, threshold }: { label: string; value: number; threshold: number }) {
   const passed = value >= threshold;
   return (
@@ -532,25 +490,6 @@ function ThresholdRow({ label, value, threshold }: { label: string; value: numbe
       <span className="font-mono text-gray-400">{(threshold * 100).toFixed(1)}%</span>
     </div>
   );
-}
-
-function checkRegression(
-  metrics: any,
-  thresholds: any,
-  previousMetrics: any
-): boolean {
-  // Check thresholds
-  if (thresholds.min_precision != null && metrics.precision < thresholds.min_precision) return false;
-  if (thresholds.min_recall != null && metrics.recall < thresholds.min_recall) return false;
-  if (thresholds.min_f1 != null && metrics.f1 < thresholds.min_f1) return false;
-
-  // Check regression against previous
-  if (previousMetrics) {
-    const primaryMetric = thresholds.primary_metric || "f1";
-    if (metrics[primaryMetric] < previousMetrics[primaryMetric]) return false;
-  }
-
-  return true;
 }
 
 async function safeJsonArray<T>(res: Response, label: string): Promise<T[]> {
