@@ -1,14 +1,24 @@
 import type { MetricsSummary, Prediction, Decision } from "@/types";
 
+function isInferenceCallFailure(prediction: Prediction): boolean {
+  if (prediction.error_tag === "INFERENCE_CALL_FAILED") return true;
+  const reason = String(prediction.parse_error_reason || "");
+  const raw = String(prediction.raw_response || "");
+  return reason.startsWith("Model/API error:") || raw.startsWith("ERROR:");
+}
+
 export function computeMetrics(predictions: Prediction[]): MetricsSummary {
   let tp = 0, fp = 0, fn = 0, tn = 0;
   let parseFailures = 0;
-  const labeled = predictions.filter(
-    (p) => (p.corrected_label || p.ground_truth_label) === "DETECTED" || (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED"
+  const labeledAndScored = predictions.filter(
+    (p) =>
+      ((p.corrected_label || p.ground_truth_label) === "DETECTED" ||
+        (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED") &&
+      !isInferenceCallFailure(p)
   );
-  const total = labeled.length;
+  const total = labeledAndScored.length;
 
-  for (const p of labeled) {
+  for (const p of labeledAndScored) {
     if (!p.parse_ok || !p.predicted_decision) {
       parseFailures++;
       // Treat parse failures as incorrect — if ground truth is DETECTED, it's FN; otherwise FP
@@ -31,7 +41,7 @@ export function computeMetrics(predictions: Prediction[]): MetricsSummary {
   const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
   const accuracy = total > 0 ? (tp + tn) / total : 0;
 
-  const positives = labeled.filter(
+  const positives = labeledAndScored.filter(
     (p) => (p.corrected_label || p.ground_truth_label) === "DETECTED"
   ).length;
   const prevalence = total > 0 ? positives / total : 0;

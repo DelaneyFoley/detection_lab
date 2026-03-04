@@ -6,6 +6,7 @@ export type PrimaryMetric = "precision" | "recall" | "f1";
 export type ErrorTag =
   | "MISSED_DETECTION"
   | "FALSE_POSITIVE"
+  | "INFERENCE_CALL_FAILED"
   | "AMBIGUOUS_IMAGE"
   | "LABEL_POLICY_GAP"
   | "PROMPT_INSTRUCTION_GAP"
@@ -27,6 +28,7 @@ export interface Detection {
   description: string;
   label_policy: string;
   decision_rubric: string[];
+  segment_taxonomy: string[];
   metric_thresholds: MetricThresholds;
   approved_prompt_version: string | null;
   created_at: string;
@@ -87,6 +89,7 @@ export interface DatasetItem {
   image_id: string;
   image_uri: string;
   image_description?: string | null;
+  segment_tags?: string[];
   ai_assigned_label?: Decision | "PARSE_FAIL" | null;
   ai_confidence?: number | null;
   ground_truth_label?: Decision | null;

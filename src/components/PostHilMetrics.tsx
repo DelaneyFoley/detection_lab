@@ -27,11 +27,11 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     ]);
     setRuns((await runsRes.json()).filter((r: Run) => r.status === "completed"));
     setPrompts(await promptsRes.json());
-  }, [detection.detection_id, refreshCounter]);
+  }, [detection.detection_id]);
 
   useEffect(() => {
     loadRuns();
-  }, [loadRuns]);
+  }, [loadRuns, refreshCounter]);
 
   useEffect(() => {
     setSelectedRunId(persistedRunId);
@@ -62,11 +62,11 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       setSelectedSuggestions(new Set());
       setLoadedFromRunLog(false);
     }
-  }, [selectedRunId, refreshCounter]);
+  }, [selectedRunId]);
 
   useEffect(() => {
     loadRun();
-  }, [loadRun]);
+  }, [loadRun, refreshCounter]);
 
   useEffect(() => {
     if (selectedRunId) {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
 import { runDetectionInference } from "@/lib/gemini";
+import { runRepository } from "@/lib/repositories";
 
 export async function POST(req: NextRequest) {
   try {
@@ -24,16 +24,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Quick Test supports up to 10 images" }, { status: 400 });
     }
 
-    const db = getDb();
-    const prompt = db
-      .prepare("SELECT * FROM prompt_versions WHERE prompt_version_id = ?")
-      .get(promptVersionId) as any;
+    const prompt = runRepository.getPromptVersionById(promptVersionId);
     if (!prompt) {
       return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
     }
-    const detection = db
-      .prepare("SELECT * FROM detections WHERE detection_id = ?")
-      .get(detectionId) as any;
+    const detection = runRepository.getDetectionById(detectionId);
     if (!detection) {
       return NextResponse.json({ error: "Detection not found" }, { status: 404 });
     }

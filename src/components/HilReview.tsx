@@ -9,11 +9,18 @@ import { splitTypeLabel } from "@/lib/splitType";
 const ERROR_TAGS: ErrorTag[] = [
   "MISSED_DETECTION",
   "FALSE_POSITIVE",
+  "INFERENCE_CALL_FAILED",
   "AMBIGUOUS_IMAGE",
   "LABEL_POLICY_GAP",
   "PROMPT_INSTRUCTION_GAP",
   "SCHEMA_VIOLATION",
 ];
+const AUTO_ERROR_TAGS = new Set<ErrorTag>([
+  "MISSED_DETECTION",
+  "FALSE_POSITIVE",
+  "SCHEMA_VIOLATION",
+  "INFERENCE_CALL_FAILED",
+]);
 
 type FilterType = "all" | "fp" | "fn" | "parse_fail" | "correct" | "corrected";
 
@@ -56,11 +63,11 @@ export function HilReview({ detection }: { detection: Detection }) {
       }
     }
     setPromptLabelById(next);
-  }, [detection.detection_id, refreshCounter]);
+  }, [detection.detection_id]);
 
   useEffect(() => {
     loadRuns();
-  }, [loadRuns]);
+  }, [loadRuns, refreshCounter]);
 
   useEffect(() => {
     setSelectedRunId(persistedRunId);
@@ -83,7 +90,11 @@ export function HilReview({ detection }: { detection: Detection }) {
         throw new Error(data?.error || "Failed to load run");
       }
       setRunData(data);
-      setPredictions(Array.isArray(data.predictions) ? data.predictions : []);
+      setPredictions(
+        Array.isArray(data.predictions)
+          ? data.predictions.map((p: Prediction) => withAutoErrorTag(p))
+          : []
+      );
       setCurrentIndex(0);
     } catch (error) {
       setRunData(null);
@@ -109,7 +120,7 @@ export function HilReview({ detection }: { detection: Detection }) {
     switch (filter) {
       case "fp": return p.parse_ok && p.predicted_decision === "DETECTED" && gt === "NOT_DETECTED";
       case "fn": return p.parse_ok && p.predicted_decision === "NOT_DETECTED" && gt === "DETECTED";
-      case "parse_fail": return !p.parse_ok;
+      case "parse_fail": return !p.parse_ok && !isInferenceCallFailure(p);
       case "correct": return p.parse_ok && p.predicted_decision === gt;
       case "corrected": return p.corrected_label !== null;
       default: return true;
@@ -144,19 +155,25 @@ export function HilReview({ detection }: { detection: Detection }) {
 
     // Refresh predictions
     setPredictions((prev) =>
-      prev.map((p) =>
-        p.prediction_id === predictionId
-          ? {
-              ...p,
-              corrected_label: updates.corrected_label !== undefined ? updates.corrected_label : p.corrected_label,
-              ground_truth_label:
-                updates.ground_truth_label !== undefined ? updates.ground_truth_label : p.ground_truth_label,
-              error_tag: updates.error_tag !== undefined ? updates.error_tag : p.error_tag,
-              reviewer_note: updates.reviewer_note !== undefined ? updates.reviewer_note : p.reviewer_note,
-              corrected_at: new Date().toISOString(),
-            }
-          : p
-      )
+      prev.map((p) => {
+        if (p.prediction_id !== predictionId) return p;
+        const next: Prediction = {
+          ...p,
+          corrected_label: updates.corrected_label !== undefined ? updates.corrected_label : p.corrected_label,
+          ground_truth_label:
+            updates.ground_truth_label !== undefined ? updates.ground_truth_label : p.ground_truth_label,
+          error_tag: updates.error_tag !== undefined ? updates.error_tag : p.error_tag,
+          reviewer_note: updates.reviewer_note !== undefined ? updates.reviewer_note : p.reviewer_note,
+          corrected_at: new Date().toISOString(),
+        };
+
+        // Keep manual tags; auto-populate/refresh only when tag is empty or currently auto-generated.
+        if (updates.error_tag === undefined && (!next.error_tag || AUTO_ERROR_TAGS.has(next.error_tag))) {
+          const auto = deriveAutoErrorTag(next);
+          next.error_tag = auto;
+        }
+        return next;
+      })
     );
 
     if (payload?.run_id && payload?.metrics) {
@@ -238,7 +255,7 @@ export function HilReview({ detection }: { detection: Detection }) {
                 switch (key) {
                   case "fp": return p.parse_ok && p.predicted_decision === "DETECTED" && gt === "NOT_DETECTED";
                   case "fn": return p.parse_ok && p.predicted_decision === "NOT_DETECTED" && gt === "DETECTED";
-                  case "parse_fail": return !p.parse_ok;
+                  case "parse_fail": return !p.parse_ok && !isInferenceCallFailure(p);
                   case "correct": return p.parse_ok && p.predicted_decision === gt;
                   case "corrected": return p.corrected_label !== null;
                   default: return true;
@@ -455,6 +472,13 @@ function PredictionRow({
       <td className="text-center py-2 px-3">
         {p.parse_ok ? (
           <span className="text-green-400 text-xs">OK</span>
+        ) : isInferenceCallFailure(p) ? (
+          <span
+            className="text-orange-300 text-xs"
+            title={`${p.parse_error_reason || "Inference/API call failed"}${p.parse_fix_suggestion ? `\nFix: ${p.parse_fix_suggestion}` : ""}`}
+          >
+            API_ERR
+          </span>
         ) : (
           <span
             className="text-red-400 text-xs"
@@ -498,15 +522,19 @@ function ImageReviewMode({
   const [imageZoom, setImageZoom] = useState(1);
   const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
   const [draggingImage, setDraggingImage] = useState(false);
+  const [imageNatural, setImageNatural] = useState({ width: 0, height: 0 });
   const [copiedImageId, setCopiedImageId] = useState(false);
+  const imageViewportRef = useRef<HTMLDivElement | null>(null);
   const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const lastPredictionIdRef = useRef(p.prediction_id);
   const lastNoteRef = useRef(note);
+  const noteDirtyRef = useRef(noteDirty);
+  const onUpdateRef = useRef(onUpdate);
 
   useEffect(() => {
     // Persist pending note for previous image before switching images.
-    if (noteDirty && lastPredictionIdRef.current) {
-      onUpdate(lastPredictionIdRef.current, { reviewer_note: (lastNoteRef.current || "").trim() || null });
+    if (noteDirtyRef.current && lastPredictionIdRef.current) {
+      onUpdateRef.current(lastPredictionIdRef.current, { reviewer_note: (lastNoteRef.current || "").trim() || null });
     }
     setNote(p.reviewer_note || "");
     setNoteDirty(false);
@@ -519,20 +547,54 @@ function ImageReviewMode({
   }, [note]);
 
   useEffect(() => {
+    noteDirtyRef.current = noteDirty;
+  }, [noteDirty]);
+
+  useEffect(() => {
+    onUpdateRef.current = onUpdate;
+  }, [onUpdate]);
+
+  useEffect(() => {
     setImageZoom(1);
     setImagePan({ x: 0, y: 0 });
+    setImageNatural({ width: 0, height: 0 });
     setDraggingImage(false);
     dragStartRef.current = null;
   }, [p.prediction_id]);
 
+  const clampedImagePan = useMemo(() => {
+    const viewport = imageViewportRef.current;
+    if (!viewport || imageNatural.width <= 0 || imageNatural.height <= 0) return { x: 0, y: 0 };
+    const viewportW = viewport.clientWidth;
+    const viewportH = viewport.clientHeight;
+    if (viewportW <= 0 || viewportH <= 0) return { x: 0, y: 0 };
+    const imageRatio = imageNatural.width / imageNatural.height;
+    const viewportRatio = viewportW / viewportH;
+    let baseW = viewportW;
+    let baseH = viewportH;
+    if (imageRatio > viewportRatio) {
+      baseH = viewportW / imageRatio;
+    } else {
+      baseW = viewportH * imageRatio;
+    }
+    const scaledW = baseW * imageZoom;
+    const scaledH = baseH * imageZoom;
+    const maxX = Math.max(0, (scaledW - viewportW) / 2);
+    const maxY = Math.max(0, (scaledH - viewportH) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, imagePan.x)),
+      y: Math.max(-maxY, Math.min(maxY, imagePan.y)),
+    };
+  }, [imageNatural.height, imageNatural.width, imagePan.x, imagePan.y, imageZoom]);
+
   useEffect(() => {
     // Persist pending note when leaving image review (switching mode/tab/unmount).
     return () => {
-      if (noteDirty && lastPredictionIdRef.current) {
-        onUpdate(lastPredictionIdRef.current, { reviewer_note: (lastNoteRef.current || "").trim() || null });
+      if (noteDirtyRef.current && lastPredictionIdRef.current) {
+        onUpdateRef.current(lastPredictionIdRef.current, { reviewer_note: (lastNoteRef.current || "").trim() || null });
       }
     };
-  }, [noteDirty, onUpdate]);
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
@@ -649,6 +711,7 @@ function ImageReviewMode({
           </div>
         </div>
         <div
+          ref={imageViewportRef}
           className="w-full h-[500px] overflow-hidden rounded bg-gray-900 flex items-center justify-center"
           onMouseDown={startImageDrag}
           onMouseMove={moveImageDrag}
@@ -661,11 +724,19 @@ function ImageReviewMode({
             alt={p.image_id}
             className="max-h-[500px] max-w-full object-contain rounded select-none"
             style={{
-              transform: `translate(${imagePan.x}px, ${imagePan.y}px) scale(${imageZoom})`,
+              transform: `translate(${clampedImagePan.x}px, ${clampedImagePan.y}px) scale(${imageZoom})`,
               transformOrigin: "center center",
+              willChange: "transform",
+              backfaceVisibility: "hidden",
             }}
             draggable={false}
             onDragStart={(e) => e.preventDefault()}
+            onLoad={(event) =>
+              setImageNatural({
+                width: event.currentTarget.naturalWidth || 0,
+                height: event.currentTarget.naturalHeight || 0,
+              })
+            }
           />
         </div>
         <p className="mt-2 text-xs text-gray-500">Zoom: {(imageZoom * 100).toFixed(0)}%</p>
@@ -814,9 +885,13 @@ function ImageReviewMode({
           </pre>
           {!p.parse_ok && (
             <div className="mt-2 space-y-2">
-              <p className="text-xs text-red-400">Parse failed.</p>
+              <p className={`text-xs ${isInferenceCallFailure(p) ? "text-orange-300" : "text-red-400"}`}>
+                {isInferenceCallFailure(p) ? "Inference/API call failed." : "Parse failed."}
+              </p>
               <div className="text-xs text-gray-300">
-                <span className="text-gray-500">Why:</span> {p.parse_error_reason || "Response did not match expected schema."}
+                <span className="text-gray-500">Why:</span>{" "}
+                {p.parse_error_reason ||
+                  (isInferenceCallFailure(p) ? "Model/API request failed before image could be reviewed." : "Response did not match expected schema.")}
               </div>
               <div className="text-xs text-gray-300">
                 <span className="text-gray-500">How to fix:</span>{" "}
@@ -828,4 +903,27 @@ function ImageReviewMode({
       </div>
     </div>
   );
+}
+
+function deriveAutoErrorTag(prediction: Prediction): ErrorTag | null {
+  const resolvedGt = prediction.corrected_label || prediction.ground_truth_label;
+  if (isInferenceCallFailure(prediction)) return "INFERENCE_CALL_FAILED";
+  if (!prediction.parse_ok) return "SCHEMA_VIOLATION";
+  if (!resolvedGt || !prediction.predicted_decision) return null;
+  if (resolvedGt === "DETECTED" && prediction.predicted_decision === "NOT_DETECTED") return "MISSED_DETECTION";
+  if (resolvedGt === "NOT_DETECTED" && prediction.predicted_decision === "DETECTED") return "FALSE_POSITIVE";
+  return null;
+}
+
+function withAutoErrorTag(prediction: Prediction): Prediction {
+  if (prediction.error_tag) return prediction;
+  const auto = deriveAutoErrorTag(prediction);
+  return auto ? { ...prediction, error_tag: auto } : prediction;
+}
+
+function isInferenceCallFailure(prediction: Prediction): boolean {
+  if (prediction.error_tag === "INFERENCE_CALL_FAILED") return true;
+  const reason = String(prediction.parse_error_reason || "");
+  const raw = String(prediction.raw_response || "");
+  return reason.startsWith("Model/API error:") || raw.startsWith("ERROR:");
 }

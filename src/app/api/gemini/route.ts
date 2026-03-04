@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getDb } from "@/lib/db";
 import { DEFAULT_PROMPT_FEEDBACK_TEMPLATE, renderPromptFeedbackTemplate } from "@/lib/adminPrompts";
 import { buildImagePart } from "@/lib/gemini";
+import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
+import { getRequestContext, logger } from "@/lib/logger";
+import { GeminiAssistSchema } from "@/lib/schemas";
+import { settingsRepository } from "@/lib/repositories";
 
 // Prompt improvement assistant
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const { predictions, prompt, detection, model_override } = body;
-  const apiKey = String(body.api_key || process.env.GEMINI_API_KEY || "").trim();
+  const rateLimited = applyRateLimit(req, { key: "gemini:analysis", maxRequests: 10, windowMs: 60_000 });
+  if (rateLimited) return rateLimited;
+  const parsedBody = await parseJsonWithSchema(req, GeminiAssistSchema);
+  if (!parsedBody.success) return parsedBody.response;
+  const { predictions, prompt, detection, model_override, api_key } = parsedBody.data;
+  const apiKey = String(api_key || process.env.GEMINI_API_KEY || "").trim();
 
   if (!apiKey) {
     return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
@@ -31,7 +37,7 @@ export async function POST(req: NextRequest) {
   const errorTags = predictions
     .filter((p: any) => p.error_tag)
     .map((p: any) => ({ image_id: p.image_id, error_tag: p.error_tag, note: p.reviewer_note }));
-  const parseFailures = predictions.filter((p: any) => !p.parse_ok);
+  const trueParseFailures = predictions.filter((p: any) => !p.parse_ok && !isInferenceCallFailure(p));
 
   const falsePositiveList =
     falsePositives
@@ -52,7 +58,7 @@ export async function POST(req: NextRequest) {
       ? errorTags.map((t: any) => `- ${t.image_id}: ${t.error_tag} ${t.note ? "— " + t.note : ""}`).join("\n")
       : "None";
   const parseFailList =
-    parseFailures
+    trueParseFailures
       .slice(0, 5)
       .map(
         (p: any) =>
@@ -60,10 +66,7 @@ export async function POST(req: NextRequest) {
       )
       .join("\n") || "None";
 
-  const db = getDb();
-  const stored = db
-    .prepare("SELECT value FROM app_settings WHERE key = ?")
-    .get("prompt_feedback_template") as { value?: string } | undefined;
+  const stored = settingsRepository.getByKey("prompt_feedback_template");
   const template = stored?.value || DEFAULT_PROMPT_FEEDBACK_TEMPLATE;
   const analysisPrompt = renderPromptFeedbackTemplate(template, {
     detectionCode: detection.detection_code,
@@ -77,7 +80,7 @@ export async function POST(req: NextRequest) {
     truePositivesList: truePositiveList,
     trueNegativesList: trueNegativeList,
     errorTagsList: errorTagList,
-    parseFailTotal: parseFailures.length,
+    parseFailTotal: trueParseFailures.length,
     parseFailList,
   });
 
@@ -109,13 +112,18 @@ export async function POST(req: NextRequest) {
     const suggestions = JSON.parse(cleaned);
     return NextResponse.json({ suggestions });
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/gemini");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Prompt improvement analysis failed", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
 
 function samplePredictionsForVision(predictions: any[]): any[] {
-  const parseFails = predictions.filter((p) => !p.parse_ok).slice(0, 4).map((p) => ({ ...p, cluster: "parse_fail" }));
+  const parseFails = predictions
+    .filter((p) => !p.parse_ok && !isInferenceCallFailure(p))
+    .slice(0, 4)
+    .map((p) => ({ ...p, cluster: "parse_fail" }));
   const fps = predictions
     .filter((p) => p.parse_ok && p.predicted_decision === "DETECTED" && (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED")
     .slice(0, 3)
@@ -125,4 +133,11 @@ function samplePredictionsForVision(predictions: any[]): any[] {
     .slice(0, 3)
     .map((p) => ({ ...p, cluster: "false_negative" }));
   return [...parseFails, ...fps, ...fns].filter((p) => !!p.image_uri);
+}
+
+function isInferenceCallFailure(prediction: any): boolean {
+  if (prediction?.error_tag === "INFERENCE_CALL_FAILED") return true;
+  const reason = String(prediction?.parse_error_reason || "");
+  const raw = String(prediction?.raw_response || "");
+  return reason.startsWith("Model/API error:") || raw.startsWith("ERROR:");
 }

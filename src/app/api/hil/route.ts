@@ -1,92 +1,98 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
 import { computeMetrics } from "@/lib/metrics";
 import type { Prediction } from "@/types";
+import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
+import { getRequestContext, logger } from "@/lib/logger";
+import { HilRecomputeSchema, HilUpdateSchema } from "@/lib/schemas";
+import { reviewRepository } from "@/lib/repositories";
 
 // Update a prediction (correction, error tag, note)
 export async function PUT(req: NextRequest) {
-  const body = await req.json();
-  const db = getDb();
-  const now = new Date().toISOString();
-  const pred = db.prepare("SELECT * FROM predictions WHERE prediction_id = ?").get(body.prediction_id) as any;
-  if (!pred) {
-    return NextResponse.json({ error: "Prediction not found" }, { status: 404 });
-  }
+  try {
+    const rateLimited = applyRateLimit(req, { key: "hil:update", maxRequests: 120, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
+    const parsedBody = await parseJsonWithSchema(req, HilUpdateSchema);
+    if (!parsedBody.success) return parsedBody.response;
+    const body = parsedBody.data;
+    const now = new Date().toISOString();
+    const pred = reviewRepository.getPredictionById(body.prediction_id);
+    if (!pred) {
+      return NextResponse.json({ error: "Prediction not found" }, { status: 404 });
+    }
 
-  db.prepare(`
-    UPDATE predictions SET
-      corrected_label = ?,
-      error_tag = ?,
-      reviewer_note = ?,
-      corrected_at = ?
-    WHERE prediction_id = ?
-  `).run(
-    body.corrected_label || null,
-    body.error_tag || null,
-    body.reviewer_note || null,
-    now,
-    body.prediction_id
-  );
+    reviewRepository.updatePredictionReview({
+      predictionId: body.prediction_id,
+      correctedLabel: body.corrected_label || null,
+      errorTag: body.error_tag || null,
+      reviewerNote: body.reviewer_note || null,
+      correctedAt: now,
+    });
 
   // Reviewer can set ground truth directly during HIL review.
-  if (Object.prototype.hasOwnProperty.call(body, "ground_truth_label")) {
-    db.prepare("UPDATE predictions SET ground_truth_label = ? WHERE prediction_id = ?").run(
-      body.ground_truth_label,
-      body.prediction_id
-    );
+    const metricsImpactedByGroundTruthChange = Object.prototype.hasOwnProperty.call(body, "ground_truth_label");
+    if (metricsImpactedByGroundTruthChange) {
+      reviewRepository.updatePredictionGroundTruth(body.prediction_id, body.ground_truth_label ?? null);
 
-    if (body.update_ground_truth) {
-      const run = db.prepare("SELECT * FROM runs WHERE run_id = ?").get(pred.run_id) as any;
-      if (run) {
-        db.prepare(
-          "UPDATE dataset_items SET ground_truth_label = ? WHERE dataset_id = ? AND image_id = ?"
-        ).run(body.ground_truth_label, run.dataset_id, pred.image_id);
+      if (body.update_ground_truth) {
+        const run = reviewRepository.getRunById(pred.run_id);
+        if (run) {
+          reviewRepository.updateDatasetItemGroundTruth(
+            run.dataset_id,
+            pred.image_id,
+            body.ground_truth_label ?? null
+          );
+        }
       }
     }
-  }
 
   // If correcting an ITERATION dataset, also update ground truth
-  if (body.corrected_label && body.update_ground_truth) {
-    const run = db.prepare("SELECT * FROM runs WHERE run_id = ?").get(pred.run_id) as any;
-    if (run) {
-      const dataset = db.prepare("SELECT * FROM datasets WHERE dataset_id = ?").get(run.dataset_id) as any;
-      if (dataset && dataset.split_type === "ITERATION") {
-        db.prepare(
-          "UPDATE dataset_items SET ground_truth_label = ? WHERE dataset_id = ? AND image_id = ?"
-        ).run(body.corrected_label, run.dataset_id, pred.image_id);
+    const metricsImpactedByCorrectedLabel = Object.prototype.hasOwnProperty.call(body, "corrected_label");
+    if (body.corrected_label && body.update_ground_truth) {
+      const run = reviewRepository.getRunById(pred.run_id);
+      if (run) {
+        const dataset = reviewRepository.getDatasetById(run.dataset_id);
+        if (dataset && dataset.split_type === "ITERATION") {
+          reviewRepository.updateDatasetItemGroundTruth(run.dataset_id, pred.image_id, body.corrected_label);
+        }
       }
     }
+
+    // Recompute metrics only when labels changed.
+    if (metricsImpactedByGroundTruthChange || metricsImpactedByCorrectedLabel) {
+      const predictions = reviewRepository.getRunPredictions(pred.run_id);
+      const metrics = computeMetrics(predictions);
+      reviewRepository.updateRunMetrics(pred.run_id, JSON.stringify(metrics));
+      return NextResponse.json({ ok: true, run_id: pred.run_id, metrics });
+    }
+
+    return NextResponse.json({ ok: true, run_id: pred.run_id, metrics: null });
+  } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/hil");
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to update HIL prediction", { ...context, error: errMsg });
+    return NextResponse.json({ error: errMsg }, { status: 500 });
   }
-
-  // Always recompute and persist metrics for this run after HIL edits,
-  // so all run logs/views stay consistent.
-  const predictions = db
-    .prepare("SELECT * FROM predictions WHERE run_id = ?")
-    .all(pred.run_id) as Prediction[];
-  const metrics = computeMetrics(predictions);
-  db.prepare("UPDATE runs SET metrics_summary = ? WHERE run_id = ?").run(
-    JSON.stringify(metrics),
-    pred.run_id
-  );
-
-  return NextResponse.json({ ok: true, run_id: pred.run_id, metrics });
 }
 
 // Recompute metrics for a run (after HIL corrections)
 export async function POST(req: NextRequest) {
-  const body = await req.json();
-  const db = getDb();
+  try {
+    const rateLimited = applyRateLimit(req, { key: "hil:recompute", maxRequests: 30, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
+    const parsedBody = await parseJsonWithSchema(req, HilRecomputeSchema);
+    if (!parsedBody.success) return parsedBody.response;
+    const body = parsedBody.data;
+    const predictions = reviewRepository.getRunPredictions(body.run_id);
 
-  const predictions = db
-    .prepare("SELECT * FROM predictions WHERE run_id = ?")
-    .all(body.run_id) as Prediction[];
+    const metrics = computeMetrics(predictions);
 
-  const metrics = computeMetrics(predictions);
+    reviewRepository.updateRunMetrics(body.run_id, JSON.stringify(metrics));
 
-  db.prepare("UPDATE runs SET metrics_summary = ? WHERE run_id = ?").run(
-    JSON.stringify(metrics),
-    body.run_id
-  );
-
-  return NextResponse.json({ metrics });
+    return NextResponse.json({ metrics });
+  } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/hil");
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to recompute HIL metrics", { ...context, error: errMsg });
+    return NextResponse.json({ error: errMsg }, { status: 500 });
+  }
 }

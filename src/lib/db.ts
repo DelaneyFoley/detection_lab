@@ -28,6 +28,7 @@ function initSchema(db: Database.Database) {
       description TEXT NOT NULL DEFAULT '',
       label_policy TEXT NOT NULL DEFAULT '',
       decision_rubric TEXT NOT NULL DEFAULT '[]',
+      segment_taxonomy TEXT NOT NULL DEFAULT '[]',
       metric_thresholds TEXT NOT NULL DEFAULT '{}',
       approved_prompt_version TEXT,
       created_at TEXT NOT NULL,
@@ -70,6 +71,7 @@ function initSchema(db: Database.Database) {
       image_id TEXT NOT NULL,
       image_uri TEXT NOT NULL,
       image_description TEXT NOT NULL DEFAULT '',
+      segment_tags TEXT NOT NULL DEFAULT '[]',
       ai_assigned_label TEXT,
       ai_confidence REAL,
       ground_truth_label TEXT CHECK(ground_truth_label IN ('DETECTED','NOT_DETECTED') OR ground_truth_label IS NULL),
@@ -120,10 +122,22 @@ function initSchema(db: Database.Database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_predictions_run_id ON predictions(run_id);
+    CREATE INDEX IF NOT EXISTS idx_predictions_error_tag ON predictions(error_tag);
+    CREATE INDEX IF NOT EXISTS idx_predictions_parse_ok ON predictions(parse_ok);
+    CREATE INDEX IF NOT EXISTS idx_predictions_image_id ON predictions(image_id);
     CREATE INDEX IF NOT EXISTS idx_dataset_items_dataset_id ON dataset_items(dataset_id);
+    CREATE INDEX IF NOT EXISTS idx_dataset_items_image_id ON dataset_items(image_id);
+    CREATE INDEX IF NOT EXISTS idx_dataset_items_gt ON dataset_items(ground_truth_label);
     CREATE INDEX IF NOT EXISTS idx_prompt_versions_detection_id ON prompt_versions(detection_id);
     CREATE INDEX IF NOT EXISTS idx_datasets_detection_id ON datasets(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_datasets_split_type ON datasets(split_type);
+    CREATE INDEX IF NOT EXISTS idx_datasets_created_at ON datasets(created_at);
+    CREATE INDEX IF NOT EXISTS idx_datasets_name ON datasets(name);
     CREATE INDEX IF NOT EXISTS idx_runs_detection_id ON runs(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+    CREATE INDEX IF NOT EXISTS idx_runs_split_type ON runs(split_type);
+    CREATE INDEX IF NOT EXISTS idx_runs_dataset_id ON runs(dataset_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
 
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
@@ -133,6 +147,7 @@ function initSchema(db: Database.Database) {
   `);
 
   ensureDatasetItemColumns(db);
+  ensureDetectionColumns(db);
   ensureNullableGroundTruthColumns(db);
   ensureRunsColumns(db);
   ensurePredictionParseColumns(db);
@@ -142,16 +157,28 @@ function initSchema(db: Database.Database) {
 function ensureDatasetItemColumns(db: Database.Database) {
   const columns = db.prepare("PRAGMA table_info(dataset_items)").all() as Array<{ name: string }>;
   const hasImageDescription = columns.some((c) => c.name === "image_description");
+  const hasSegmentTags = columns.some((c) => c.name === "segment_tags");
   const hasAiAssignedLabel = columns.some((c) => c.name === "ai_assigned_label");
   const hasAiConfidence = columns.some((c) => c.name === "ai_confidence");
   if (!hasImageDescription) {
     db.exec("ALTER TABLE dataset_items ADD COLUMN image_description TEXT NOT NULL DEFAULT ''");
+  }
+  if (!hasSegmentTags) {
+    db.exec("ALTER TABLE dataset_items ADD COLUMN segment_tags TEXT NOT NULL DEFAULT '[]'");
   }
   if (!hasAiAssignedLabel) {
     db.exec("ALTER TABLE dataset_items ADD COLUMN ai_assigned_label TEXT");
   }
   if (!hasAiConfidence) {
     db.exec("ALTER TABLE dataset_items ADD COLUMN ai_confidence REAL");
+  }
+}
+
+function ensureDetectionColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(detections)").all() as Array<{ name: string }>;
+  const hasSegmentTaxonomy = columns.some((c) => c.name === "segment_taxonomy");
+  if (!hasSegmentTaxonomy) {
+    db.exec("ALTER TABLE detections ADD COLUMN segment_taxonomy TEXT NOT NULL DEFAULT '[]'");
   }
 }
 
@@ -171,14 +198,15 @@ function ensureNullableGroundTruthColumns(db: Database.Database) {
         image_id TEXT NOT NULL,
         image_uri TEXT NOT NULL,
         image_description TEXT NOT NULL DEFAULT '',
+        segment_tags TEXT NOT NULL DEFAULT '[]',
         ai_assigned_label TEXT,
         ai_confidence REAL,
         ground_truth_label TEXT CHECK(ground_truth_label IN ('DETECTED','NOT_DETECTED') OR ground_truth_label IS NULL),
         FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id)
       );
 
-      INSERT INTO dataset_items_new (item_id, dataset_id, image_id, image_uri, image_description, ai_assigned_label, ai_confidence, ground_truth_label)
-      SELECT item_id, dataset_id, image_id, image_uri, COALESCE(image_description, ''), ai_assigned_label, ai_confidence, ground_truth_label
+      INSERT INTO dataset_items_new (item_id, dataset_id, image_id, image_uri, image_description, segment_tags, ai_assigned_label, ai_confidence, ground_truth_label)
+      SELECT item_id, dataset_id, image_id, image_uri, COALESCE(image_description, ''), COALESCE(segment_tags, '[]'), ai_assigned_label, ai_confidence, ground_truth_label
       FROM dataset_items;
 
       DROP TABLE dataset_items;

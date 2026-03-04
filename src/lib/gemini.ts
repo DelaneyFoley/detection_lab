@@ -262,7 +262,7 @@ export async function buildImagePart(imageUri: string) {
 
   // HTTP URL - fetch and convert
   if (imageUri.startsWith("http")) {
-    const response = await fetch(imageUri);
+    const response = await fetchWithRetry(imageUri, {}, 3);
     if (!response.ok) {
       const text = await response.text().catch(() => "");
       throw new Error(`Failed to fetch image URL ${imageUri}: ${response.status} ${response.statusText} ${text}`.trim());
@@ -314,11 +314,11 @@ async function fetchGcsImage(gsUri: string): Promise<{ data: Buffer; mimeType: s
   const token = await getGcsAccessToken();
   const objectName = encodeURIComponent(objectPath);
   const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucket)}/o/${objectName}?alt=media`;
-  const response = await fetch(url, {
+  const response = await fetchWithRetry(url, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
-  });
+  }, 3);
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     throw new Error(`Failed to fetch GCS object ${gsUri}: ${response.status} ${response.statusText} ${text}`.trim());
@@ -329,6 +329,31 @@ async function fetchGcsImage(gsUri: string): Promise<{ data: Buffer; mimeType: s
   });
   const data = Buffer.from(await response.arrayBuffer());
   return { data, mimeType };
+}
+
+async function fetchWithRetry(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  maxAttempts = 3
+): Promise<Response> {
+  let attempt = 0;
+  let lastError: unknown = null;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      const response = await fetch(input, init);
+      if (response.ok || (response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      lastError = new Error(`HTTP ${response.status} ${response.statusText}`);
+    } catch (error: unknown) {
+      lastError = error;
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 300));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Request failed");
 }
 
 function parseGsUri(gsUri: string): { bucket: string; objectPath: string } {

@@ -1,19 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
 import { v4 as uuid } from "uuid";
+import { promptRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
   try {
     const detectionId = req.nextUrl.searchParams.get("detection_id");
-    const db = getDb();
 
     let rows;
     if (detectionId) {
-      rows = db
-        .prepare("SELECT * FROM prompt_versions WHERE detection_id = ? ORDER BY created_at DESC")
-        .all(detectionId);
+      rows = promptRepository.listPromptVersions(detectionId);
     } else {
-      rows = db.prepare("SELECT * FROM prompt_versions ORDER BY created_at DESC").all();
+      rows = promptRepository.listPromptVersions();
     }
 
     const prompts = rows.map((r: any) => ({
@@ -31,42 +28,35 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const db = getDb();
   const id = uuid();
   const now = new Date().toISOString();
 
-  db.prepare(`
-    INSERT INTO prompt_versions (prompt_version_id, detection_id, version_label, system_prompt, user_prompt_template, prompt_structure, model, temperature, top_p, max_output_tokens, change_notes, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    body.detection_id,
-    body.version_label,
-    body.system_prompt,
-    body.user_prompt_template,
-    JSON.stringify(body.prompt_structure || {}),
-    body.model || "gemini-2.5-flash",
-    body.temperature ?? 0,
-    body.top_p ?? 1,
-    body.max_output_tokens ?? 1024,
-    body.change_notes || "",
-    body.created_by || "user",
-    now
-  );
+  promptRepository.createPromptVersion({
+    promptVersionId: id,
+    detectionId: body.detection_id,
+    versionLabel: body.version_label,
+    systemPrompt: body.system_prompt,
+    userPromptTemplate: body.user_prompt_template,
+    promptStructure: JSON.stringify(body.prompt_structure || {}),
+    model: body.model || "gemini-2.5-flash",
+    temperature: body.temperature ?? 0,
+    topP: body.top_p ?? 1,
+    maxOutputTokens: body.max_output_tokens ?? 1024,
+    changeNotes: body.change_notes || "",
+    createdBy: body.created_by || "user",
+    createdAt: now,
+  });
 
   return NextResponse.json({ prompt_version_id: id });
 }
 
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  const db = getDb();
 
   if (body.golden_set_regression_result !== undefined) {
-    db.prepare(
-      "UPDATE prompt_versions SET golden_set_regression_result = ? WHERE prompt_version_id = ?"
-    ).run(
-      JSON.stringify(body.golden_set_regression_result),
-      body.prompt_version_id
+    promptRepository.setGoldenRegressionResult(
+      body.prompt_version_id,
+      JSON.stringify(body.golden_set_regression_result)
     );
   }
 
@@ -81,31 +71,12 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "prompt_version_id is required" }, { status: 400 });
     }
 
-    const db = getDb();
-    const prompt = db
-      .prepare("SELECT prompt_version_id, detection_id FROM prompt_versions WHERE prompt_version_id = ?")
-      .get(promptVersionId) as any;
+    const prompt = promptRepository.getPromptById(promptVersionId);
     if (!prompt) {
       return NextResponse.json({ error: "Prompt version not found" }, { status: 404 });
     }
 
-    const tx = db.transaction((targetPromptId: string, detectionId: string) => {
-      const runIds = db
-        .prepare("SELECT run_id FROM runs WHERE prompt_version_id = ?")
-        .all(targetPromptId) as Array<{ run_id: string }>;
-      for (const r of runIds) {
-        db.prepare("DELETE FROM predictions WHERE run_id = ?").run(r.run_id);
-      }
-      db.prepare("DELETE FROM runs WHERE prompt_version_id = ?").run(targetPromptId);
-      db.prepare("DELETE FROM prompt_versions WHERE prompt_version_id = ?").run(targetPromptId);
-      db.prepare(`
-        UPDATE detections
-        SET approved_prompt_version = CASE WHEN approved_prompt_version = ? THEN NULL ELSE approved_prompt_version END
-        WHERE detection_id = ?
-      `).run(targetPromptId, detectionId);
-    });
-
-    tx(promptVersionId, prompt.detection_id);
+    promptRepository.deletePromptCascade(promptVersionId, prompt.detection_id);
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);

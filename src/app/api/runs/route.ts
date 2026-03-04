@@ -1,29 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import { runDetectionInference } from "@/lib/gemini";
 import { computeMetrics } from "@/lib/metrics";
 import type { Prediction } from "@/types";
-
-type ActiveRunControl = {
-  cancelRequested: boolean;
-};
-
-const activeRunControls = new Map<string, ActiveRunControl>();
+import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
+import { getRequestContext, logger } from "@/lib/logger";
+import { RunCreateSchema, RunUpdateSchema } from "@/lib/schemas";
+import { runQueue } from "@/lib/services";
+import { runRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
   try {
     const detectionId = req.nextUrl.searchParams.get("detection_id");
     const runId = req.nextUrl.searchParams.get("run_id");
-    const db = getDb();
-
+    const search = parseSearch(req.nextUrl.searchParams.get("search"));
+    const status = parseSearch(req.nextUrl.searchParams.get("status"));
+    const hasPagination = req.nextUrl.searchParams.has("page") || req.nextUrl.searchParams.has("page_size");
+    const { page, pageSize } = parsePagination(req, { page: 1, pageSize: 50 });
     if (runId) {
-      const run = db.prepare("SELECT * FROM runs WHERE run_id = ?").get(runId) as any;
+      const run = runRepository.getRunById(runId);
       if (!run) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-      const predictions = db
-        .prepare("SELECT * FROM predictions WHERE run_id = ? ORDER BY image_id")
-        .all(runId);
+      const predictions = runRepository.getRunPredictions(runId);
 
       return NextResponse.json({
         ...run,
@@ -34,14 +32,14 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    let rows;
-    if (detectionId) {
-      rows = db
-        .prepare("SELECT * FROM runs WHERE detection_id = ? ORDER BY created_at DESC")
-        .all(detectionId);
-    } else {
-      rows = db.prepare("SELECT * FROM runs ORDER BY created_at DESC").all();
-    }
+    const { rows, total } = runRepository.listRuns({
+      detectionId: detectionId || undefined,
+      status: status || undefined,
+      search,
+      page,
+      pageSize,
+      paginated: hasPagination,
+    });
 
     const runs = rows.map((r: any) => ({
       ...r,
@@ -49,9 +47,17 @@ export async function GET(req: NextRequest) {
       prompt_feedback_log: safeParseJson(r.prompt_feedback_log, {}),
     }));
 
+    if (hasPagination || search || status) {
+      return NextResponse.json(
+        toPaginatedResponse(runs, { page, pageSize, total })
+      );
+    }
+
     return NextResponse.json(runs);
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/runs");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to fetch runs", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
@@ -67,12 +73,14 @@ function safeParseJson<T>(value: string | null | undefined, fallback: T): T {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const db = getDb();
-
-    const { prompt_version_id, dataset_id, detection_id, model_override } = body;
-    const apiKey = String(body.api_key || process.env.GEMINI_API_KEY || "").trim();
-    const requestedConcurrency = Number(body.max_concurrency);
+    const rateLimited = applyRateLimit(req, { key: "runs:create", maxRequests: 20, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
+    const parsedBody = await parseJsonWithSchema(req, RunCreateSchema);
+    if (!parsedBody.success) return parsedBody.response;
+    const payload = parsedBody.data;
+    const { prompt_version_id, dataset_id, detection_id, model_override } = payload;
+    const apiKey = String(payload.api_key || process.env.GEMINI_API_KEY || "").trim();
+    const requestedConcurrency = Number(payload.max_concurrency);
     const maxConcurrency = Number.isFinite(requestedConcurrency)
       ? Math.max(1, Math.min(12, Math.floor(requestedConcurrency)))
       : 4;
@@ -82,23 +90,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Fetch prompt
-    const prompt = db
-      .prepare("SELECT * FROM prompt_versions WHERE prompt_version_id = ?")
-      .get(prompt_version_id) as any;
+    const prompt = runRepository.getPromptVersionById(prompt_version_id);
     if (!prompt) return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
 
     // Fetch dataset
-    const dataset = db.prepare("SELECT * FROM datasets WHERE dataset_id = ?").get(dataset_id) as any;
+    const dataset = runRepository.getDatasetById(dataset_id);
     if (!dataset) return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
 
-    const items = db
-      .prepare("SELECT * FROM dataset_items WHERE dataset_id = ? ORDER BY image_id")
-      .all(dataset_id) as any[];
+    const items = runRepository.getDatasetItems(dataset_id);
 
     // Fetch detection
-    const detection = db
-      .prepare("SELECT * FROM detections WHERE detection_id = ?")
-      .get(detection_id) as any;
+    const detection = runRepository.getDetectionById(detection_id);
     if (!detection) return NextResponse.json({ error: "Detection not found" }, { status: 404 });
 
     const runId = uuid();
@@ -112,25 +114,22 @@ export async function POST(req: NextRequest) {
     };
 
     // Create run record
-    db.prepare(`
-    INSERT INTO runs (run_id, detection_id, prompt_version_id, model_used, prompt_snapshot, decoding_params, dataset_id, dataset_hash, split_type, created_at, status, total_images, processed_images)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 0)
-    `).run(
-    runId,
-    detection_id,
-    prompt_version_id,
-    modelUsed,
-    JSON.stringify({ system_prompt: prompt.system_prompt, user_prompt_template: prompt.user_prompt_template }),
-    JSON.stringify(decodingParams),
-    dataset_id,
-    dataset.dataset_hash,
-    dataset.split_type,
-    now,
-    items.length
-    );
+    runRepository.createRun({
+      runId,
+      detectionId: detection_id,
+      promptVersionId: prompt_version_id,
+      modelUsed,
+      promptSnapshot: JSON.stringify({ system_prompt: prompt.system_prompt, user_prompt_template: prompt.user_prompt_template }),
+      decodingParams: JSON.stringify(decodingParams),
+      datasetId: dataset_id,
+      datasetHash: dataset.dataset_hash,
+      splitType: dataset.split_type,
+      createdAt: now,
+      totalImages: items.length,
+    });
 
     // Run inference for each image in the background so UI can poll progress.
-    activeRunControls.set(runId, { cancelRequested: false });
+    runQueue.create(runId);
     void executeRunInBackground({
       runId,
       apiKey,
@@ -154,7 +153,9 @@ export async function POST(req: NextRequest) {
       { status: 202 }
     );
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/runs");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to create run", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
@@ -174,28 +175,15 @@ async function executeRunInBackground({
   items: any[];
   maxConcurrency: number;
 }) {
-  const db = getDb();
-
-  const control = activeRunControls.get(runId) || { cancelRequested: false };
-  activeRunControls.set(runId, control);
-
-  const selectRunStatus = db.prepare("SELECT status FROM runs WHERE run_id = ?");
+    const control = runQueue.get(runId) || runQueue.create(runId);
 
   const isCancellationRequested = () => {
     if (control.cancelRequested) return true;
-    const row = selectRunStatus.get(runId) as { status?: string } | undefined;
+    const row = runRepository.getRunStatus(runId);
     return row?.status === "cancelled";
   };
 
   try {
-    const insertPrediction = db.prepare(`
-    INSERT INTO predictions (
-      prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence,
-      parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
     const predictions: Prediction[] = [];
     let nextIndex = 0;
     let processed = 0;
@@ -230,22 +218,7 @@ async function executeRunInBackground({
         corrected_at: null,
       };
 
-      insertPrediction.run(
-        pred.prediction_id,
-        runId,
-        pred.image_id,
-        pred.image_uri,
-        pred.ground_truth_label,
-        pred.predicted_decision,
-        pred.confidence,
-        pred.evidence,
-        pred.parse_ok ? 1 : 0,
-        pred.raw_response,
-        pred.parse_error_reason ?? null,
-        pred.parse_fix_suggestion ?? null,
-        pred.inference_runtime_ms ?? null,
-        pred.parse_retry_count ?? 0
-      );
+      runRepository.insertPrediction(pred, null);
 
       return pred;
     } catch (error: unknown) {
@@ -267,27 +240,12 @@ async function executeRunInBackground({
         inference_runtime_ms: null,
         parse_retry_count: 0,
         corrected_label: null,
-        error_tag: null,
+        error_tag: "INFERENCE_CALL_FAILED",
         reviewer_note: null,
         corrected_at: null,
       };
 
-      insertPrediction.run(
-        pred.prediction_id,
-        runId,
-        pred.image_id,
-        pred.image_uri,
-        pred.ground_truth_label,
-        null,
-        null,
-        null,
-        0,
-        pred.raw_response,
-        pred.parse_error_reason ?? null,
-        pred.parse_fix_suggestion ?? null,
-        pred.inference_runtime_ms ?? null,
-        pred.parse_retry_count ?? 0
-      );
+      runRepository.insertPrediction(pred, "INFERENCE_CALL_FAILED");
 
       return pred;
     }
@@ -304,7 +262,7 @@ async function executeRunInBackground({
       predictions.push(pred);
 
       processed += 1;
-      db.prepare("UPDATE runs SET processed_images = ? WHERE run_id = ?").run(processed, runId);
+      runRepository.updateProcessedImages(runId, processed);
     }
     };
 
@@ -315,32 +273,26 @@ async function executeRunInBackground({
     const metrics = computeMetrics(predictions);
     const finalStatus = isCancellationRequested() ? "cancelled" : "completed";
 
-    db.prepare("UPDATE runs SET metrics_summary = ?, status = ?, processed_images = ? WHERE run_id = ?").run(
-      JSON.stringify(metrics),
-      finalStatus,
-      processed,
-      runId
-    );
+    runRepository.updateRunCompletion(runId, JSON.stringify(metrics), finalStatus, processed);
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    db.prepare("UPDATE runs SET status = 'failed' WHERE run_id = ?").run(runId);
-    console.error("Run execution failed:", runId, errMsg);
+    runRepository.markRunFailed(runId);
+    logger.error("Run execution failed", { runId, error: errMsg });
   } finally {
-    activeRunControls.delete(runId);
+    runQueue.delete(runId);
   }
 }
 
 export async function PUT(req: NextRequest) {
   try {
-    const body = await req.json();
-    const db = getDb();
-
-    if (!body.run_id) {
-      return NextResponse.json({ error: "run_id is required" }, { status: 400 });
-    }
+    const rateLimited = applyRateLimit(req, { key: "runs:update", maxRequests: 40, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
+    const parsedBody = await parseJsonWithSchema(req, RunUpdateSchema);
+    if (!parsedBody.success) return parsedBody.response;
+    const body = parsedBody.data;
 
     if (body.action === "cancel") {
-      const run = db.prepare("SELECT status FROM runs WHERE run_id = ?").get(body.run_id) as { status?: string } | undefined;
+      const run = runRepository.getRunStatus(body.run_id);
       if (!run) {
         return NextResponse.json({ error: "Run not found" }, { status: 404 });
       }
@@ -348,24 +300,21 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ ok: true, status: run.status || "unknown" });
       }
 
-      const control = activeRunControls.get(body.run_id) || { cancelRequested: false };
-      control.cancelRequested = true;
-      activeRunControls.set(body.run_id, control);
-      db.prepare("UPDATE runs SET status = 'cancelled' WHERE run_id = ?").run(body.run_id);
+      runQueue.requestCancel(body.run_id);
+      runRepository.markRunCancelled(body.run_id);
 
       return NextResponse.json({ ok: true, status: "cancelled" });
     }
 
     if (body.prompt_feedback_log !== undefined) {
-      db.prepare("UPDATE runs SET prompt_feedback_log = ? WHERE run_id = ?").run(
-        JSON.stringify(body.prompt_feedback_log || {}),
-        body.run_id
-      );
+      runRepository.setPromptFeedbackLog(body.run_id, JSON.stringify(body.prompt_feedback_log || {}));
     }
 
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/runs");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to update run", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }

@@ -1,41 +1,57 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
 import { v4 as uuid } from "uuid";
 import crypto from "crypto";
-import fs from "fs/promises";
 import path from "path";
+import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
+import { getRequestContext, logger } from "@/lib/logger";
+import { DatasetDeleteSchema } from "@/lib/schemas";
+import { fileStore } from "@/lib/services";
+import { datasetRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
   try {
     const detectionId = req.nextUrl.searchParams.get("detection_id");
     const datasetId = req.nextUrl.searchParams.get("dataset_id");
-    const db = getDb();
-
+    const search = parseSearch(req.nextUrl.searchParams.get("search"));
+    const hasPagination = req.nextUrl.searchParams.has("page") || req.nextUrl.searchParams.has("page_size");
+    const { page, pageSize } = parsePagination(req, { page: 1, pageSize: 50 });
     if (datasetId) {
-      const dataset = db.prepare("SELECT * FROM datasets WHERE dataset_id = ?").get(datasetId);
-      const items = db.prepare("SELECT * FROM dataset_items WHERE dataset_id = ? ORDER BY image_id").all(datasetId);
-      return NextResponse.json({ dataset, items });
+      const { dataset, items } = datasetRepository.getDatasetWithItems(datasetId);
+      return NextResponse.json({
+        dataset,
+        items: items.map((item: any) => ({
+          ...item,
+          segment_tags: parseSegmentTags(item.segment_tags),
+        })),
+      });
     }
+    const { rows, total } = datasetRepository.listDatasets({
+      detectionId: detectionId || undefined,
+      search,
+      page,
+      pageSize,
+      paginated: hasPagination,
+    });
 
-    let rows;
-    if (detectionId) {
-      rows = db
-        .prepare("SELECT * FROM datasets WHERE detection_id = ? ORDER BY created_at DESC")
-        .all(detectionId);
-    } else {
-      rows = db.prepare("SELECT * FROM datasets ORDER BY created_at DESC").all();
+    if (hasPagination || search) {
+      return NextResponse.json(
+        toPaginatedResponse(rows, { page, pageSize, total })
+      );
     }
 
     return NextResponse.json(rows);
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/datasets");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to fetch datasets", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const db = getDb();
+    const rateLimited = applyRateLimit(req, { key: "datasets:write", maxRequests: 30, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
     const id = uuid();
     const now = new Date().toISOString();
     const contentType = req.headers.get("content-type") || "";
@@ -55,6 +71,7 @@ export async function POST(req: NextRequest) {
       const itemMeta = JSON.parse(metaRaw) as Array<{
         image_id: string;
         image_description?: string;
+        segment_tags?: string[] | string | null;
         ai_assigned_label?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL";
         ai_confidence?: number | null;
         ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
@@ -76,9 +93,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: metaValidation.error }, { status: 400 });
       }
 
-      const uploadDir = path.join(process.cwd(), "public", "uploads", "datasets", id);
-      await fs.mkdir(uploadDir, { recursive: true });
-
       const savedItems: any[] = [];
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -91,14 +105,14 @@ export async function POST(req: NextRequest) {
         const ext = path.extname(file.name || "").toLowerCase() || ".jpg";
         const safeBase = sanitizeName(meta.image_id);
         const safeFilename = `${safeBase}${ext}`;
-        const absPath = path.join(uploadDir, safeFilename);
         const buffer = Buffer.from(await file.arrayBuffer());
-        await fs.writeFile(absPath, buffer);
+        const imageUri = await fileStore.writeDatasetFile(id, safeFilename, buffer);
 
         savedItems.push({
           image_id: meta.image_id,
-          image_uri: `/uploads/datasets/${id}/${safeFilename}`,
+          image_uri: imageUri,
           image_description: meta.image_description || "",
+          segment_tags: normalizeSegmentTags(meta.segment_tags),
           ai_assigned_label: null,
           ai_confidence: null,
           ground_truth_label: gt,
@@ -108,6 +122,126 @@ export async function POST(req: NextRequest) {
       items = savedItems;
     } else {
       const body = await req.json();
+
+      if (body?.action === "create_split_datasets") {
+        const namePrefix = String(body.name_prefix || "").trim();
+        const detectionId = String(body.detection_id || "").trim();
+        const rawItems = Array.isArray(body.items) ? body.items : [];
+        if (!namePrefix || !detectionId) {
+          return NextResponse.json({ error: "name_prefix and detection_id are required" }, { status: 400 });
+        }
+        if (rawItems.length === 0) {
+          return NextResponse.json({ error: "items must be a non-empty array" }, { status: 400 });
+        }
+
+        const normalizeRes = validateAndNormalizeItems(rawItems);
+        if (!normalizeRes.ok) {
+          return NextResponse.json({ error: normalizeRes.error }, { status: 400 });
+        }
+
+        const normalized = normalizeRes.items.map((item) => {
+          const label = String(item.ground_truth_label || "").trim().toUpperCase();
+          return {
+            image_id: String(item.image_id || "").trim(),
+            image_uri: String(item.image_uri || "").trim(),
+            image_description: String(item.image_description || ""),
+            segment_tags: normalizeSegmentTags(item.segment_tags),
+            ground_truth_label:
+              label === "DETECTED" || label === "NOT_DETECTED"
+                ? (label as "DETECTED" | "NOT_DETECTED")
+                : null,
+          };
+        });
+
+        if (normalized.some((item) => !item.image_uri)) {
+          return NextResponse.json({ error: "Each item needs image_uri for auto-splitting." }, { status: 400 });
+        }
+        if (normalized.some((item) => !item.ground_truth_label)) {
+          return NextResponse.json(
+            { error: "Each item needs ground_truth_label (DETECTED|NOT_DETECTED) for auto-splitting." },
+            { status: 400 }
+          );
+        }
+
+        const shuffled = shuffle([...normalized]);
+
+        const detected = shuffled.filter((item) => item.ground_truth_label === "DETECTED");
+        const notDetected = shuffled.filter((item) => item.ground_truth_label === "NOT_DETECTED");
+        const splits = {
+          ITERATION: [] as typeof normalized,
+          GOLDEN: [] as typeof normalized,
+          HELD_OUT_EVAL: [] as typeof normalized,
+        };
+        const order: Array<keyof typeof splits> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
+
+        const allocateByRatios = (bucket: typeof normalized, ratios: [number, number, number] = [0.7, 0.15, 0.15]) => {
+          if (bucket.length === 0) return;
+          const counts = countsByRatios(bucket.length, ratios);
+          const assignments = assignWithSecondarySegmentBalancing(bucket, counts, order);
+          for (const splitKey of order) {
+            splits[splitKey].push(...assignments[splitKey]);
+          }
+        };
+
+        allocateByRatios(detected);
+        allocateByRatios(notDetected);
+
+        const now = new Date().toISOString();
+        const createDatasetWithItems = (
+          splitType: "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL",
+          splitItems: typeof normalized
+        ) => {
+          const datasetId = uuid();
+          const hashContent = JSON.stringify(
+            splitItems.map((i) => ({
+              image_id: i.image_id,
+              label: i.ground_truth_label,
+              segment_tags: i.segment_tags || [],
+            }))
+          );
+          const hash = crypto.createHash("sha256").update(hashContent).digest("hex").slice(0, 16);
+          const splitLabel = splitType === "ITERATION" ? "TRAIN" : splitType === "GOLDEN" ? "TEST" : "EVAL";
+          datasetRepository.createDataset({
+            datasetId,
+            name: `${namePrefix} (${splitLabel})`,
+            detectionId,
+            splitType,
+            datasetHash: hash,
+            size: splitItems.length,
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          datasetRepository.insertDatasetItems(
+            splitItems.map((item) => ({
+              itemId: uuid(),
+              datasetId,
+              imageId: item.image_id,
+              imageUri: item.image_uri,
+              imageDescription: item.image_description || "",
+              segmentTagsJson: JSON.stringify(item.segment_tags || []),
+              groundTruthLabel: item.ground_truth_label,
+            }))
+          );
+          return { dataset_id: datasetId, split_type: splitType, size: splitItems.length, name: `${namePrefix} (${splitLabel})` };
+        };
+
+        const created = [
+          createDatasetWithItems("ITERATION", splits.ITERATION),
+          createDatasetWithItems("GOLDEN", splits.GOLDEN),
+          createDatasetWithItems("HELD_OUT_EVAL", splits.HELD_OUT_EVAL),
+        ];
+
+        return NextResponse.json({
+          created,
+          totals: {
+            total: normalized.length,
+            detected: detected.length,
+            not_detected: notDetected.length,
+          },
+        });
+      }
+
       name = body.name;
       detectionId = body.detection_id;
       splitType = body.split_type;
@@ -120,41 +254,43 @@ export async function POST(req: NextRequest) {
     }
     items = postValidation.items;
 
-    const hashContent = JSON.stringify(items.map((i: any) => ({ image_id: i.image_id, label: i.ground_truth_label })));
+    const hashContent = JSON.stringify(
+      items.map((i: any) => ({
+        image_id: i.image_id,
+        label: i.ground_truth_label,
+        segment_tags: normalizeSegmentTags(i.segment_tags),
+      }))
+    );
     const hash = crypto.createHash("sha256").update(hashContent).digest("hex").slice(0, 16);
 
-    db.prepare(`
-    INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, name, detectionId, splitType, hash, items.length, now, now);
-
-    const insertItem = db.prepare(`
-    INSERT INTO dataset_items (
-      item_id, dataset_id, image_id, image_uri, image_description, ai_assigned_label, ai_confidence, ground_truth_label
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const insertMany = db.transaction((items: any[]) => {
-      for (const item of items) {
-        insertItem.run(
-          uuid(),
-          id,
-          item.image_id,
-          item.image_uri,
-          item.image_description || "",
-          null,
-          null,
-          item.ground_truth_label
-        );
-      }
+    datasetRepository.createDataset({
+      datasetId: id,
+      name,
+      detectionId,
+      splitType,
+      datasetHash: hash,
+      size: items.length,
+      createdAt: now,
+      updatedAt: now,
     });
 
-    insertMany(items);
+    datasetRepository.insertDatasetItems(
+      items.map((item) => ({
+        itemId: uuid(),
+        datasetId: id,
+        imageId: item.image_id,
+        imageUri: item.image_uri,
+        imageDescription: item.image_description || "",
+        segmentTagsJson: JSON.stringify(normalizeSegmentTags(item.segment_tags)),
+        groundTruthLabel: item.ground_truth_label ?? null,
+      }))
+    );
 
     return NextResponse.json({ dataset_id: id });
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/datasets");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to create dataset", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
@@ -165,41 +301,28 @@ function sanitizeName(input: string) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const body = await req.json();
-    const db = getDb();
-    const datasetId = body.dataset_id as string;
+    const rateLimited = applyRateLimit(req, { key: "datasets:delete", maxRequests: 20, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
+    const parsedBody = await parseJsonWithSchema(req, DatasetDeleteSchema);
+    if (!parsedBody.success) return parsedBody.response;
+    const datasetId = parsedBody.data.dataset_id;
 
-    if (!datasetId) {
-      return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
-    }
+    datasetRepository.deleteDatasetCascade(datasetId);
 
-    const deleteTx = db.transaction((targetDatasetId: string) => {
-      const runIds = db
-        .prepare("SELECT run_id FROM runs WHERE dataset_id = ?")
-        .all(targetDatasetId) as Array<{ run_id: string }>;
-
-      for (const r of runIds) {
-        db.prepare("DELETE FROM predictions WHERE run_id = ?").run(r.run_id);
-      }
-      db.prepare("DELETE FROM runs WHERE dataset_id = ?").run(targetDatasetId);
-      db.prepare("DELETE FROM dataset_items WHERE dataset_id = ?").run(targetDatasetId);
-      db.prepare("DELETE FROM datasets WHERE dataset_id = ?").run(targetDatasetId);
-    });
-
-    deleteTx(datasetId);
-
-    const uploadDir = path.join(process.cwd(), "public", "uploads", "datasets", datasetId);
-    await fs.rm(uploadDir, { recursive: true, force: true });
+    await fileStore.removeDatasetUploadDir(datasetId);
 
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/datasets");
     const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Failed to delete dataset", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
 
 export async function PUT(req: NextRequest) {
-  const db = getDb();
+  const rateLimited = applyRateLimit(req, { key: "datasets:update", maxRequests: 45, windowMs: 60_000 });
+  if (rateLimited) return rateLimited;
   const now = new Date().toISOString();
   const contentType = req.headers.get("content-type") || "";
 
@@ -212,9 +335,7 @@ export async function PUT(req: NextRequest) {
       if (!datasetId) {
         return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
       }
-      const dataset = db
-        .prepare("SELECT * FROM datasets WHERE dataset_id = ?")
-        .get(datasetId) as any;
+      const dataset = datasetRepository.getDatasetById(datasetId);
       if (!dataset) {
         return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
       }
@@ -224,6 +345,7 @@ export async function PUT(req: NextRequest) {
       const itemMeta = JSON.parse(metaRaw) as Array<{
         image_id: string;
         image_description?: string;
+        segment_tags?: string[] | string | null;
         ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
       }>;
       if (!Array.isArray(files) || files.length === 0) {
@@ -234,11 +356,7 @@ export async function PUT(req: NextRequest) {
       }
 
       const seen = new Set<string>();
-      const existingIds = new Set<string>(
-        (
-          db.prepare("SELECT image_id FROM dataset_items WHERE dataset_id = ?").all(datasetId) as Array<{ image_id: string }>
-        ).map((r) => String(r.image_id || "").trim())
-      );
+      const existingIds = new Set<string>(datasetRepository.getDatasetImageIds(datasetId).map((v) => String(v || "").trim()));
 
       for (let i = 0; i < itemMeta.length; i++) {
         const imageId = normalizeImageId(itemMeta[i]?.image_id);
@@ -250,41 +368,30 @@ export async function PUT(req: NextRequest) {
         itemMeta[i].image_id = imageId;
       }
 
-      const uploadDir = path.join(process.cwd(), "public", "uploads", "datasets", datasetId);
-      await fs.mkdir(uploadDir, { recursive: true });
-
-      const insertItem = db.prepare(`
-        INSERT INTO dataset_items (
-          item_id, dataset_id, image_id, image_uri, image_description, ai_assigned_label, ai_confidence, ground_truth_label
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const meta = itemMeta[i];
         const ext = path.extname(file.name || "").toLowerCase() || ".jpg";
         const safeBase = sanitizeName(meta.image_id);
         const safeFilename = `${safeBase}${ext}`;
-        const absPath = path.join(uploadDir, safeFilename);
         const buffer = Buffer.from(await file.arrayBuffer());
-        await fs.writeFile(absPath, buffer);
+        const imageUri = await fileStore.writeDatasetFile(datasetId, safeFilename, buffer);
 
-        insertItem.run(
-          uuid(),
+        datasetRepository.insertDatasetItem({
+          itemId: uuid(),
           datasetId,
-          meta.image_id,
-          `/uploads/datasets/${datasetId}/${safeFilename}`,
-          meta.image_description || "",
-          null,
-          null,
-          meta.ground_truth_label === "DETECTED" || meta.ground_truth_label === "NOT_DETECTED"
-            ? meta.ground_truth_label
-            : null
-        );
+          imageId: meta.image_id,
+          imageUri,
+          imageDescription: meta.image_description || "",
+          segmentTagsJson: JSON.stringify(normalizeSegmentTags(meta.segment_tags)),
+          groundTruthLabel:
+            meta.ground_truth_label === "DETECTED" || meta.ground_truth_label === "NOT_DETECTED"
+              ? meta.ground_truth_label
+              : null,
+        });
       }
 
-      refreshDatasetStats(db, datasetId, now);
+      datasetRepository.refreshDatasetStats(datasetId, now);
       return NextResponse.json({ ok: true, added: files.length });
     }
   }
@@ -292,9 +399,7 @@ export async function PUT(req: NextRequest) {
   const body = await req.json();
 
   if (body.item_id) {
-    const existing = db
-      .prepare("SELECT * FROM dataset_items WHERE item_id = ?")
-      .get(body.item_id) as any;
+    const existing = datasetRepository.getDatasetItemById(body.item_id);
     if (!existing) {
       return NextResponse.json({ error: "Dataset item not found" }, { status: 404 });
     }
@@ -304,9 +409,7 @@ export async function PUT(req: NextRequest) {
     if (!nextImageId) {
       return NextResponse.json({ error: "image_id cannot be blank" }, { status: 400 });
     }
-    const duplicate = db
-      .prepare("SELECT item_id FROM dataset_items WHERE dataset_id = ? AND image_id = ? AND item_id != ? LIMIT 1")
-      .get(existing.dataset_id, nextImageId, body.item_id) as { item_id: string } | undefined;
+    const duplicate = datasetRepository.getDuplicateImageItem(existing.dataset_id, nextImageId, body.item_id);
     if (duplicate) {
       return NextResponse.json({ error: `Duplicate image_id: ${nextImageId}` }, { status: 400 });
     }
@@ -315,33 +418,27 @@ export async function PUT(req: NextRequest) {
       Object.prototype.hasOwnProperty.call(body, "ground_truth_label")
         ? body.ground_truth_label
         : existing.ground_truth_label;
+    const nextSegmentTags = Object.prototype.hasOwnProperty.call(body, "segment_tags")
+      ? normalizeSegmentTags(body.segment_tags)
+      : parseSegmentTags(existing.segment_tags);
 
     // If a local upload path is being renamed, rename underlying file too.
     if (typeof body.image_uri === "string" && body.image_uri !== existing.image_uri) {
-      const oldAbs = localUriToAbsPath(existing.image_uri);
-      const requestedAbs = localUriToAbsPath(body.image_uri);
-      if (oldAbs && requestedAbs) {
-        await fs.mkdir(path.dirname(requestedAbs), { recursive: true });
-        await fs.rename(oldAbs, requestedAbs);
-        nextImageUri = absPathToLocalUri(requestedAbs);
-      }
+      nextImageUri = await fileStore.renameLocalUri(existing.image_uri, body.image_uri);
     }
 
-    db.prepare(`
-      UPDATE dataset_items
-      SET image_id = ?, image_uri = ?, image_description = ?, ai_assigned_label = ?, ai_confidence = ?, ground_truth_label = ?
-      WHERE item_id = ?
-    `).run(
-      nextImageId,
-      nextImageUri,
-      nextImageDescription,
-      existing.ai_assigned_label ?? null,
-      existing.ai_confidence ?? null,
-      nextGroundTruth,
-      body.item_id
-    );
+    datasetRepository.updateDatasetItem({
+      itemId: body.item_id,
+      imageId: nextImageId,
+      imageUri: nextImageUri,
+      imageDescription: nextImageDescription,
+      segmentTagsJson: JSON.stringify(nextSegmentTags),
+      aiAssignedLabel: existing.ai_assigned_label ?? null,
+      aiConfidence: existing.ai_confidence ?? null,
+      groundTruthLabel: nextGroundTruth ?? null,
+    });
 
-    refreshDatasetStats(db, existing.dataset_id, now);
+    datasetRepository.refreshDatasetStats(existing.dataset_id, now);
     return NextResponse.json({ ok: true });
   }
 
@@ -349,18 +446,13 @@ export async function PUT(req: NextRequest) {
     if (!body.item_id) {
       return NextResponse.json({ error: "item_id is required" }, { status: 400 });
     }
-    const existing = db
-      .prepare("SELECT * FROM dataset_items WHERE item_id = ?")
-      .get(body.item_id) as any;
+    const existing = datasetRepository.getDatasetItemById(body.item_id);
     if (!existing) {
       return NextResponse.json({ error: "Dataset item not found" }, { status: 404 });
     }
-    db.prepare("DELETE FROM dataset_items WHERE item_id = ?").run(body.item_id);
-    const abs = localUriToAbsPath(existing.image_uri || "");
-    if (abs) {
-      await fs.rm(abs, { force: true });
-    }
-    refreshDatasetStats(db, existing.dataset_id, now);
+    datasetRepository.deleteDatasetItem(body.item_id);
+    await fileStore.removeLocalUri(existing.image_uri || "");
+    datasetRepository.refreshDatasetStats(existing.dataset_id, now);
     return NextResponse.json({ ok: true });
   }
 
@@ -368,53 +460,20 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
   }
 
-  const dataset = db
-    .prepare("SELECT * FROM datasets WHERE dataset_id = ?")
-    .get(body.dataset_id) as any;
+  const dataset = datasetRepository.getDatasetById(body.dataset_id);
   if (!dataset) {
     return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
   }
 
-  db.prepare(`
-    UPDATE datasets
-    SET name = ?, split_type = ?, updated_at = ?
-    WHERE dataset_id = ?
-  `).run(
+  datasetRepository.updateDatasetMeta(
+    body.dataset_id,
     body.name ?? dataset.name,
     body.split_type ?? dataset.split_type,
-    now,
-    body.dataset_id
+    now
   );
 
-  refreshDatasetStats(db, body.dataset_id, now);
+  datasetRepository.refreshDatasetStats(body.dataset_id, now);
   return NextResponse.json({ ok: true });
-}
-
-function refreshDatasetStats(db: any, datasetId: string, now: string) {
-  const items = db
-    .prepare("SELECT image_id, ground_truth_label FROM dataset_items WHERE dataset_id = ? ORDER BY image_id")
-    .all(datasetId) as Array<{ image_id: string; ground_truth_label: string }>;
-  const hash = crypto
-    .createHash("sha256")
-    .update(JSON.stringify(items.map((i) => ({ image_id: i.image_id, label: i.ground_truth_label }))))
-    .digest("hex")
-    .slice(0, 16);
-
-  db.prepare(`
-    UPDATE datasets
-    SET dataset_hash = ?, size = ?, updated_at = ?
-    WHERE dataset_id = ?
-  `).run(hash, items.length, now, datasetId);
-}
-
-function localUriToAbsPath(uri: string): string | null {
-  if (!uri.startsWith("/uploads/datasets/")) return null;
-  return path.join(process.cwd(), "public", uri.replace(/^\//, ""));
-}
-
-function absPathToLocalUri(absPath: string): string {
-  const rel = path.relative(path.join(process.cwd(), "public"), absPath);
-  return `/${rel.split(path.sep).join("/")}`;
 }
 
 function normalizeImageId(value: unknown): string {
@@ -425,6 +484,7 @@ function validateAndNormalizeItemMetas(
   items: Array<{
     image_id: string;
     image_description?: string;
+    segment_tags?: string[] | string | null;
     ai_assigned_label?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL";
     ai_confidence?: number | null;
     ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
@@ -457,4 +517,114 @@ function validateAndNormalizeItems(
     item.image_id = imageId;
   }
   return { ok: true, items };
+}
+
+function countsByRatios(total: number, ratios: [number, number, number]): [number, number, number] {
+  const exact = ratios.map((r) => r * total);
+  const counts = exact.map((v) => Math.floor(v)) as [number, number, number];
+  let remaining = total - counts.reduce((acc, n) => acc + n, 0);
+  const remainders = exact
+    .map((v, idx) => ({ idx, rem: v - Math.floor(v) }))
+    .sort((a, b) => b.rem - a.rem);
+  let k = 0;
+  while (remaining > 0) {
+    counts[remainders[k % remainders.length].idx] += 1;
+    remaining -= 1;
+    k += 1;
+  }
+  return counts;
+}
+
+function assignWithSecondarySegmentBalancing<T extends { segment_tags?: string[] }>(
+  bucket: T[],
+  counts: [number, number, number],
+  order: Array<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL">
+): Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", T[]> {
+  const assignments: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", T[]> = {
+    ITERATION: [],
+    GOLDEN: [],
+    HELD_OUT_EVAL: [],
+  };
+  const remaining = {
+    ITERATION: counts[0],
+    GOLDEN: counts[1],
+    HELD_OUT_EVAL: counts[2],
+  };
+  const segmentCounts: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", Map<string, number>> = {
+    ITERATION: new Map(),
+    GOLDEN: new Map(),
+    HELD_OUT_EVAL: new Map(),
+  };
+
+  const prioritized = [...bucket].sort((a, b) => (b.segment_tags?.length || 0) - (a.segment_tags?.length || 0));
+  for (const item of prioritized) {
+    const tags = normalizeSegmentTags(item.segment_tags);
+    const candidates = order.filter((split) => remaining[split] > 0);
+    if (candidates.length === 0) break;
+
+    let bestSplit = candidates[0];
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const split of candidates) {
+      const cap = Math.max(1, counts[order.indexOf(split)]);
+      const loadPenalty = assignments[split].length / cap;
+      let segmentPenalty = 0;
+      for (const tag of tags) {
+        segmentPenalty += segmentCounts[split].get(tag) || 0;
+      }
+      const score = segmentPenalty + loadPenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        bestSplit = split;
+      }
+    }
+
+    assignments[bestSplit].push(item);
+    remaining[bestSplit] -= 1;
+    for (const tag of tags) {
+      segmentCounts[bestSplit].set(tag, (segmentCounts[bestSplit].get(tag) || 0) + 1);
+    }
+  }
+
+  return assignments;
+}
+
+function shuffle<T>(items: T[]): T[] {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+}
+
+function parseSegmentTags(value: unknown): string[] {
+  if (Array.isArray(value)) return normalizeSegmentTags(value);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return normalizeSegmentTags(parsed);
+    } catch {
+      return normalizeSegmentTags(value);
+    }
+  }
+  return [];
+}
+
+function normalizeSegmentTags(value: unknown): string[] {
+  if (value == null) return [];
+  const rawParts = Array.isArray(value)
+    ? value.map((v) => String(v || ""))
+    : String(value)
+        .split(/[;,|]/g)
+        .map((v) => String(v || ""));
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const part of rawParts) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(clean);
+  }
+  return tags;
 }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, type ChangeEvent } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
+import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import type { Detection, PromptVersion } from "@/types";
 
 const DEFAULT_SYSTEM_PROMPT =
@@ -69,6 +70,7 @@ export function DetectionSetup({
   const [lastHandledCreateTrigger, setLastHandledCreateTrigger] = useState(0);
   const [quickTestFiles, setQuickTestFiles] = useState<Array<{ id: string; file: File; preview: string }>>([]);
   const [quickTesting, setQuickTesting] = useState(false);
+  const [quickTestProgress, setQuickTestProgress] = useState("");
   const [quickTestError, setQuickTestError] = useState("");
   const [quickTestPreviewIndex, setQuickTestPreviewIndex] = useState<number | null>(null);
   const [quickTestResults, setQuickTestResults] = useState<
@@ -93,6 +95,7 @@ export function DetectionSetup({
     description: "",
     label_policy: "",
     decision_rubric: [""],
+    segment_taxonomy: [""],
     metric_thresholds: { primary_metric: "f1" as const, min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
   });
 
@@ -104,11 +107,11 @@ export function DetectionSetup({
     ]);
     setPrompts(await safeJsonArray<PromptVersion>(promptsRes, "prompts"));
     setRuns(await safeJsonArray<any>(runsRes, "runs"));
-  }, [selectedDetection, refreshCounter]);
+  }, [selectedDetection]);
 
   useEffect(() => {
     loadRelated();
-  }, [loadRelated]);
+  }, [loadRelated, refreshCounter]);
 
   useEffect(() => {
     if (prompts.length === 0) {
@@ -171,12 +174,14 @@ export function DetectionSetup({
       return;
     }
     const cleanedRubric = form.decision_rubric.filter((r) => r.trim());
+    const cleanedSegmentTaxonomy = form.segment_taxonomy.map((s) => s.trim()).filter(Boolean);
     const res = await fetch("/api/detections", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...form,
         decision_rubric: cleanedRubric,
+        segment_taxonomy: cleanedSegmentTaxonomy,
       }),
     });
     const data = await safeJsonObject<{ detection_id?: string; error?: string }>(res);
@@ -284,6 +289,7 @@ export function DetectionSetup({
         description: form.description,
         label_policy: form.label_policy,
         decision_rubric: form.decision_rubric.filter((r) => r.trim()),
+        segment_taxonomy: form.segment_taxonomy.map((s) => s.trim()).filter(Boolean),
         metric_thresholds: form.metric_thresholds,
         approved_prompt_version: selectedDetection.approved_prompt_version,
       }),
@@ -374,6 +380,10 @@ export function DetectionSetup({
       description: selectedDetection.description,
       label_policy: selectedDetection.label_policy,
       decision_rubric: selectedDetection.decision_rubric.length > 0 ? selectedDetection.decision_rubric : [""],
+      segment_taxonomy:
+        Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0
+          ? selectedDetection.segment_taxonomy
+          : [""],
       metric_thresholds: selectedDetection.metric_thresholds as any,
     });
     setFormLabelPolicySections(parsedLabelPolicy);
@@ -391,6 +401,7 @@ export function DetectionSetup({
       description: "",
       label_policy: "",
       decision_rubric: [""],
+      segment_taxonomy: [""],
       metric_thresholds: { primary_metric: "f1", min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
     });
     setFormLabelPolicySections({ detected: "", notDetected: "" });
@@ -471,6 +482,7 @@ export function DetectionSetup({
       return [];
     });
     setQuickTestResults([]);
+    setQuickTestProgress("");
     setQuickTestError("");
     setQuickTestPreviewIndex(null);
   };
@@ -492,26 +504,37 @@ export function DetectionSetup({
     }
 
     setQuickTesting(true);
+    setQuickTestProgress("");
     try {
-      const formData = new FormData();
-      formData.append("prompt_version_id", selectedPromptId);
-      formData.append("detection_id", selectedDetection.detection_id);
-      formData.append("api_key", apiKey || "");
-      formData.append("model_override", selectedModel || "");
-      quickTestFiles.forEach((f) => formData.append("files", f.file, f.file.name));
+      const total = quickTestFiles.length;
+      const aggregatedResults: any[] = [];
+      for (let i = 0; i < quickTestFiles.length; i++) {
+        setQuickTestProgress(`Quick Test progress: ${i}/${total} images`);
+        const formData = new FormData();
+        formData.append("prompt_version_id", selectedPromptId);
+        formData.append("detection_id", selectedDetection.detection_id);
+        formData.append("api_key", apiKey || "");
+        formData.append("model_override", selectedModel || "");
+        formData.append("files", quickTestFiles[i].file, quickTestFiles[i].file.name);
 
-      const res = await fetch("/api/runs/quick-test", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await safeJsonObject<{ results?: any[]; error?: string }>(res);
-      if (!res.ok) {
-        throw new Error(data?.error || "Quick Test failed.");
+        const res = await fetch("/api/runs/quick-test", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await safeJsonObject<{ results?: any[]; error?: string }>(res);
+        if (!res.ok) {
+          throw new Error(data?.error || "Quick Test failed.");
+        }
+        if (Array.isArray(data?.results)) {
+          aggregatedResults.push(...data.results);
+        }
       }
-      setQuickTestResults(Array.isArray(data?.results) ? data.results : []);
+      setQuickTestProgress(`Quick Test progress: ${total}/${total} images`);
+      setQuickTestResults(aggregatedResults);
     } catch (error: unknown) {
       setQuickTestError(error instanceof Error ? error.message : "Quick Test failed.");
     } finally {
+      setQuickTestProgress("");
       setQuickTesting(false);
     }
   };
@@ -707,7 +730,13 @@ export function DetectionSetup({
     setPromptEditorDraft(nextDraft);
     setLabelPolicySections(parseLabelPolicySections(nextDraft.prompt_structure.label_policy));
     setDecisionRubricCriteria(parseDecisionRubricCriteria(nextDraft.prompt_structure.decision_rubric));
-  }, [activePromptForTopPanel?.prompt_version_id, selectedDetection?.detection_id, prompts.length]);
+  }, [
+    activePromptForTopPanel,
+    activePromptPolicy,
+    activePromptRubricText,
+    prompts.length,
+    selectedDetection,
+  ]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -924,6 +953,47 @@ export function DetectionSetup({
             )}
           </div>
 
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Segment Taxonomy (optional)</label>
+            <p className="text-[11px] text-gray-500 mb-2">
+              Define reusable image segment tags for dataset review and split balancing.
+            </p>
+            {form.segment_taxonomy.map((segment, index) => (
+              <div key={`segment_${index}`} className="flex gap-2 mb-2">
+                <span className="text-xs text-gray-500 mt-2">{index + 1}.</span>
+                <input
+                  className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm"
+                  value={segment}
+                  onChange={(e) => {
+                    const next = [...form.segment_taxonomy];
+                    next[index] = e.target.value;
+                    setForm({ ...form, segment_taxonomy: next });
+                  }}
+                  placeholder="e.g. daytime, underwater, blurry"
+                />
+                {form.segment_taxonomy.length > 1 && (
+                  <button
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        segment_taxonomy: form.segment_taxonomy.filter((_, i) => i !== index),
+                      })
+                    }
+                    className="text-gray-500 hover:text-red-400 text-xs"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            ))}
+            <button
+              onClick={() => setForm({ ...form, segment_taxonomy: [...form.segment_taxonomy, ""] })}
+              className="text-xs text-blue-400 hover:text-blue-300"
+            >
+              + Add segment option
+            </button>
+          </div>
+
           <details className="border border-gray-700 rounded-lg p-3 bg-gray-900/30">
             <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
               Compiled Prompt Preview (used at run time)
@@ -1019,6 +1089,21 @@ export function DetectionSetup({
             </div>
 
             <p className="text-sm text-gray-400 mb-3">{selectedDetection.description}</p>
+
+            <div className="mb-3">
+              <div className="text-xs text-gray-500 mb-1">Segment Taxonomy</div>
+              {Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedDetection.segment_taxonomy.map((segment) => (
+                    <span key={segment} className="px-2 py-0.5 rounded bg-gray-800 text-gray-300 text-xs border border-gray-700">
+                      {segment}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500">No segment taxonomy configured.</div>
+              )}
+            </div>
 
             <div className="space-y-3 mb-3">
               <details className="px-1 py-1">
@@ -1145,6 +1230,11 @@ export function DetectionSetup({
                   {quickTestError}
                 </div>
               )}
+              {quickTestProgress && (
+                <div className="text-xs text-gray-500 bg-gray-900/40 border border-gray-800 rounded px-3 py-2">
+                  {quickTestProgress}
+                </div>
+              )}
 
               {quickTestFiles.length > 0 && (
                 <div className="max-h-64 overflow-auto border border-gray-800 rounded">
@@ -1250,97 +1340,62 @@ export function DetectionSetup({
                 </div>
               )}
 
-              {quickTestPreviewIndex != null && quickTestFiles[quickTestPreviewIndex] && (
-                <div
-                  className="fixed inset-0 bg-black/80 z-50 overflow-y-auto flex items-start justify-center p-6"
-                  onClick={() => setQuickTestPreviewIndex(null)}
-                >
-                  <div
-                    className="relative z-10 max-w-6xl w-full max-h-[calc(100vh-3rem)] overflow-y-auto my-auto"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="flex items-center justify-between mb-2 text-xs text-gray-300">
-                      <span>{quickTestFiles[quickTestPreviewIndex].file.name}</span>
-                      <span>{quickTestPreviewIndex + 1} / {quickTestFiles.length}</span>
-                    </div>
-                    <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-3">
-                      <div className="bg-gray-900 border border-gray-700 rounded p-2">
-                        <img
-                          src={quickTestFiles[quickTestPreviewIndex].preview}
-                          alt={quickTestFiles[quickTestPreviewIndex].file.name}
-                          className="w-full max-h-[78vh] object-contain rounded bg-gray-900"
-                        />
+              <ImagePreviewModal
+                isOpen={quickTestPreviewIndex != null && !!quickTestFiles[quickTestPreviewIndex || 0]}
+                imageUrl={quickTestPreviewIndex != null ? quickTestFiles[quickTestPreviewIndex]?.preview || "" : ""}
+                imageAlt={quickTestPreviewIndex != null ? quickTestFiles[quickTestPreviewIndex]?.file.name || "Preview" : "Preview"}
+                title="Quick Test Preview"
+                subtitle={quickTestPreviewIndex != null ? quickTestFiles[quickTestPreviewIndex]?.file.name || "" : ""}
+                index={quickTestPreviewIndex ?? 0}
+                total={quickTestFiles.length}
+                onClose={() => setQuickTestPreviewIndex(null)}
+                onPrev={() => setQuickTestPreviewIndex((i) => (i == null ? null : Math.max(0, i - 1)))}
+                onNext={() =>
+                  setQuickTestPreviewIndex((i) => (i == null ? null : Math.min(quickTestFiles.length - 1, i + 1)))
+                }
+                details={
+                  currentQuickPreviewResult ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-500">Prediction:</span>
+                        <span className={`px-1.5 py-0.5 rounded ${quickDecisionClass(currentQuickPreviewResult.predicted_decision)}`}>
+                          {currentQuickPreviewResult.predicted_decision || "PARSE_FAIL"}
+                        </span>
+                        <span className="text-gray-400">
+                          {typeof currentQuickPreviewResult.confidence === "number" ? currentQuickPreviewResult.confidence.toFixed(2) : "—"}
+                        </span>
+                        <span className={currentQuickPreviewResult.parse_ok ? "text-green-400" : "text-red-400"}>
+                          {currentQuickPreviewResult.parse_ok ? "OK" : "FAIL"}
+                        </span>
                       </div>
-                      <div className="bg-gray-900 border border-gray-700 rounded p-3 text-xs space-y-2 overflow-y-auto max-h-[78vh]">
-                        {currentQuickPreviewResult ? (
-                          <>
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-500">Prediction:</span>
-                              <span className={`px-1.5 py-0.5 rounded ${quickDecisionClass(currentQuickPreviewResult.predicted_decision)}`}>
-                                {currentQuickPreviewResult.predicted_decision || "PARSE_FAIL"}
-                              </span>
-                              <span className="text-gray-400">
-                                {typeof currentQuickPreviewResult.confidence === "number"
-                                  ? currentQuickPreviewResult.confidence.toFixed(2)
-                                  : "—"}
-                              </span>
-                              <span className={currentQuickPreviewResult.parse_ok ? "text-green-400" : "text-red-400"}>
-                                {currentQuickPreviewResult.parse_ok ? "OK" : "FAIL"}
-                              </span>
-                            </div>
-                            {typeof currentQuickPreviewResult.inference_runtime_ms === "number" && (
-                              <div>
-                                <span className="text-gray-500">Runtime:</span>{" "}
-                                <span className="text-gray-300">{currentQuickPreviewResult.inference_runtime_ms}ms</span>
-                              </div>
-                            )}
-                            <div>
-                              <div className="text-gray-500 mb-1">Evidence</div>
-                              <div className="whitespace-pre-wrap break-words text-gray-300">
-                                {currentQuickPreviewResult.evidence || "—"}
-                              </div>
-                            </div>
-                            {!currentQuickPreviewResult.parse_ok && (
-                              <div className="space-y-1">
-                                <div><span className="text-gray-500">Parse reason:</span> {currentQuickPreviewResult.parse_error_reason || "Parse failed"}</div>
-                                <div><span className="text-gray-500">Fix suggestion:</span> {currentQuickPreviewResult.parse_fix_suggestion || "Return strict JSON only."}</div>
-                              </div>
-                            )}
-                            <div>
-                              <div className="text-gray-500 mb-1">Model Output</div>
-                              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
-                                {formatQuickModelOutput(currentQuickPreviewResult.raw_response || "")}
-                              </pre>
-                            </div>
-                          </>
-                        ) : (
-                          <div className="text-gray-500">No result available for this image.</div>
-                        )}
+                      {typeof currentQuickPreviewResult.inference_runtime_ms === "number" && (
+                        <div>
+                          <span className="text-gray-500">Runtime:</span>{" "}
+                          <span className="text-gray-300">{currentQuickPreviewResult.inference_runtime_ms}ms</span>
+                        </div>
+                      )}
+                      <div>
+                        <div className="text-gray-500 mb-1">Evidence</div>
+                        <div className="whitespace-pre-wrap break-words text-gray-300">{currentQuickPreviewResult.evidence || "—"}</div>
+                      </div>
+                      {!currentQuickPreviewResult.parse_ok && (
+                        <div className="space-y-1">
+                          <div><span className="text-gray-500">Parse reason:</span> {currentQuickPreviewResult.parse_error_reason || "Parse failed"}</div>
+                          <div><span className="text-gray-500">Fix suggestion:</span> {currentQuickPreviewResult.parse_fix_suggestion || "Return strict JSON only."}</div>
+                        </div>
+                      )}
+                      <div>
+                        <div className="text-gray-500 mb-1">Model Output</div>
+                        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
+                          {formatQuickModelOutput(currentQuickPreviewResult.raw_response || "")}
+                        </pre>
                       </div>
                     </div>
-                    <div className="mt-2 flex justify-between">
-                      <button
-                        onClick={() => setQuickTestPreviewIndex((i) => (i == null ? null : Math.max(0, i - 1)))}
-                        disabled={quickTestPreviewIndex <= 0}
-                        className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
-                      >
-                        Prev (←)
-                      </button>
-                      <button
-                        onClick={() =>
-                          setQuickTestPreviewIndex((i) =>
-                            i == null ? null : Math.min(quickTestFiles.length - 1, i + 1)
-                          )
-                        }
-                        disabled={quickTestPreviewIndex >= quickTestFiles.length - 1}
-                        className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
-                      >
-                        Next (→)
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+                  ) : (
+                    <div className="text-gray-500">No result available for this image.</div>
+                  )
+                }
+              />
             </div>
           </div>
 
@@ -1625,9 +1680,7 @@ function PromptForm({
   );
 
   useEffect(() => {
-    setLabelPolicyParts(
-      parseLabelPolicySections((form.prompt_structure as any).label_policy || detectionLabelPolicy || "")
-    );
+    setLabelPolicyParts(parseLabelPolicySections(detectionLabelPolicy || ""));
   }, [detectionLabelPolicy]);
 
   const updatePromptFormLabelPolicy = (key: "detected" | "notDetected", value: string) => {

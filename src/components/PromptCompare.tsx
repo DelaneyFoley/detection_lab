@@ -3,8 +3,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
+import { DecisionBadge } from "@/components/shared/DecisionBadge";
+import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import type { Detection, PromptVersion, Dataset, MetricsSummary, Run, Prediction } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
+import { fmtPercent, formatModelOutput, getResolvedGroundTruth, safeJsonArray } from "@/lib/ui/review";
 
 export function PromptCompare({ detection }: { detection: Detection }) {
   const { refreshCounter } = useAppStore();
@@ -29,11 +32,11 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     const ds = await safeJsonArray<Dataset>(dRes, "datasets");
     setPrompts(ps);
     setDatasets(ds.filter((d: Dataset) => d.split_type === "GOLDEN" || d.split_type === "ITERATION" || d.split_type === "CUSTOM"));
-  }, [detection.detection_id, refreshCounter]);
+  }, [detection.detection_id]);
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+  }, [loadData, refreshCounter]);
 
   const togglePrompt = (id: string) => {
     setSelectedPromptIds((prev) => {
@@ -109,8 +112,13 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   }, [prompts]);
 
   // Find disagreement cases
-  const disagreements: Map<string, { decisions: Map<string, string | null>; sample: Prediction | null; groundTruth: string | null }> = new Map();
-  if (resultEntries.length >= 2) {
+  const disagreements = useMemo(() => {
+    const next = new Map<
+      string,
+      { decisions: Map<string, string | null>; sample: Prediction | null; groundTruth: string | null }
+    >();
+    if (resultEntries.length < 2) return next;
+
     const allImageIds = new Set<string>();
     for (const [, { predictions }] of resultEntries) {
       for (const p of predictions) allImageIds.add(p.image_id);
@@ -127,14 +135,15 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           resultEntries
             .map(([, { predictions }]) => predictions.find((p) => p.image_id === imageId) || null)
             .find((p) => !!p) || null;
-        disagreements.set(imageId, {
+        next.set(imageId, {
           decisions,
           sample,
           groundTruth: sample ? getResolvedGroundTruth(sample) : null,
         });
       }
     }
-  }
+    return next;
+  }, [resultEntries]);
 
   const getPredictionForImage = useCallback(
     (promptId: string, imageId: string): Prediction | null => {
@@ -354,27 +363,27 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                             {isBase && <span className="text-xs text-gray-500 ml-1">(baseline)</span>}
                           </td>
                           <td className="text-right py-2 px-3">
-                            {fmt(m.accuracy)}
+                            {fmtPercent(m.accuracy)}
                             {!isBase && <Delta value={m.accuracy - base.accuracy} />}
                           </td>
                           <td className="text-right py-2 px-3">
-                            {fmt(m.precision)}
+                            {fmtPercent(m.precision)}
                             {!isBase && <Delta value={m.precision - base.precision} />}
                           </td>
                           <td className="text-right py-2 px-3">
-                            {fmt(m.recall)}
+                            {fmtPercent(m.recall)}
                             {!isBase && <Delta value={m.recall - base.recall} />}
                           </td>
                           <td className="text-right py-2 px-3">
-                            {fmt(m.f1)}
+                            {fmtPercent(m.f1)}
                             {!isBase && <Delta value={m.f1 - base.f1} />}
                           </td>
                           <td className="text-right py-2 px-3">
-                            {fmt(m.prevalence)}
+                            {fmtPercent(m.prevalence)}
                             {!isBase && <Delta value={m.prevalence - base.prevalence} />}
                           </td>
                           <td className="text-right py-2 px-3">
-                            {fmt(m.parse_failure_rate)}
+                            {fmtPercent(m.parse_failure_rate)}
                           </td>
                         </tr>
                       );
@@ -539,153 +548,82 @@ export function PromptCompare({ detection }: { detection: Detection }) {
         </div>
       )}
 
-      {previewState && activePreviewImageIds.length > 0 && activePreviewPrediction && (
-        <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto flex items-start justify-center p-6">
-          <button className="absolute inset-0" onClick={() => setPreviewState(null)} aria-label="Close preview" />
-          <div className="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-xs text-gray-400">
-                {previewState.source === "disagreement" ? "Disagreement Cases" : promptLabelById.get(previewState.promptId) || previewState.promptId.slice(0, 8)} ·{" "}
-                {Math.max(activePreviewIndex, 0) + 1}/{activePreviewImageIds.length} · {activePreviewPrediction.image_id}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
-                  onClick={() => {
-                    if (activePreviewIndex < 0) return;
-                    const nextIndex = Math.max(0, activePreviewIndex - 1);
-                    setPreviewState((prev) =>
-                      prev ? { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId } : prev
-                    );
-                  }}
-                  disabled={activePreviewIndex <= 0}
-                >
-                  Prev
-                </button>
-                <button
-                  className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 rounded"
-                  onClick={() => {
-                    if (activePreviewIndex < 0) return;
-                    const nextIndex = Math.min(activePreviewImageIds.length - 1, activePreviewIndex + 1);
-                    setPreviewState((prev) =>
-                      prev ? { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId } : prev
-                    );
-                  }}
-                  disabled={activePreviewIndex >= activePreviewImageIds.length - 1}
-                >
-                  Next
-                </button>
-              </div>
+      <ImagePreviewModal
+        isOpen={!!previewState && activePreviewImageIds.length > 0 && !!activePreviewPrediction}
+        imageUrl={activePreviewPrediction?.image_uri || ""}
+        imageAlt={activePreviewPrediction?.image_id || "Preview"}
+        title={
+          previewState
+            ? previewState.source === "disagreement"
+              ? "Disagreement Cases"
+              : promptLabelById.get(previewState.promptId) || previewState.promptId.slice(0, 8)
+            : "Prompt Compare"
+        }
+        subtitle={activePreviewPrediction?.image_id || ""}
+        index={Math.max(activePreviewIndex, 0)}
+        total={activePreviewImageIds.length}
+        onClose={() => setPreviewState(null)}
+        onPrev={() => {
+          if (activePreviewIndex < 0) return;
+          const nextIndex = Math.max(0, activePreviewIndex - 1);
+          setPreviewState((prev) => (prev ? { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId } : prev));
+        }}
+        onNext={() => {
+          if (activePreviewIndex < 0) return;
+          const nextIndex = Math.min(activePreviewImageIds.length - 1, activePreviewIndex + 1);
+          setPreviewState((prev) => (prev ? { ...prev, imageId: activePreviewImageIds[nextIndex] || prev.imageId } : prev));
+        }}
+        details={
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500">Ground Truth:</span>
+              <DecisionBadge decision={activeGroundTruth} />
             </div>
-            <div className="overflow-x-auto">
-              <div className="space-y-3 min-w-[980px]">
-                <div className="bg-gray-950 rounded border border-gray-800 p-2">
-                  <img
-                    src={activePreviewPrediction.image_uri}
-                    alt={activePreviewPrediction.image_id}
-                    className="w-full max-h-[56vh] object-contain rounded"
-                  />
-                </div>
-                <div className="bg-gray-950 rounded border border-gray-800 p-3 text-xs space-y-2">
+            <div className="space-y-2">
+              <div className="text-gray-500 mb-1">Outcomes by Version</div>
+              {activePromptOutcomes.map(({ promptId, prediction }) => (
+                <div key={promptId} className="border border-gray-800 rounded p-2 space-y-2">
+                  <div className="text-gray-400">{promptLabelById.get(promptId) || promptId.slice(0, 8)}</div>
                   <div className="flex items-center gap-2">
-                    <span className="text-gray-500">Ground Truth:</span>
-                    <DecisionBadge decision={activeGroundTruth} />
+                    <span className="text-gray-500">Prediction:</span>
+                    <DecisionBadge decision={prediction?.predicted_decision || "PARSE_FAIL"} />
+                    <span className="text-gray-500">{prediction?.confidence != null ? Number(prediction.confidence).toFixed(2) : "—"}</span>
+                    <span className={`${prediction?.parse_ok ? "text-green-400" : "text-red-400"}`}>{prediction?.parse_ok ? "OK" : "FAIL"}</span>
                   </div>
-                  <div className="space-y-2">
-                    <div className="text-gray-500 mb-1">Outcomes by Version</div>
-                    {activePromptOutcomes.map(({ promptId, prediction }) => (
-                      <div key={promptId} className="border border-gray-800 rounded p-2 space-y-2">
-                        <div className="text-gray-400">{promptLabelById.get(promptId) || promptId.slice(0, 8)}</div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-gray-500">Prediction:</span>
-                          <DecisionBadge decision={prediction?.predicted_decision || "PARSE_FAIL"} />
-                          <span className="text-gray-500">
-                            {prediction?.confidence != null ? Number(prediction.confidence).toFixed(2) : "—"}
-                          </span>
-                          <span className={`${prediction?.parse_ok ? "text-green-400" : "text-red-400"}`}>
-                            {prediction?.parse_ok ? "OK" : "FAIL"}
-                          </span>
-                        </div>
-                        <div>
-                          <div className="text-gray-500 mb-1">Evidence</div>
-                          <div className="max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-gray-300">
-                            {prediction?.evidence || "—"}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-gray-500 mb-1">Model Output</div>
-                          <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
-                            {formatModelOutput(prediction?.raw_response || "")}
-                          </pre>
-                        </div>
-                        <div className="space-y-1 text-gray-300">
-                          <div><span className="text-gray-500">Parse:</span> {prediction?.parse_ok ? "OK" : "FAIL"}</div>
-                          {!prediction?.parse_ok && (
-                            <>
-                              <div><span className="text-gray-500">Parse Reason:</span> {prediction?.parse_error_reason || "Parse failed"}</div>
-                              <div><span className="text-gray-500">Fix Suggestion:</span> {prediction?.parse_fix_suggestion || "Return strict JSON only."}</div>
-                            </>
-                          )}
-                        </div>
-                        <div className="space-y-1 text-gray-300">
-                          <div className="text-gray-500">HIL Review</div>
-                          <div>Error tag: {prediction?.error_tag || "—"}</div>
-                          <div className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
-                            Reviewer note: {prediction?.reviewer_note || "—"}
-                          </div>
-                          <div>Corrected at: {prediction?.corrected_at ? new Date(prediction.corrected_at).toLocaleString() : "—"}</div>
-                        </div>
-                      </div>
-                    ))}
+                  <div>
+                    <div className="text-gray-500 mb-1">Evidence</div>
+                    <div className="max-h-20 overflow-y-auto whitespace-pre-wrap break-words text-gray-300">{prediction?.evidence || "—"}</div>
                   </div>
-                  {!activePromptOutcomes.some((x) => x.prediction) && (
-                    <div className="text-gray-500">No prompt outcomes available for this image.</div>
-                  )}
+                  <div>
+                    <div className="text-gray-500 mb-1">Model Output</div>
+                    <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
+                      {formatModelOutput(prediction?.raw_response || "")}
+                    </pre>
+                  </div>
+                  <div className="space-y-1 text-gray-300">
+                    <div><span className="text-gray-500">Parse:</span> {prediction?.parse_ok ? "OK" : "FAIL"}</div>
+                    {!prediction?.parse_ok && (
+                      <>
+                        <div><span className="text-gray-500">Parse Reason:</span> {prediction?.parse_error_reason || "Parse failed"}</div>
+                        <div><span className="text-gray-500">Fix Suggestion:</span> {prediction?.parse_fix_suggestion || "Return strict JSON only."}</div>
+                      </>
+                    )}
+                  </div>
+                  <div className="space-y-1 text-gray-300">
+                    <div className="text-gray-500">HIL Review</div>
+                    <div>Error tag: {prediction?.error_tag || "—"}</div>
+                    <div className="max-h-16 overflow-y-auto whitespace-pre-wrap break-words">Reviewer note: {prediction?.reviewer_note || "—"}</div>
+                    <div>Corrected at: {prediction?.corrected_at ? new Date(prediction.corrected_at).toLocaleString() : "—"}</div>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
+            {!activePromptOutcomes.some((x) => x.prediction) && <div className="text-gray-500">No prompt outcomes available for this image.</div>}
           </div>
-        </div>
-      )}
+        }
+      />
     </div>
   );
-}
-
-function DecisionBadge({ decision }: { decision: string | null }) {
-  if (!decision) return <span className="text-gray-600 text-xs">—</span>;
-  if (decision !== "DETECTED" && decision !== "NOT_DETECTED") {
-    return <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/30 text-red-400">{decision}</span>;
-  }
-  return (
-    <span
-      className={`text-xs px-1.5 py-0.5 rounded ${
-        decision === "DETECTED"
-          ? "bg-purple-900/30 text-purple-300"
-          : "bg-emerald-900/30 text-emerald-300"
-      }`}
-    >
-      {decision}
-    </span>
-  );
-}
-
-function getResolvedGroundTruth(prediction: Prediction): string | null {
-  return prediction.corrected_label || prediction.ground_truth_label || null;
-}
-
-function formatModelOutput(raw: string): string {
-  const text = String(raw || "").trim();
-  if (!text) return "—";
-  let cleaned = text;
-  if (cleaned.startsWith("```")) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
-  }
-  try {
-    const parsed = JSON.parse(cleaned);
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return cleaned;
-  }
 }
 
 function Delta({ value }: { value: number }) {
@@ -698,30 +636,11 @@ function Delta({ value }: { value: number }) {
   );
 }
 
-function fmt(v: number) {
-  return (v * 100).toFixed(1) + "%";
-}
-
 function splitColor(t: string) {
   switch (t) {
     case "GOLDEN": return "bg-yellow-900/30 text-yellow-400";
     case "ITERATION": return "bg-blue-900/30 text-blue-400";
     case "HELD_OUT_EVAL": return "bg-purple-900/30 text-purple-400";
     default: return "bg-gray-800 text-gray-400";
-  }
-}
-
-async function safeJsonArray<T>(res: Response, label: string): Promise<T[]> {
-  const text = await res.text();
-  if (!res.ok) {
-    console.error(`Failed to load ${label}:`, res.status, text.slice(0, 200));
-    return [];
-  }
-  try {
-    const data = JSON.parse(text);
-    return Array.isArray(data) ? (data as T[]) : [];
-  } catch {
-    console.error(`Invalid JSON for ${label}:`, text.slice(0, 200));
-    return [];
   }
 }

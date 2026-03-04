@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getDb } from "@/lib/db";
 import {
   DEFAULT_PROMPT_ASSIST_TEMPLATE,
   REQUIRED_USER_PROMPT_JSON_BLOCK,
   renderPromptAssistTemplate,
 } from "@/lib/adminPrompts";
+import { settingsRepository } from "@/lib/repositories";
 
 function normalizeSpaces(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -38,10 +38,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "request is required" }, { status: 400 });
     }
 
-    const db = getDb();
-    const stored = db
-      .prepare("SELECT value FROM app_settings WHERE key = ?")
-      .get("prompt_assist_template") as { value?: string } | undefined;
+    const stored = settingsRepository.getByKey("prompt_assist_template");
     const template = stored?.value || DEFAULT_PROMPT_ASSIST_TEMPLATE;
     const prompt = renderPromptAssistTemplate(template, requestText.trim());
 

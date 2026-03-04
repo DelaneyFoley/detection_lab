@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getDb } from "@/lib/db";
 import { buildImagePart } from "@/lib/gemini";
+import { datasetRepository } from "@/lib/repositories";
 
 type DescribeRequest = {
   api_key?: string;
@@ -25,31 +25,16 @@ export async function POST(req: NextRequest) {
     }
     if (!datasetId) return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
 
-    const db = getDb();
-    const dataset = db.prepare("SELECT dataset_id FROM datasets WHERE dataset_id = ?").get(datasetId) as
-      | { dataset_id: string }
-      | undefined;
+    const dataset = datasetRepository.getDatasetById(datasetId) as { dataset_id: string } | undefined;
     if (!dataset) return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
 
-    const items = (
-      itemIds.length > 0
-        ? db
-            .prepare(
-              `SELECT item_id, image_id, image_uri, image_description
-               FROM dataset_items
-               WHERE dataset_id = ? AND item_id IN (${itemIds.map(() => "?").join(",")})
-               ORDER BY image_id`
-            )
-            .all(datasetId, ...itemIds)
-        : db
-            .prepare(
-              `SELECT item_id, image_id, image_uri, image_description
-               FROM dataset_items
-               WHERE dataset_id = ?
-               ORDER BY image_id`
-            )
-            .all(datasetId)
-    ) as Array<{ item_id: string; image_id: string; image_uri: string; image_description: string }>;
+    const allItems = datasetRepository.getDatasetWithItems(datasetId).items as Array<{
+      item_id: string;
+      image_id: string;
+      image_uri: string;
+      image_description: string;
+    }>;
+    const items = itemIds.length > 0 ? allItems.filter((item) => itemIds.includes(item.item_id)) : allItems;
 
     if (items.length === 0) return NextResponse.json({ updated: 0, total: 0, items: [] });
 
@@ -67,7 +52,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const updateStmt = db.prepare("UPDATE dataset_items SET image_description = ? WHERE item_id = ?");
     const updatedItems: Array<{ item_id: string; image_id: string; image_description: string }> = [];
 
     for (const item of targetItems) {
@@ -84,7 +68,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (!description) continue;
-      updateStmt.run(description, item.item_id);
+      datasetRepository.updateDatasetItemDescription(item.item_id, description);
       updatedItems.push({
         item_id: item.item_id,
         image_id: item.image_id,
@@ -92,10 +76,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    db.prepare("UPDATE datasets SET updated_at = ? WHERE dataset_id = ?").run(
-      new Date().toISOString(),
-      datasetId
-    );
+    datasetRepository.touchDataset(datasetId, new Date().toISOString());
 
     return NextResponse.json({
       updated: updatedItems.length,

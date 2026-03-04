@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
+import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -21,10 +22,11 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [itemSortBy, setItemSortBy] = useState<"image_id" | "ground_truth_label">("image_id");
   const [itemSortDir, setItemSortDir] = useState<"asc" | "desc">("asc");
   const [describingImages, setDescribingImages] = useState(false);
+  const [describingProgress, setDescribingProgress] = useState("");
   const [appendingImages, setAppendingImages] = useState(false);
   const [appendSelectionCount, setAppendSelectionCount] = useState(0);
 
-  const loadDatasets = async () => {
+  const loadDatasets = useCallback(async () => {
     const res = await fetch("/api/datasets");
     const data = await res.json();
     const rows = Array.isArray(data) ? data : [];
@@ -35,17 +37,23 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     if (selectedDatasetId && !rows.some((d: Dataset) => d.dataset_id === selectedDatasetId)) {
       setSelectedDatasetId(rows[0]?.dataset_id || null);
     }
-  };
+  }, [selectedDatasetId]);
 
-  const loadDatasetItems = async (datasetId: string) => {
+  const loadDatasetItems = useCallback(async (datasetId: string) => {
     const res = await fetch(`/api/datasets?dataset_id=${datasetId}`);
     const data = await res.json();
-    setDatasetItems(Array.isArray(data.items) ? data.items : []);
-  };
+    const items = Array.isArray(data.items) ? data.items : [];
+    setDatasetItems(
+      items.map((item: any) => ({
+        ...item,
+        segment_tags: normalizeSegmentTags(item.segment_tags),
+      }))
+    );
+  }, []);
 
   useEffect(() => {
     loadDatasets();
-  }, [refreshCounter]);
+  }, [loadDatasets, refreshCounter]);
 
   useEffect(() => {
     if (!selectedDatasetId) {
@@ -53,7 +61,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       return;
     }
     loadDatasetItems(selectedDatasetId);
-  }, [selectedDatasetId]);
+  }, [loadDatasetItems, selectedDatasetId]);
 
   const sortedDatasetItems = useMemo(() => {
     const copy = [...datasetItems];
@@ -118,13 +126,18 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   }, [detections]);
 
   const selectedDataset = datasets.find((d) => d.dataset_id === selectedDatasetId) || null;
+  const selectedDetection = detections.find((d) => d.detection_id === selectedDataset?.detection_id) || null;
+  const segmentOptions = useMemo(
+    () => (Array.isArray(selectedDetection?.segment_taxonomy) ? selectedDetection.segment_taxonomy : []),
+    [selectedDetection?.segment_taxonomy]
+  );
 
   useEffect(() => {
     if (!selectedDataset) return;
     setEditingName(selectedDataset.name);
     setEditingSplit(selectedDataset.split_type);
     setIsEditingDetails(false);
-  }, [selectedDataset?.dataset_id]);
+  }, [selectedDataset]);
 
   const saveDatasetMeta = async () => {
     if (!selectedDataset) return;
@@ -160,6 +173,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
             image_uri: item.image_uri,
             image_description: item.image_description || "",
             ground_truth_label: item.ground_truth_label,
+            segment_tags: normalizeSegmentTags(item.segment_tags),
           }),
         });
         if (!itemRes.ok) {
@@ -178,6 +192,16 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     } finally {
       setIsSavingDetails(false);
     }
+  };
+
+  const cancelEditingDetails = async () => {
+    if (!selectedDataset) return;
+    setEditingName(selectedDataset.name);
+    setEditingSplit(selectedDataset.split_type);
+    if (selectedDatasetId) {
+      await loadDatasetItems(selectedDatasetId);
+    }
+    setIsEditingDetails(false);
   };
 
   const updateItemField = (itemId: string, patch: Partial<DatasetItem>) => {
@@ -219,6 +243,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               image_id: sanitizeImageId(base || `image_${Date.now()}`),
               image_description: "",
               ground_truth_label: null,
+              segment_tags: [],
             };
           })
         )
@@ -261,27 +286,43 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const populateDescriptionsWithAi = async () => {
     if (!selectedDatasetId) return;
     setDescribingImages(true);
+    setDescribingProgress("");
     try {
-      const res = await fetch("/api/gemini/describe-dataset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: apiKey,
-          model_override: selectedModel,
-          dataset_id: selectedDatasetId,
-          overwrite: false,
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error || "Failed to generate descriptions");
+      const pendingItemIds = datasetItems
+        .filter((item) => !String(item.image_description || "").trim())
+        .map((item) => item.item_id);
+      if (pendingItemIds.length === 0) {
+        setDescribingProgress("All descriptions already populated.");
+        return;
+      }
+      let updated = 0;
+      for (let i = 0; i < pendingItemIds.length; i++) {
+        setDescribingProgress(`Describing images: ${i}/${pendingItemIds.length}`);
+        const res = await fetch("/api/gemini/describe-dataset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: apiKey,
+            model_override: selectedModel,
+            dataset_id: selectedDatasetId,
+            overwrite: false,
+            item_ids: [pendingItemIds[i]],
+          }),
+        });
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload?.error || "Failed to generate descriptions");
+        updated += Number(payload.updated || 0);
+      }
+      setDescribingProgress(`Describing images: ${pendingItemIds.length}/${pendingItemIds.length}`);
       await loadDatasets();
       await loadDatasetItems(selectedDatasetId);
       triggerRefresh();
-      alert(`Generated ${payload.updated || 0} descriptions.`);
+      alert(`Generated ${updated} descriptions.`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Failed to generate descriptions";
       alert(msg);
     } finally {
+      setDescribingProgress("");
       setDescribingImages(false);
     }
   };
@@ -377,6 +418,15 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               >
                 {isSavingDetails ? "Saving..." : isEditingDetails ? "Save" : "Edit"}
               </button>
+              {isEditingDetails && (
+                <button
+                  onClick={() => void cancelEditingDetails()}
+                  disabled={isSavingDetails}
+                  className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+                >
+                  Cancel
+                </button>
+              )}
               <button
                 onClick={populateDescriptionsWithAi}
                 disabled={describingImages || datasetItems.length === 0}
@@ -392,6 +442,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               </button>
             </div>
           </div>
+          {describingProgress && <div className="text-xs text-gray-500">{describingProgress}</div>}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -475,12 +526,13 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         Ground Truth Label {itemSortBy === "ground_truth_label" ? (itemSortDir === "asc" ? "↑" : "↓") : ""}
                       </button>
                     </th>
+                    <th className="text-left px-2 py-2">Segments</th>
                     {isEditingDetails && <th className="text-right px-2 py-2">Action</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {sortedDatasetItems.map((item, index) => (
-                    <tr key={item.item_id} className="border-b border-gray-900/70">
+                    <tr key={item.item_id} className="border-b border-gray-900/70 align-top">
                       <td className="px-2 py-2 w-44">
                         <img
                           src={item.image_uri}
@@ -532,6 +584,17 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           </div>
                         )}
                       </td>
+                      <td className="px-2 py-2 min-w-[220px]">
+                        {isEditingDetails ? (
+                          <SegmentTagsEditor
+                            value={normalizeSegmentTags(item.segment_tags)}
+                            options={segmentOptions}
+                            onChange={(next) => updateItemField(item.item_id, { segment_tags: next } as Partial<DatasetItem>)}
+                          />
+                        ) : (
+                          <SegmentTagList value={normalizeSegmentTags(item.segment_tags)} />
+                        )}
+                      </td>
                       {isEditingDetails && (
                         <td className="px-2 py-2 text-right">
                           <button
@@ -546,7 +609,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                   ))}
                   {datasetItems.length === 0 && (
                     <tr>
-                      <td colSpan={isEditingDetails ? 5 : 4} className="px-2 py-5 text-center text-gray-500">
+                      <td colSpan={isEditingDetails ? 6 : 5} className="px-2 py-5 text-center text-gray-500">
                         No images in this dataset.
                       </td>
                     </tr>
@@ -558,27 +621,24 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
         </div>
       )}
 
-      {selectedPreviewIndex != null && sortedDatasetItems[selectedPreviewIndex] && (
-        <div
-          className="fixed inset-0 bg-black/80 z-50 overflow-y-auto flex items-start justify-center p-6"
-          onClick={() => setSelectedPreviewIndex(null)}
-        >
-          <div
-            className="w-full max-w-5xl max-h-[calc(100vh-3rem)] bg-gray-900 border border-gray-700 rounded-lg p-4 grid gap-4 overflow-hidden my-auto"
-            style={{ gridTemplateColumns: "minmax(0, 1fr) 340px" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-center">
-              <img
-                src={sortedDatasetItems[selectedPreviewIndex].image_uri}
-                alt={sortedDatasetItems[selectedPreviewIndex].image_id}
-                className="max-h-[72vh] max-w-full rounded-lg border border-gray-700"
-              />
-            </div>
-            <div className="space-y-3 overflow-y-auto pr-1">
-              <div className="text-xs text-gray-500">
-                {selectedPreviewIndex + 1} / {sortedDatasetItems.length} (Use arrow keys to navigate)
-              </div>
+      <ImagePreviewModal
+        isOpen={selectedPreviewIndex != null && !!sortedDatasetItems[selectedPreviewIndex || 0]}
+        imageUrl={selectedPreviewIndex != null ? sortedDatasetItems[selectedPreviewIndex]?.image_uri || "" : ""}
+        imageAlt={selectedPreviewIndex != null ? sortedDatasetItems[selectedPreviewIndex]?.image_id || "Preview" : "Preview"}
+        title="Dataset Preview"
+        subtitle={selectedPreviewIndex != null ? sortedDatasetItems[selectedPreviewIndex]?.image_id || "" : ""}
+        index={selectedPreviewIndex ?? 0}
+        total={sortedDatasetItems.length}
+        onClose={() => setSelectedPreviewIndex(null)}
+        onPrev={() => setSelectedPreviewIndex((prev) => (prev == null ? null : Math.max(0, prev - 1)))}
+        onNext={() =>
+          setSelectedPreviewIndex((prev) =>
+            prev == null ? null : Math.min(sortedDatasetItems.length - 1, prev + 1)
+          )
+        }
+        details={
+          selectedPreviewIndex != null && sortedDatasetItems[selectedPreviewIndex] ? (
+            <div className="space-y-3">
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Image ID</label>
                 {isEditingDetails ? (
@@ -637,10 +697,24 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                   </div>
                 )}
               </div>
+              <div>
+                <label className="text-xs text-gray-400 block mb-1">Segments</label>
+                {isEditingDetails ? (
+                  <SegmentTagsEditor
+                    value={normalizeSegmentTags(sortedDatasetItems[selectedPreviewIndex].segment_tags)}
+                    options={segmentOptions}
+                    onChange={(next) =>
+                      updateItemField(sortedDatasetItems[selectedPreviewIndex].item_id, { segment_tags: next } as Partial<DatasetItem>)
+                    }
+                  />
+                ) : (
+                  <SegmentTagList value={normalizeSegmentTags(sortedDatasetItems[selectedPreviewIndex].segment_tags)} />
+                )}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          ) : null
+        }
+      />
     </div>
   );
 }
@@ -655,16 +729,41 @@ function GlobalDatasetUploadForm({
   const [detectionId, setDetectionId] = useState<string>(detections[0]?.detection_id || "");
   const [name, setName] = useState("");
   const [splitType, setSplitType] = useState<string>("ITERATION");
-  const [mode, setMode] = useState<"json" | "csv" | "files">("files");
+  const [mode, setMode] = useState<"json" | "excel" | "files">("files");
   const [jsonInput, setJsonInput] = useState("");
-  const [csvInput, setCsvInput] = useState("");
-  const [csvFileName, setCsvFileName] = useState("");
+  const [jsonRows, setJsonRows] = useState<
+    Array<{
+      image_id: string;
+      image_url: string;
+      ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+      segment_tags?: string[] | string;
+    }>
+  >([]);
+  const [excelRows, setExcelRows] = useState<
+    Array<{
+      image_id: string;
+      image_url: string;
+      ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+      segment_tags?: string[] | string;
+    }>
+  >([]);
+  const [excelFileName, setExcelFileName] = useState("");
+  const [autoSplit, setAutoSplit] = useState(false);
   const [fileRows, setFileRows] = useState<
-    Array<{ id: string; file: File; preview: string; imageId: string; label: "DETECTED" | "NOT_DETECTED" | "" }>
+    Array<{
+      id: string;
+      file: File;
+      preview: string;
+      imageId: string;
+      label: "DETECTED" | "NOT_DETECTED" | "";
+      segment_tags: string[];
+    }>
   >([]);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const selectedDetection = detections.find((d) => d.detection_id === detectionId) || null;
+  const segmentOptions = Array.isArray(selectedDetection?.segment_taxonomy) ? selectedDetection.segment_taxonomy : [];
 
   useEffect(() => {
     if (!detectionId && detections[0]?.detection_id) {
@@ -687,6 +786,7 @@ function GlobalDatasetUploadForm({
       preview: string;
       imageId: string;
       label: "DETECTED" | "NOT_DETECTED" | "";
+      segment_tags: string[];
     }> = picked.map((file, i) => {
       const base = file.name.replace(/\.[^.]+$/, "");
       return {
@@ -695,6 +795,7 @@ function GlobalDatasetUploadForm({
         preview: URL.createObjectURL(file),
         imageId: sanitizeImageId(base || `image_${i + 1}`),
         label: "",
+        segment_tags: [],
       };
     });
     setFileRows((prev) => [...prev, ...nextRows]);
@@ -741,52 +842,106 @@ function GlobalDatasetUploadForm({
           imageIds.add(imageId);
         }
 
-        const formData = new FormData();
-        formData.append("name", name.trim());
-        formData.append("detection_id", detectionId);
-        formData.append("split_type", splitType);
-        formData.append(
-          "items",
-          JSON.stringify(
+        if (autoSplit) {
+          if (fileRows.some((r) => !r.label)) {
+            setError("Auto-split requires all ground truth labels to be set.");
+            return;
+          }
+          const splitItems = splitRowsForAutoSplit(
             fileRows.map((r) => ({
               image_id: r.imageId.trim(),
-              image_description: "",
-              ground_truth_label: r.label || null,
+              ground_truth_label: r.label as "DETECTED" | "NOT_DETECTED",
+              segment_tags: normalizeSegmentTags(r.segment_tags),
+              file: r.file,
             }))
-          )
-        );
-        fileRows.forEach((r) => formData.append("files", r.file));
-        await fetch("/api/datasets", { method: "POST", body: formData });
-      } else if (mode === "csv") {
-        const items = parseCsvManifest(csvInput).map((row) => ({
+          );
+          const splitDefs: Array<{ key: "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"; label: string }> = [
+            { key: "ITERATION", label: "TRAIN" },
+            { key: "GOLDEN", label: "TEST" },
+            { key: "HELD_OUT_EVAL", label: "EVAL" },
+          ];
+          for (const split of splitDefs) {
+            const items = splitItems[split.key];
+            if (items.length === 0) continue;
+            const formData = new FormData();
+            formData.append("name", `${name.trim()} (${split.label})`);
+            formData.append("detection_id", detectionId);
+            formData.append("split_type", split.key);
+            formData.append(
+              "items",
+              JSON.stringify(
+                items.map((item) => ({
+                  image_id: item.image_id,
+                  image_description: "",
+                  ground_truth_label: item.ground_truth_label,
+                  segment_tags: item.segment_tags,
+                }))
+              )
+            );
+            items.forEach((item) => formData.append("files", item.file));
+            const res = await fetch("/api/datasets", { method: "POST", body: formData });
+            if (!res.ok) {
+              const payload = await res.json().catch(() => null);
+              throw new Error(payload?.error || `Failed to create ${split.label} dataset`);
+            }
+          }
+        } else {
+          const formData = new FormData();
+          formData.append("name", name.trim());
+          formData.append("detection_id", detectionId);
+          formData.append("split_type", splitType);
+          formData.append(
+            "items",
+            JSON.stringify(
+              fileRows.map((r) => ({
+                image_id: r.imageId.trim(),
+                image_description: "",
+                ground_truth_label: r.label || null,
+                segment_tags: normalizeSegmentTags(r.segment_tags),
+              }))
+            )
+          );
+          fileRows.forEach((r) => formData.append("files", r.file));
+          await fetch("/api/datasets", { method: "POST", body: formData });
+        }
+      } else if (mode === "excel") {
+        const items = excelRows.map((row) => ({
           image_id: row.image_id,
           image_uri: row.image_url,
           ground_truth_label: row.ground_truth_label,
+          segment_tags: normalizeSegmentTags(row.segment_tags),
         }));
-        await fetch("/api/datasets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: name.trim(),
-            detection_id: detectionId,
-            split_type: splitType,
-            items,
-          }),
-        });
+        if (autoSplit) {
+          await fetch("/api/datasets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create_split_datasets",
+              name_prefix: name.trim(),
+              detection_id: detectionId,
+              items,
+            }),
+          });
+        } else {
+          await fetch("/api/datasets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: name.trim(),
+              detection_id: detectionId,
+              split_type: splitType,
+              items,
+            }),
+          });
+        }
       } else {
-        const items = JSON.parse(jsonInput);
-        if (!Array.isArray(items) || items.length === 0) {
-          setError("Dataset manifest must be a non-empty JSON array");
-          return;
-        }
-        for (const item of items) {
-          const imageId = String(item.image_id ?? "").trim();
-          if (!imageId || !item.image_uri) {
-            setError("Each item must include image_id and image_uri");
-            return;
-          }
-          item.image_id = imageId;
-        }
+        const sourceRows = jsonRows.length > 0 ? jsonRows : parseJsonManifest(jsonInput);
+        const items = sourceRows.map((row) => ({
+          image_id: row.image_id,
+          image_uri: row.image_url,
+          ground_truth_label: row.ground_truth_label,
+          segment_tags: normalizeSegmentTags(row.segment_tags),
+        }));
         const jsonImageIds = new Set<string>();
         for (const item of items) {
           if (jsonImageIds.has(item.image_id)) {
@@ -802,16 +957,29 @@ function GlobalDatasetUploadForm({
             return;
           }
         }
-        await fetch("/api/datasets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: name.trim(),
-            detection_id: detectionId,
-            split_type: splitType,
-            items,
-          }),
-        });
+        if (autoSplit) {
+          await fetch("/api/datasets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "create_split_datasets",
+              name_prefix: name.trim(),
+              detection_id: detectionId,
+              items,
+            }),
+          });
+        } else {
+          await fetch("/api/datasets", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: name.trim(),
+              detection_id: detectionId,
+              split_type: splitType,
+              items,
+            }),
+          });
+        }
       }
       onUploaded();
     } catch {
@@ -857,7 +1025,6 @@ function GlobalDatasetUploadForm({
             <option value="ITERATION">TRAIN</option>
             <option value="GOLDEN">TEST</option>
             <option value="HELD_OUT_EVAL">EVALUATE</option>
-            <option value="CUSTOM">CUSTOM</option>
           </select>
         </div>
       </div>
@@ -872,10 +1039,10 @@ function GlobalDatasetUploadForm({
         </button>
         <button
           type="button"
-          onClick={() => setMode("csv")}
-          className={`px-3 py-1.5 text-xs rounded ${mode === "csv" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+          onClick={() => setMode("excel")}
+          className={`px-3 py-1.5 text-xs rounded ${mode === "excel" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
         >
-          CSV Manifest
+          Excel Manifest
         </button>
         <button
           type="button"
@@ -887,47 +1054,59 @@ function GlobalDatasetUploadForm({
       </div>
 
       {mode === "json" ? (
-        <textarea
-          className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
-          value={jsonInput}
-          onChange={(e) => setJsonInput(e.target.value)}
-          placeholder={`[
+        <div className="space-y-2">
+          <textarea
+            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
+            value={jsonInput}
+            onChange={(e) => setJsonInput(e.target.value)}
+            placeholder={`[
   { "image_id": "img_001", "image_uri": "https://...", "ground_truth_label": "DETECTED" }
 ]`}
-        />
-      ) : mode === "csv" ? (
+          />
+          <button
+            type="button"
+            className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700"
+            onClick={() => {
+              try {
+                const parsed = parseJsonManifest(jsonInput);
+                setJsonRows(parsed);
+                setError("");
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Invalid JSON");
+              }
+            }}
+          >
+            Load JSON for Review
+          </button>
+        </div>
+      ) : mode === "excel" ? (
         <div className="space-y-2">
           <input
-            id="saved-datasets-csv-input"
+            id="saved-datasets-excel-input"
             type="file"
-            accept=".csv,text/csv"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={async (e) => {
               const file = e.target.files?.[0];
               if (!file) return;
-              const text = await file.text();
-              setCsvInput(text);
-              setCsvFileName(file.name);
+              const parsed = await parseExcelManifest(file);
+              setExcelRows(parsed);
+              setExcelFileName(file.name);
               e.currentTarget.value = "";
             }}
             className="hidden"
           />
           <label
-            htmlFor="saved-datasets-csv-input"
+            htmlFor="saved-datasets-excel-input"
             className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
           >
             Choose Files
           </label>
           <span className="ml-3 text-xs text-gray-500">
-            {csvFileName ? "1 Files Selected" : "Choose Files"}
+            {excelFileName ? "1 Files Selected" : "Choose Files"}
           </span>
-          <textarea
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
-            value={csvInput}
-            onChange={(e) => setCsvInput(e.target.value)}
-            placeholder={`image_id,image_url,ground_truth_label
-img_001,https://example.com/img1.jpg,DETECTED
-img_002,gs://my-bucket/path/img2.jpg,NOT_DETECTED`}
-          />
+          <p className="text-[11px] text-gray-500">
+            Required columns: `image_id`, `image_url`, `ground_truth_label` (label can be DETECTED, NOT_DETECTED, or blank).
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -956,6 +1135,7 @@ img_002,gs://my-bucket/path/img2.jpg,NOT_DETECTED`}
                     <th className="text-left py-2 px-2">Preview</th>
                     <th className="text-left py-2 px-2">image_id</th>
                     <th className="text-left py-2 px-2">Label</th>
+                    <th className="text-left py-2 px-2">Segments</th>
                     <th className="text-right py-2 px-2">Action</th>
                   </tr>
                 </thead>
@@ -998,6 +1178,15 @@ img_002,gs://my-bucket/path/img2.jpg,NOT_DETECTED`}
                           <option value="NOT_DETECTED">NOT_DETECTED</option>
                         </select>
                       </td>
+                      <td className="py-2 px-2 min-w-[220px]">
+                        <SegmentTagsEditor
+                          value={normalizeSegmentTags(row.segment_tags)}
+                          options={segmentOptions}
+                          onChange={(next) =>
+                            setFileRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, segment_tags: next } : r)))
+                          }
+                        />
+                      </td>
                       <td className="py-2 px-2 text-right">
                         <button onClick={() => removeFileRow(row.id)} className="text-red-400 hover:text-red-300">
                           Remove
@@ -1012,7 +1201,78 @@ img_002,gs://my-bucket/path/img2.jpg,NOT_DETECTED`}
         </div>
       )}
 
+      {(mode === "excel" ? excelRows.length > 0 : mode === "json" ? jsonRows.length > 0 : false) && (
+        <div className="max-h-72 overflow-auto border border-gray-800 rounded">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-gray-900/90">
+              <tr className="text-gray-500 border-b border-gray-800">
+                <th className="text-left py-2 px-2">Image ID</th>
+                <th className="text-left py-2 px-2">Image URL</th>
+                <th className="text-left py-2 px-2">Ground Truth</th>
+                <th className="text-left py-2 px-2">Segments</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(mode === "excel" ? excelRows : jsonRows).map((row, idx) => (
+                <tr key={`${row.image_id}_${idx}`} className="border-b border-gray-900/70 align-top">
+                  <td className="py-2 px-2 font-mono text-gray-300">{row.image_id}</td>
+                  <td className="py-2 px-2 text-gray-400 max-w-[320px] truncate" title={row.image_url}>
+                    {row.image_url}
+                  </td>
+                  <td className="py-2 px-2">
+                    <select
+                      className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                      value={row.ground_truth_label || ""}
+                      onChange={(e) => {
+                        const nextLabel = (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null;
+                        if (mode === "excel") {
+                          setExcelRows((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, ground_truth_label: nextLabel } : r))
+                          );
+                        } else {
+                          setJsonRows((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, ground_truth_label: nextLabel } : r))
+                          );
+                        }
+                      }}
+                    >
+                      <option value="">UNSET</option>
+                      <option value="DETECTED">DETECTED</option>
+                      <option value="NOT_DETECTED">NOT_DETECTED</option>
+                    </select>
+                  </td>
+                  <td className="py-2 px-2 min-w-[220px]">
+                    <SegmentTagsEditor
+                      value={normalizeSegmentTags(row.segment_tags)}
+                      options={segmentOptions}
+                      onChange={(next) => {
+                        if (mode === "excel") {
+                          setExcelRows((prev) => prev.map((r, i) => (i === idx ? { ...r, segment_tags: next } : r)));
+                        } else {
+                          setJsonRows((prev) => prev.map((r, i) => (i === idx ? { ...r, segment_tags: next } : r)));
+                        }
+                      }}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {error && <div className="text-xs text-red-400">{error}</div>}
+
+      {(mode === "excel" || mode === "json" || mode === "files") && (
+        <label className="flex items-center gap-2 text-xs text-gray-400">
+          <input
+            type="checkbox"
+            checked={autoSplit}
+            onChange={(e) => setAutoSplit(e.target.checked)}
+          />
+          Auto-split into TRAIN/TEST/EVAL datasets (label stratification + segment balancing; requires labels)
+        </label>
+      )}
 
       <button
         onClick={handleUpload}
@@ -1022,18 +1282,18 @@ img_002,gs://my-bucket/path/img2.jpg,NOT_DETECTED`}
         {uploading ? "Uploading..." : "Upload Dataset"}
       </button>
 
-      {expandedIndex != null && fileRows[expandedIndex] && (
-        <div className="fixed inset-0 z-50 bg-black/80 overflow-y-auto flex items-start justify-center p-6">
-          <button className="absolute inset-0" onClick={() => setExpandedIndex(null)} aria-label="Close preview" />
-          <div className="relative z-10 w-full max-w-5xl max-h-[calc(100vh-3rem)] overflow-y-auto my-auto">
-            <img
-              src={fileRows[expandedIndex].preview}
-              alt={fileRows[expandedIndex].file.name}
-              className="w-full max-h-[75vh] object-contain rounded border border-gray-700 bg-gray-900"
-            />
-          </div>
-        </div>
-      )}
+      <ImagePreviewModal
+        isOpen={expandedIndex != null && !!fileRows[expandedIndex || 0]}
+        imageUrl={expandedIndex != null ? fileRows[expandedIndex]?.preview || "" : ""}
+        imageAlt={expandedIndex != null ? fileRows[expandedIndex]?.file.name || "Preview" : "Preview"}
+        title="Upload Preview"
+        subtitle={expandedIndex != null ? fileRows[expandedIndex]?.file.name || "" : ""}
+        index={expandedIndex ?? 0}
+        total={fileRows.length}
+        onClose={() => setExpandedIndex(null)}
+        onPrev={() => setExpandedIndex((i) => (i == null ? null : Math.max(0, i - 1)))}
+        onNext={() => setExpandedIndex((i) => (i == null ? null : Math.min(fileRows.length - 1, i + 1)))}
+      />
     </div>
   );
 }
@@ -1055,53 +1315,72 @@ function validateDatasetItemImageIds(
   return { ok: true };
 }
 
-function parseCsvManifest(input: string): Array<{
+async function parseExcelManifest(file: File): Promise<Array<{
   image_id: string;
   image_url: string;
   ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  segment_tags?: string[] | string;
+}>> {
+  const xlsx = await import("xlsx");
+  const buffer = await file.arrayBuffer();
+  const workbook = xlsx.read(buffer, { type: "array" });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) throw new Error("Excel file has no sheets.");
+  const sheet = workbook.Sheets[firstSheetName];
+  const rawRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  return normalizeManifestRows(rawRows, "Excel");
+}
+
+function parseJsonManifest(input: string): Array<{
+  image_id: string;
+  image_url: string;
+  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  segment_tags?: string[] | string;
 }> {
-  const normalized = String(input || "").replace(/\r\n/g, "\n").trim();
-  if (!normalized) {
-    throw new Error("CSV is empty.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(input || ""));
+  } catch {
+    throw new Error("Invalid JSON.");
   }
-
-  const lines = normalized.split("\n").filter((line) => line.trim());
-  if (lines.length < 2) {
-    throw new Error("CSV requires a header and at least one data row.");
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("JSON must be a non-empty array.");
   }
+  return normalizeManifestRows(parsed as Array<Record<string, unknown>>, "JSON");
+}
 
-  const headers = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
-  const expected = ["image_id", "image_url", "ground_truth_label"];
-  const matchesHeader = headers.length === expected.length && headers.every((h, i) => h === expected[i]);
-  if (!matchesHeader) {
-    throw new Error("CSV header must be exactly: image_id,image_url,ground_truth_label");
-  }
-
+function normalizeManifestRows(
+  rowsInput: Array<Record<string, unknown>>,
+  sourceLabel: string
+): Array<{
+  image_id: string;
+  image_url: string;
+  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  segment_tags?: string[] | string;
+}> {
   const rows: Array<{
     image_id: string;
     image_url: string;
     ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+    segment_tags?: string[] | string;
   }> = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCsvLine(lines[i]);
-    if (cols.length === 1 && !cols[0].trim()) continue;
-    if (cols.length !== 3) {
-      throw new Error(`CSV row ${i + 1} must have exactly 3 columns.`);
-    }
-    const imageId = sanitizeImageId(cols[0]);
-    const imageUrl = cols[1].trim();
-    const rawLabel = cols[2].trim().toUpperCase();
+  for (let i = 0; i < rowsInput.length; i++) {
+    const row = rowsInput[i] || {};
+    const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
+    const imageUrl = String(row.image_url || row.image_uri || row.imageUri || "").trim();
+    const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || "").trim().toUpperCase();
+    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.segments ?? "") as string[] | string;
     if (!imageId) {
-      throw new Error(`CSV row ${i + 1} has blank image_id.`);
+      throw new Error(`${sourceLabel} row ${i + 1} has blank image_id.`);
     }
     if (!imageUrl) {
-      throw new Error(`CSV row ${i + 1} has blank image_url.`);
+      throw new Error(`${sourceLabel} row ${i + 1} has blank image_url/image_uri.`);
     }
     let label: "DETECTED" | "NOT_DETECTED" | null = null;
     if (rawLabel) {
       if (rawLabel !== "DETECTED" && rawLabel !== "NOT_DETECTED") {
-        throw new Error(`CSV row ${i + 1} has invalid ground_truth_label: ${cols[2]}.`);
+        throw new Error(`${sourceLabel} row ${i + 1} has invalid ground_truth_label: ${rawLabel}.`);
       }
       label = rawLabel as "DETECTED" | "NOT_DETECTED";
     }
@@ -1109,36 +1388,186 @@ function parseCsvManifest(input: string): Array<{
       image_id: imageId,
       image_url: imageUrl,
       ground_truth_label: label,
+      segment_tags: segmentTags,
     });
   }
 
   return rows;
 }
 
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (ch === "," && !inQuotes) {
-      out.push(cur.trim());
-      cur = "";
-      continue;
-    }
-    cur += ch;
+function normalizeSegmentTags(value: unknown): string[] {
+  if (value == null) return [];
+  const rawParts = Array.isArray(value)
+    ? value.map((v) => String(v || ""))
+    : String(value)
+        .split(/[;,|]/g)
+        .map((v) => String(v || ""));
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const part of rawParts) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(clean);
   }
-  out.push(cur.trim());
-  return out;
+  return tags;
+}
+
+function SegmentTagList({ value }: { value: string[] }) {
+  if (!value.length) return <span className="text-gray-500 text-[11px]">No segments</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {value.map((tag) => (
+        <span key={tag} className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SegmentTagsEditor({
+  value,
+  options,
+  onChange,
+}: {
+  value: string[];
+  options: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [customTag, setCustomTag] = useState("");
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
+        {value.length === 0 && <span className="text-gray-500 text-[11px]">No segments</span>}
+        {value.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+            {tag}
+            <button
+              type="button"
+              className="text-gray-400 hover:text-red-300"
+              onClick={() => onChange(value.filter((v) => v !== tag))}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <select
+          className="bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+          value=""
+          onChange={(e) => {
+            const next = e.target.value;
+            if (!next) return;
+            if (!value.includes(next)) onChange([...value, next]);
+          }}
+        >
+          <option value="">+ Taxonomy tag</option>
+          {options.filter((option) => !value.includes(option)).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <input
+          className="w-24 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+          placeholder="Custom"
+          value={customTag}
+          onChange={(e) => setCustomTag(e.target.value)}
+        />
+        <button
+          type="button"
+          className="px-1.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700"
+          onClick={() => {
+            const clean = customTag.trim();
+            if (!clean) return;
+            if (!value.includes(clean)) onChange([...value, clean]);
+            setCustomTag("");
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function splitRowsForAutoSplit<T extends { ground_truth_label: "DETECTED" | "NOT_DETECTED"; segment_tags?: string[] }>(
+  rows: T[]
+): Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", T[]> {
+  const order: Array<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
+  const splits: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", T[]> = {
+    ITERATION: [],
+    GOLDEN: [],
+    HELD_OUT_EVAL: [],
+  };
+  const shuffle = (items: T[]) => {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+  const countsByRatios = (total: number, ratios: [number, number, number] = [0.7, 0.15, 0.15]) => {
+    const exact = ratios.map((r) => r * total);
+    const counts = exact.map((v) => Math.floor(v)) as [number, number, number];
+    let remaining = total - counts.reduce((acc, n) => acc + n, 0);
+    const remainders = exact
+      .map((v, idx) => ({ idx, rem: v - Math.floor(v) }))
+      .sort((a, b) => b.rem - a.rem);
+    let k = 0;
+    while (remaining > 0) {
+      counts[remainders[k % remainders.length].idx] += 1;
+      remaining -= 1;
+      k += 1;
+    }
+    return counts;
+  };
+  const allocate = (bucket: T[]) => {
+    if (bucket.length === 0) return;
+    const counts = countsByRatios(bucket.length);
+    const assigned: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", number> = {
+      ITERATION: 0,
+      GOLDEN: 0,
+      HELD_OUT_EVAL: 0,
+    };
+    const segmentCounts: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", Map<string, number>> = {
+      ITERATION: new Map(),
+      GOLDEN: new Map(),
+      HELD_OUT_EVAL: new Map(),
+    };
+    const prioritized = [...bucket].sort((a, b) => (b.segment_tags?.length || 0) - (a.segment_tags?.length || 0));
+    for (const row of prioritized) {
+      const candidates = order.filter((split) => assigned[split] < counts[order.indexOf(split)]);
+      if (!candidates.length) break;
+      let best = candidates[0];
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const split of candidates) {
+        const cap = Math.max(1, counts[order.indexOf(split)]);
+        const loadPenalty = assigned[split] / cap;
+        let segPenalty = 0;
+        for (const tag of row.segment_tags || []) segPenalty += segmentCounts[split].get(tag) || 0;
+        const score = segPenalty + loadPenalty;
+        if (score < bestScore) {
+          bestScore = score;
+          best = split;
+        }
+      }
+      splits[best].push(row);
+      assigned[best] += 1;
+      for (const tag of row.segment_tags || []) {
+        segmentCounts[best].set(tag, (segmentCounts[best].get(tag) || 0) + 1);
+      }
+    }
+  };
+  allocate(shuffle(rows.filter((r) => r.ground_truth_label === "DETECTED")));
+  allocate(shuffle(rows.filter((r) => r.ground_truth_label === "NOT_DETECTED")));
+  return splits;
 }
 
 function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {

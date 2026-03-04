@@ -22,11 +22,11 @@ export function DatasetManager({ detection }: { detection: Detection }) {
     const res = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
     const data = await res.json();
     setDatasets(data);
-  }, [detection.detection_id, refreshCounter]);
+  }, [detection.detection_id]);
 
   useEffect(() => {
     loadDatasets();
-  }, [loadDatasets]);
+  }, [loadDatasets, refreshCounter]);
 
   const loadDatasetItems = useCallback(async () => {
     if (!selectedDatasetId) {

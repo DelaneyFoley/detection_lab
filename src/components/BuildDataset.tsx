@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection, PromptVersion } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
+import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 
 type BuildRow = {
   id: string;
@@ -11,6 +12,7 @@ type BuildRow = {
   preview: string;
   imageId: string;
   groundTruthLabel: "DETECTED" | "NOT_DETECTED" | null;
+  segmentTags: string[];
   aiAssignedLabel?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL" | "";
   aiConfidence?: number | null;
   aiDescription?: string;
@@ -26,10 +28,12 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [selectedExistingDatasetId, setSelectedExistingDatasetId] = useState("");
 
   const [datasetName, setDatasetName] = useState("");
-  const [splitType, setSplitType] = useState<"ITERATION" | "CUSTOM">("ITERATION");
+  const [splitType, setSplitType] = useState<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL">("ITERATION");
   const [rows, setRows] = useState<BuildRow[]>([]);
-  const [buildInputMode, setBuildInputMode] = useState<"files" | "csv">("files");
-  const [csvFileName, setCsvFileName] = useState("");
+  const [buildInputMode, setBuildInputMode] = useState<"files" | "excel" | "json">("files");
+  const [excelFileName, setExcelFileName] = useState("");
+  const [jsonInput, setJsonInput] = useState("");
+  const [autoSplit, setAutoSplit] = useState(false);
 
   const [building, setBuilding] = useState(false);
   const [buildMode, setBuildMode] = useState<"save" | "run" | null>(null);
@@ -38,6 +42,12 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [validationError, setValidationError] = useState("");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelingRun, setCancelingRun] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+
+  const segmentOptions = useMemo(() => {
+    if (!Array.isArray(detection.segment_taxonomy)) return [];
+    return detection.segment_taxonomy.filter(Boolean);
+  }, [detection.segment_taxonomy]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -45,14 +55,24 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         fetch(`/api/prompts?detection_id=${detection.detection_id}`),
         fetch(`/api/datasets?detection_id=${detection.detection_id}`),
       ]);
-      const promptRows = (await promptsRes.json()) as PromptVersion[];
-      const datasetRows = (await datasetsRes.json()) as Dataset[];
-      setPrompts(Array.isArray(promptRows) ? promptRows : []);
-      setDatasets(Array.isArray(datasetRows) ? datasetRows : []);
-      if (Array.isArray(promptRows) && promptRows[0]?.prompt_version_id) {
+      const promptPayload = await promptsRes.json();
+      const datasetPayload = await datasetsRes.json();
+      const promptRows = Array.isArray(promptPayload)
+        ? (promptPayload as PromptVersion[])
+        : Array.isArray(promptPayload?.items)
+          ? (promptPayload.items as PromptVersion[])
+          : [];
+      const datasetRows = Array.isArray(datasetPayload)
+        ? (datasetPayload as Dataset[])
+        : Array.isArray(datasetPayload?.items)
+          ? (datasetPayload.items as Dataset[])
+          : [];
+      setPrompts(promptRows);
+      setDatasets(datasetRows);
+      if (promptRows[0]?.prompt_version_id) {
         setSelectedPromptId((prev) => prev || promptRows[0].prompt_version_id);
       }
-      if (Array.isArray(datasetRows) && datasetRows[0]?.dataset_id) {
+      if (datasetRows[0]?.dataset_id) {
         setSelectedExistingDatasetId((prev) => prev || datasetRows[0].dataset_id);
       }
     };
@@ -71,6 +91,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           preview: item.image_uri,
           imageId: item.image_id,
           groundTruthLabel: item.ground_truth_label ?? null,
+          segmentTags: normalizeSegmentTags(item.segment_tags),
           aiAssignedLabel: "",
           aiConfidence: null,
           aiDescription: "",
@@ -91,6 +112,17 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     };
   }, [rows]);
 
+  useEffect(() => {
+    if (previewIndex == null) return;
+    if (rows.length === 0) {
+      setPreviewIndex(null);
+      return;
+    }
+    if (previewIndex > rows.length - 1) {
+      setPreviewIndex(rows.length - 1);
+    }
+  }, [previewIndex, rows.length]);
+
   const canSave = useMemo(
     () => mode === "build" && rows.length > 0 && datasetName.trim().length > 0 && validateImageIds(rows).ok,
     [mode, rows, datasetName]
@@ -99,10 +131,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     () => !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
     [selectedPromptId, mode, selectedExistingDatasetId, canSave]
   );
-  const selectedBuildFileCount = useMemo(
-    () => rows.filter((r) => !!r.file).length,
-    [rows]
-  );
+  const selectedBuildFileCount = useMemo(() => rows.filter((r) => !!r.file).length, [rows]);
 
   const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files || []);
@@ -115,6 +144,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         preview: URL.createObjectURL(file),
         imageId: sanitizeImageId(base || `image_${i + 1}`),
         groundTruthLabel: null,
+        segmentTags: [],
         aiAssignedLabel: "" as const,
         aiConfidence: null,
         aiDescription: "",
@@ -125,30 +155,52 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     event.currentTarget.value = "";
   };
 
-  const onPickCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickExcelFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
-      const parsed = parseCsvManifest(text);
+      const parsed = await parseExcelManifest(file);
       const mapped: BuildRow[] = parsed.map((row, i) => ({
-        id: `${Date.now()}_csv_${i}_${row.image_id}`,
+        id: `${Date.now()}_xlsx_${i}_${row.image_id}`,
         preview: row.image_url,
         imageId: row.image_id,
         groundTruthLabel: row.ground_truth_label,
+        segmentTags: normalizeSegmentTags(row.segment_tags),
         aiAssignedLabel: "",
         aiConfidence: null,
         aiDescription: "",
       }));
       setRows(mapped);
-      setCsvFileName(file.name);
+      setExcelFileName(file.name);
       setValidationError("");
       setStatus(`Loaded ${mapped.length} rows from ${file.name}`);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Failed to parse CSV";
+      const msg = error instanceof Error ? error.message : "Failed to parse Excel";
       setValidationError(msg);
     } finally {
       event.currentTarget.value = "";
+    }
+  };
+
+  const loadFromJsonInput = () => {
+    try {
+      const parsed = parseJsonManifest(jsonInput);
+      const mapped: BuildRow[] = parsed.map((row, i) => ({
+        id: `${Date.now()}_json_${i}_${row.image_id}`,
+        preview: row.image_url,
+        imageId: row.image_id,
+        groundTruthLabel: row.ground_truth_label,
+        segmentTags: normalizeSegmentTags(row.segment_tags),
+        aiAssignedLabel: "",
+        aiConfidence: null,
+        aiDescription: "",
+      }));
+      setRows(mapped);
+      setValidationError("");
+      setStatus(`Loaded ${mapped.length} rows from JSON.`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to parse JSON";
+      setValidationError(msg);
     }
   };
 
@@ -159,6 +211,10 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       return prev.filter((r) => r.id !== id);
     });
     setValidationError("");
+  };
+
+  const updateRow = (id: string, patch: Partial<BuildRow>) => {
+    setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   };
 
   const createDatasetOnly = async () => {
@@ -180,6 +236,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                 image_id: r.imageId.trim(),
                 image_description: "",
                 ground_truth_label: r.groundTruthLabel,
+                segment_tags: r.segmentTags,
               }))
             )
           );
@@ -200,6 +257,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               image_uri: r.preview,
               image_description: "",
               ground_truth_label: r.groundTruthLabel,
+              segment_tags: r.segmentTags,
             })),
           }),
         });
@@ -212,6 +270,85 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setBuiltDatasetId(datasetId);
     triggerRefresh();
     return datasetId;
+  };
+
+  const createSplitDatasets = async () => {
+    const validation = validateImageIds(rows);
+    if (!validation.ok) throw new Error(validation.error);
+    if (rows.some((r) => !r.groundTruthLabel)) {
+      throw new Error("Auto-split requires ground_truth_label for every row.");
+    }
+    const hasLocalFiles = rows.some((r) => !!r.file);
+    setStatus("Creating TRAIN/TEST/EVAL datasets...");
+
+    const splitRows = splitRowsForAutoSplit(rows);
+    if (!hasLocalFiles) {
+      const res = await fetch("/api/datasets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create_split_datasets",
+          detection_id: detection.detection_id,
+          name_prefix: datasetName.trim(),
+          items: rows.map((r) => ({
+            image_id: r.imageId.trim(),
+            image_uri: r.preview,
+            ground_truth_label: r.groundTruthLabel,
+            segment_tags: r.segmentTags,
+          })),
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload?.error || "Failed to create split datasets");
+      }
+      triggerRefresh();
+      setStatus(
+        `Created split datasets: TRAIN=${payload?.created?.[0]?.size || 0}, TEST=${payload?.created?.[1]?.size || 0}, EVAL=${payload?.created?.[2]?.size || 0}.`
+      );
+      return;
+    }
+
+    const splitDefinitions: Array<{ key: "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"; label: string }> = [
+      { key: "ITERATION", label: "TRAIN" },
+      { key: "GOLDEN", label: "TEST" },
+      { key: "HELD_OUT_EVAL", label: "EVAL" },
+    ];
+
+    for (const split of splitDefinitions) {
+      const itemsForSplit = splitRows[split.key];
+      if (itemsForSplit.length === 0) continue;
+      const formData = new FormData();
+      formData.append("name", `${datasetName.trim()} (${split.label})`);
+      formData.append("detection_id", detection.detection_id);
+      formData.append("split_type", split.key);
+      formData.append(
+        "items",
+        JSON.stringify(
+          itemsForSplit.map((r) => ({
+            image_id: r.imageId.trim(),
+            image_description: "",
+            ground_truth_label: r.groundTruthLabel,
+            segment_tags: r.segmentTags,
+          }))
+        )
+      );
+      for (const row of itemsForSplit) {
+        if (!row.file) throw new Error("Auto-split with files requires file-backed rows.");
+        formData.append("files", row.file);
+      }
+
+      const res = await fetch("/api/datasets", { method: "POST", body: formData });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(payload?.error || `Failed to create ${split.label} dataset`);
+      }
+    }
+
+    triggerRefresh();
+    setStatus(
+      `Created split datasets: TRAIN=${splitRows.ITERATION.length}, TEST=${splitRows.GOLDEN.length}, EVAL=${splitRows.HELD_OUT_EVAL.length}.`
+    );
   };
 
   const runOnDataset = async (datasetId: string) => {
@@ -252,8 +389,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           p?.parse_ok && (p?.predicted_decision === "DETECTED" || p?.predicted_decision === "NOT_DETECTED")
             ? p.predicted_decision
             : p
-            ? "PARSE_FAIL"
-            : "";
+              ? "PARSE_FAIL"
+              : "";
         return {
           ...r,
           aiAssignedLabel,
@@ -302,10 +439,13 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setSplitType("ITERATION");
     setRows([]);
     setBuildInputMode("files");
-    setCsvFileName("");
+    setExcelFileName("");
+    setJsonInput("");
+    setAutoSplit(false);
     setBuiltDatasetId(null);
     setStatus("");
     setValidationError("");
+    setPreviewIndex(null);
   };
 
   const saveDataset = async () => {
@@ -320,8 +460,12 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setBuildMode("save");
     setBuiltDatasetId(null);
     try {
-      await createDatasetOnly();
-      setStatus("Dataset saved.");
+      if (autoSplit) {
+        await createSplitDatasets();
+      } else {
+        await createDatasetOnly();
+        setStatus("Dataset saved.");
+      }
     } catch (error) {
       setStatus(`Error: ${error instanceof Error ? error.message : "Save failed"}`);
     } finally {
@@ -331,6 +475,10 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   };
 
   const runDataset = async () => {
+    if (autoSplit) {
+      setValidationError("Run is disabled for auto-split mode. Create split datasets first, then run from another tab.");
+      return;
+    }
     if (!canRun) return;
     const validation = validateImageIds(rows);
     if (mode === "build" && !validation.ok) {
@@ -357,11 +505,13 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     }
   };
 
+  const previewRow = previewIndex != null ? rows[previewIndex] : null;
+
   return (
     <div className="max-w-6xl mx-auto space-y-4">
       <h2 className="text-xl font-semibold">Build Dataset</h2>
       <p className="text-sm text-gray-500">
-        Option 1: load an existing labeled dataset. Option 2: build a new dataset from files or CSV, then run the selected prompt version.
+        Option 1: load an existing labeled dataset. Option 2: build from images, Excel, or JSON.
       </p>
 
       <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
@@ -441,10 +591,11 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                 <select
                   className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
                   value={splitType}
-                  onChange={(e) => setSplitType(e.target.value as "ITERATION" | "CUSTOM")}
+                  onChange={(e) => setSplitType(e.target.value as "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL")}
                 >
                   <option value="ITERATION">TRAIN</option>
-                  <option value="CUSTOM">CUSTOM</option>
+                  <option value="GOLDEN">TEST</option>
+                  <option value="HELD_OUT_EVAL">EVAL</option>
                 </select>
               </div>
             </>
@@ -463,10 +614,17 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               </button>
               <button
                 type="button"
-                onClick={() => setBuildInputMode("csv")}
-                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "csv" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+                onClick={() => setBuildInputMode("excel")}
+                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "excel" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
               >
-                Upload CSV
+                Upload Excel
+              </button>
+              <button
+                type="button"
+                onClick={() => setBuildInputMode("json")}
+                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "json" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+              >
+                Paste JSON
               </button>
             </div>
 
@@ -493,33 +651,68 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                   </span>
                 </div>
               </div>
-            ) : (
+            ) : buildInputMode === "excel" ? (
               <div>
                 <label className="text-xs text-gray-400 block mb-1">
-                  CSV File (`image_id,image_url,ground_truth_label`) {csvFileName ? `• ${csvFileName}` : ""}
+                  Excel File (`image_id,image_url,ground_truth_label`) {excelFileName ? `• ${excelFileName}` : ""}
                 </label>
                 <div className="flex items-center gap-3">
                   <input
-                    id="build-dataset-csv-input"
+                    id="build-dataset-excel-input"
                     type="file"
-                    accept=".csv,text/csv"
-                    onChange={onPickCsvFile}
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    onChange={onPickExcelFile}
                     className="hidden"
                   />
                   <label
-                    htmlFor="build-dataset-csv-input"
+                    htmlFor="build-dataset-excel-input"
                     className="px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
                   >
                     Choose Files
                   </label>
-                  <span className="text-xs text-gray-500">
-                    {csvFileName ? "1 Files Selected" : "Choose Files"}
-                  </span>
+                  <span className="text-xs text-gray-500">{excelFileName ? "1 Files Selected" : "Choose Files"}</span>
                 </div>
                 <p className="text-[11px] text-gray-500 mt-1">
-                  `ground_truth_label` can be DETECTED, NOT_DETECTED, or blank (stored as UNSET).
+                  Optional metadata column: `segments` (comma-separated values).
                 </p>
               </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-xs text-gray-400 block">
+                  JSON Array (`image_id`, `image_url` or `image_uri`, optional `ground_truth_label`, optional `segment_tags`)
+                </label>
+                <textarea
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
+                  value={jsonInput}
+                  onChange={(e) => setJsonInput(e.target.value)}
+                  placeholder={`[\n  {"image_id":"img_001","image_url":"https://...","ground_truth_label":"DETECTED","segment_tags":["daytime"]}\n]`}
+                />
+                <button
+                  type="button"
+                  onClick={loadFromJsonInput}
+                  className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700"
+                >
+                  Load JSON
+                </button>
+              </div>
+            )}
+
+            {buildInputMode !== "files" && (
+              <label className="flex items-center gap-2 text-xs text-gray-400">
+                <input type="checkbox" checked={autoSplit} onChange={(e) => setAutoSplit(e.target.checked)} />
+                Auto-split into TRAIN/TEST/EVAL datasets (label stratification + segment balancing)
+              </label>
+            )}
+            {buildInputMode === "files" && (
+              <label className="flex items-center gap-2 text-xs text-gray-400">
+                <input type="checkbox" checked={autoSplit} onChange={(e) => setAutoSplit(e.target.checked)} />
+                Auto-split uploaded images into TRAIN/TEST/EVAL (requires all ground truth labels)
+              </label>
+            )}
+            {autoSplit && rows.length > 0 && (
+              <p className="text-xs text-gray-500">
+                Review and edit ground truth + segment tags below before clicking Save.
+              </p>
             )}
           </div>
         )}
@@ -532,6 +725,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                   <th className="text-left px-2 py-2">Preview</th>
                   <th className="text-left px-2 py-2">Image ID</th>
                   <th className="text-left px-2 py-2">Ground Truth</th>
+                  <th className="text-left px-2 py-2">Segments</th>
                   <th className="text-left px-2 py-2">AI Label</th>
                   <th className="text-left px-2 py-2">Confidence (0-1)</th>
                   <th className="text-left px-2 py-2">AI Description</th>
@@ -539,30 +733,42 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {rows.map((r, index) => (
                   <tr key={r.id} className="border-b border-gray-900/70">
                     <td className="px-2 py-2">
-                      <img src={r.preview} alt={r.imageId} className="w-24 h-16 object-cover rounded border border-gray-700" />
+                      <img
+                        src={r.preview}
+                        alt={r.imageId}
+                        className="w-24 h-16 object-cover rounded border border-gray-700 cursor-pointer"
+                        onClick={() => setPreviewIndex(index)}
+                      />
                     </td>
                     <td className="px-2 py-2">
-                      {mode === "build" ? (
-                        <input
-                          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-                          value={r.imageId}
-                          onChange={(e) =>
-                            setRows((prev) =>
-                              prev.map((x) =>
-                                x.id === r.id ? { ...x, imageId: sanitizeImageId(e.target.value) } : x
-                              )
-                            )
-                          }
-                        />
-                      ) : (
-                        <span className="font-mono text-gray-300">{r.imageId}</span>
-                      )}
+                      <input
+                        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
+                        value={r.imageId}
+                        onChange={(e) => updateRow(r.id, { imageId: sanitizeImageId(e.target.value) })}
+                      />
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">
-                      <LabelBadge label={r.groundTruthLabel || "UNSET"} />
+                      <select
+                        className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                        value={r.groundTruthLabel || ""}
+                        onChange={(e) =>
+                          updateRow(r.id, { groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null })
+                        }
+                      >
+                        <option value="">UNSET</option>
+                        <option value="DETECTED">DETECTED</option>
+                        <option value="NOT_DETECTED">NOT_DETECTED</option>
+                      </select>
+                    </td>
+                    <td className="px-2 py-2 min-w-[220px]">
+                      <SegmentTagsEditor
+                        value={r.segmentTags}
+                        options={segmentOptions}
+                        onChange={(next) => updateRow(r.id, { segmentTags: next })}
+                      />
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">
                       <LabelBadge label={r.aiAssignedLabel || "—"} />
@@ -588,10 +794,19 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         )}
 
         <div className="flex items-center gap-3">
+          {mode === "build" && (
+            <button
+              onClick={saveDataset}
+              disabled={!canSave || building}
+              className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-45 rounded"
+            >
+              {building && buildMode === "save" ? "Saving..." : "Save"}
+            </button>
+          )}
           <button
             onClick={runDataset}
-            disabled={!canRun || building}
-            className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+            disabled={!canRun || building || autoSplit}
+            className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-45 rounded"
           >
             {building && buildMode === "run" ? "Running..." : "Run"}
           </button>
@@ -604,15 +819,6 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               {cancelingRun ? "Cancelling..." : "Cancel Run"}
             </button>
           )}
-          {mode === "build" && (
-            <button
-              onClick={saveDataset}
-              disabled={!canSave || building}
-              className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
-            >
-              {building && buildMode === "save" ? "Saving..." : "Save"}
-            </button>
-          )}
           {builtDatasetId && (
             <button onClick={() => setActiveTab(2)} className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded">
               Go to HIL Review
@@ -622,6 +828,61 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         {status && <div className="text-xs text-gray-400">{status}</div>}
         {validationError && <div className="text-xs text-red-400">{validationError}</div>}
       </div>
+
+      <ImagePreviewModal
+        isOpen={previewIndex != null && !!previewRow}
+        imageUrl={previewRow?.preview || ""}
+        imageAlt={previewRow?.imageId || "Preview"}
+        title="Dataset Preview"
+        subtitle={previewRow?.imageId || ""}
+        index={previewIndex ?? 0}
+        total={rows.length}
+        onClose={() => setPreviewIndex(null)}
+        onPrev={() => setPreviewIndex((i) => (i == null ? null : Math.max(0, i - 1)))}
+        onNext={() => setPreviewIndex((i) => (i == null ? null : Math.min(rows.length - 1, i + 1)))}
+        details={
+          previewRow ? (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Image ID</label>
+                <input
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs font-mono"
+                  value={previewRow.imageId}
+                  onChange={(e) => updateRow(previewRow.id, { imageId: sanitizeImageId(e.target.value) })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Ground Truth</label>
+                <select
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs"
+                  value={previewRow.groundTruthLabel || ""}
+                  onChange={(e) =>
+                    updateRow(previewRow.id, {
+                      groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null,
+                    })
+                  }
+                >
+                  <option value="">UNSET</option>
+                  <option value="DETECTED">DETECTED</option>
+                  <option value="NOT_DETECTED">NOT_DETECTED</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">Segments</label>
+                <SegmentTagsEditor
+                  value={previewRow.segmentTags}
+                  options={segmentOptions}
+                  onChange={(next) => updateRow(previewRow.id, { segmentTags: next })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">AI Description</label>
+                <div className="text-xs text-gray-300 whitespace-pre-wrap break-words">{previewRow.aiDescription || "—"}</div>
+              </div>
+            </div>
+          ) : null
+        }
+      />
     </div>
   );
 }
@@ -641,53 +902,72 @@ function validateImageIds(rows: BuildRow[]): { ok: true } | { ok: false; error: 
   return { ok: true };
 }
 
-function parseCsvManifest(input: string): Array<{
+async function parseExcelManifest(file: File): Promise<Array<{
   image_id: string;
   image_url: string;
   ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  segment_tags?: string[] | string;
+}>> {
+  const xlsx = await import("xlsx");
+  const buffer = await file.arrayBuffer();
+  const workbook = xlsx.read(buffer, { type: "array" });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) throw new Error("Excel file has no sheets.");
+  const sheet = workbook.Sheets[firstSheetName];
+  const rawRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  return normalizeManifestRows(rawRows, "Excel");
+}
+
+function parseJsonManifest(input: string): Array<{
+  image_id: string;
+  image_url: string;
+  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  segment_tags?: string[] | string;
 }> {
-  const normalized = String(input || "").replace(/\r\n/g, "\n").trim();
-  if (!normalized) {
-    throw new Error("CSV is empty.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(String(input || ""));
+  } catch {
+    throw new Error("Invalid JSON.");
   }
-
-  const lines = normalized.split("\n").filter((line) => line.trim());
-  if (lines.length < 2) {
-    throw new Error("CSV requires a header and at least one data row.");
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("JSON must be a non-empty array.");
   }
+  return normalizeManifestRows(parsed as Array<Record<string, unknown>>, "JSON");
+}
 
-  const headers = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
-  const expected = ["image_id", "image_url", "ground_truth_label"];
-  const matchesHeader = headers.length === expected.length && headers.every((h, i) => h === expected[i]);
-  if (!matchesHeader) {
-    throw new Error("CSV header must be exactly: image_id,image_url,ground_truth_label");
-  }
-
+function normalizeManifestRows(
+  rowsInput: Array<Record<string, unknown>>,
+  sourceLabel: string
+): Array<{
+  image_id: string;
+  image_url: string;
+  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  segment_tags?: string[] | string;
+}> {
   const rows: Array<{
     image_id: string;
     image_url: string;
     ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+    segment_tags?: string[] | string;
   }> = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseCsvLine(lines[i]);
-    if (cols.length === 1 && !cols[0].trim()) continue;
-    if (cols.length !== 3) {
-      throw new Error(`CSV row ${i + 1} must have exactly 3 columns.`);
-    }
-    const imageId = sanitizeImageId(cols[0]);
-    const imageUrl = cols[1].trim();
-    const rawLabel = cols[2].trim().toUpperCase();
+  for (let i = 0; i < rowsInput.length; i++) {
+    const row = rowsInput[i] || {};
+    const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
+    const imageUrl = String(row.image_url || row.image_uri || row.imageUri || "").trim();
+    const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || "").trim().toUpperCase();
+    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.segments ?? "") as string[] | string;
     if (!imageId) {
-      throw new Error(`CSV row ${i + 1} has blank image_id.`);
+      throw new Error(`${sourceLabel} row ${i + 1} has blank image_id.`);
     }
     if (!imageUrl) {
-      throw new Error(`CSV row ${i + 1} has blank image_url.`);
+      throw new Error(`${sourceLabel} row ${i + 1} has blank image_url/image_uri.`);
     }
     let label: "DETECTED" | "NOT_DETECTED" | null = null;
     if (rawLabel) {
       if (rawLabel !== "DETECTED" && rawLabel !== "NOT_DETECTED") {
-        throw new Error(`CSV row ${i + 1} has invalid ground_truth_label: ${cols[2]}.`);
+        throw new Error(`${sourceLabel} row ${i + 1} has invalid ground_truth_label: ${rawLabel}.`);
       }
       label = rawLabel as "DETECTED" | "NOT_DETECTED";
     }
@@ -695,42 +975,14 @@ function parseCsvManifest(input: string): Array<{
       image_id: imageId,
       image_url: imageUrl,
       ground_truth_label: label,
+      segment_tags: segmentTags,
     });
   }
 
   return rows;
 }
 
-function parseCsvLine(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        cur += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (ch === "," && !inQuotes) {
-      out.push(cur.trim());
-      cur = "";
-      continue;
-    }
-    cur += ch;
-  }
-  out.push(cur.trim());
-  return out;
-}
-
-async function pollRunToTerminalState(
-  runId: string,
-  onProgress?: (snapshot: any) => void
-): Promise<any> {
+async function pollRunToTerminalState(runId: string, onProgress?: (snapshot: any) => void): Promise<any> {
   while (true) {
     const res = await fetch(`/api/runs?run_id=${runId}`);
     const snapshot = await res.json();
@@ -747,6 +999,172 @@ async function pollRunToTerminalState(
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeSegmentTags(value: unknown): string[] {
+  if (value == null) return [];
+  const parts = Array.isArray(value)
+    ? value.map((v) => String(v || ""))
+    : String(value)
+        .split(/[;,|]/g)
+        .map((v) => String(v || ""));
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const part of parts) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(clean);
+  }
+  return tags;
+}
+
+function splitRowsForAutoSplit(rows: BuildRow[]): Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", BuildRow[]> {
+  const order: Array<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
+  const splits: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", BuildRow[]> = {
+    ITERATION: [],
+    GOLDEN: [],
+    HELD_OUT_EVAL: [],
+  };
+  const shuffle = (items: BuildRow[]) => {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+  const detected = shuffle(rows.filter((r) => r.groundTruthLabel === "DETECTED"));
+  const notDetected = shuffle(rows.filter((r) => r.groundTruthLabel === "NOT_DETECTED"));
+
+  const countsByRatios = (total: number, ratios: [number, number, number] = [0.7, 0.15, 0.15]) => {
+    const exact = ratios.map((r) => r * total);
+    const counts = exact.map((v) => Math.floor(v)) as [number, number, number];
+    let remaining = total - counts.reduce((acc, n) => acc + n, 0);
+    const remainders = exact
+      .map((v, idx) => ({ idx, rem: v - Math.floor(v) }))
+      .sort((a, b) => b.rem - a.rem);
+    let k = 0;
+    while (remaining > 0) {
+      counts[remainders[k % remainders.length].idx] += 1;
+      remaining -= 1;
+      k += 1;
+    }
+    return counts;
+  };
+
+  const assignWithSegmentBalancing = (bucket: BuildRow[]) => {
+    if (bucket.length === 0) return;
+    const counts = countsByRatios(bucket.length);
+    const assigned: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", number> = {
+      ITERATION: 0,
+      GOLDEN: 0,
+      HELD_OUT_EVAL: 0,
+    };
+    const segmentCounts: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", Map<string, number>> = {
+      ITERATION: new Map(),
+      GOLDEN: new Map(),
+      HELD_OUT_EVAL: new Map(),
+    };
+    const prioritized = [...bucket].sort((a, b) => (b.segmentTags?.length || 0) - (a.segmentTags?.length || 0));
+
+    for (const row of prioritized) {
+      const candidates = order.filter((split) => assigned[split] < counts[order.indexOf(split)]);
+      if (candidates.length === 0) break;
+      let best = candidates[0];
+      let bestScore = Number.POSITIVE_INFINITY;
+      for (const split of candidates) {
+        const cap = Math.max(1, counts[order.indexOf(split)]);
+        const loadPenalty = assigned[split] / cap;
+        let segPenalty = 0;
+        for (const tag of row.segmentTags || []) segPenalty += segmentCounts[split].get(tag) || 0;
+        const score = segPenalty + loadPenalty;
+        if (score < bestScore) {
+          best = split;
+          bestScore = score;
+        }
+      }
+      splits[best].push(row);
+      assigned[best] += 1;
+      for (const tag of row.segmentTags || []) {
+        segmentCounts[best].set(tag, (segmentCounts[best].get(tag) || 0) + 1);
+      }
+    }
+  };
+
+  assignWithSegmentBalancing(detected);
+  assignWithSegmentBalancing(notDetected);
+  return splits;
+}
+
+function SegmentTagsEditor({
+  value,
+  options,
+  onChange,
+}: {
+  value: string[];
+  options: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [customTag, setCustomTag] = useState("");
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
+        {value.length === 0 && <span className="text-[11px] text-gray-500">No segments</span>}
+        {value.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+            {tag}
+            <button
+              type="button"
+              className="text-gray-400 hover:text-red-300"
+              onClick={() => onChange(value.filter((v) => v !== tag))}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <select
+          className="bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+          value=""
+          onChange={(e) => {
+            const next = e.target.value;
+            if (!next) return;
+            if (!value.includes(next)) onChange([...value, next]);
+          }}
+        >
+          <option value="">+ Taxonomy tag</option>
+          {options.filter((option) => !value.includes(option)).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <input
+          className="w-24 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+          placeholder="Custom"
+          value={customTag}
+          onChange={(e) => setCustomTag(e.target.value)}
+        />
+        <button
+          type="button"
+          className="px-1.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700"
+          onClick={() => {
+            const clean = customTag.trim();
+            if (!clean) return;
+            if (!value.includes(clean)) onChange([...value, clean]);
+            setCustomTag("");
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function LabelBadge({ label }: { label: string }) {

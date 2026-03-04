@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.0",
@@ -17,6 +18,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "uuid": "^11.0.0",
+    "xlsx": "^0.18.5",
+    "zod": "^4.3.6",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
@@ -29,6 +32,7 @@
     "eslint-config-next": "^15.1.0",
     "postcss": "^8.0.0",
     "tailwindcss": "^4.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.18"
   }
 }
