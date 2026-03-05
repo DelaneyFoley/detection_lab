@@ -29,11 +29,3 @@ pnpm-debug.log*
 
 data/*.db-shm
 data/*.db-wal
-data/vlm-eval.db
-data/vlm-eval.db-shm
-data/vlm-eval.db-wal
-data/*.backup.*
-
-public/uploads/.DS_Store
-public/uploads/datasets/*
-!public/uploads/datasets/.gitkeep
