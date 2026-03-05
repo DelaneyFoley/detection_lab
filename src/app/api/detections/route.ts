@@ -105,7 +105,9 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: "Detection not found" }, { status: 404 });
     }
 
-    const requestedApprovedPromptVersion = body.approved_prompt_version || null;
+    const requestedApprovedPromptVersion = Object.prototype.hasOwnProperty.call(body, "approved_prompt_version")
+      ? body.approved_prompt_version || null
+      : existing.approved_prompt_version || null;
     if (requestedApprovedPromptVersion) {
       const prompt = promptRepository.getPromptById(requestedApprovedPromptVersion) as
         | { prompt_version_id: string; detection_id: string }

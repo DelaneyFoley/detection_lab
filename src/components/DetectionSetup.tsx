@@ -1499,7 +1499,7 @@ export function DetectionSetup({
                   <div className="mt-1 text-[11px] text-gray-500">
                     {eligibility?.reason || "Needs a completed EVAL run."}
                   </div>
-                  {p.change_notes && <p className="text-xs text-gray-400 mt-1">{p.change_notes}</p>}
+                  {p.change_notes && <p className="text-xs text-gray-400 mt-1">{summarizePromptChangeNotes(p.change_notes)}</p>}
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
                       View Decision Policy & Decision Rubric Snapshot
@@ -1582,6 +1582,20 @@ function parseLabelPolicySections(labelPolicy: string): {
   }
 
   return sections;
+}
+
+function summarizePromptChangeNotes(notes: string): string {
+  const value = String(notes || "").trim();
+  const explicit = value.match(/AI edits accepted:\s*(\d+)\s*\/\s*(\d+)/i);
+  if (explicit) {
+    return `AI edits accepted: ${explicit[1]}/${explicit[2]}`;
+  }
+  if (/^AI-suggested edits:/i.test(value)) {
+    const tail = value.replace(/^AI-suggested edits:/i, "").trim();
+    const accepted = tail ? tail.split(";").map((part) => part.trim()).filter(Boolean).length : 0;
+    return `AI edits accepted: ${accepted}/${accepted}`;
+  }
+  return value;
 }
 
 function composeLabelPolicySections(parts: {

@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
         };
         const order: Array<keyof typeof splits> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
 
-        const allocateByRatios = (bucket: typeof normalized, ratios: [number, number, number] = [0.7, 0.15, 0.15]) => {
+        const allocateByRatios = (bucket: typeof normalized, ratios: [number, number, number] = [0.5, 0.2, 0.3]) => {
           if (bucket.length === 0) return;
           const counts = countsByRatios(bucket.length, ratios);
           const assignments = assignWithSecondarySegmentBalancing(bucket, counts, order);
@@ -688,11 +688,11 @@ function parseSegmentTags(value: unknown): string[] {
       return normalizeSegmentTags(value);
     }
   }
-  return [];
+  return ["Baseline"];
 }
 
 function normalizeSegmentTags(value: unknown): string[] {
-  if (value == null) return [];
+  if (value == null) return ["Baseline"];
   const rawParts = Array.isArray(value)
     ? value.map((v) => String(v || ""))
     : String(value)
@@ -708,5 +708,5 @@ function normalizeSegmentTags(value: unknown): string[] {
     seen.add(key);
     tags.push(clean);
   }
-  return tags;
+  return tags.length > 0 ? tags : ["Baseline"];
 }

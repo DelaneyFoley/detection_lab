@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Detection, Run, Prediction, ErrorTag, Decision } from "@/types";
-import { computeMetrics } from "@/lib/metrics";
+import { computeMetricsWithSegments } from "@/lib/metrics";
 import { splitTypeLabel } from "@/lib/splitType";
 
 const ERROR_TAGS: ErrorTag[] = [
@@ -38,7 +38,13 @@ export function HilReview({ detection }: { detection: Detection }) {
   const [datasetItemByImageId, setDatasetItemByImageId] = useState<Record<string, { item_id: string; segment_tags: string[] }>>({});
   const [loadingRun, setLoadingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
-  const liveMetrics = useMemo(() => computeMetrics(predictions), [predictions]);
+  const liveMetrics = useMemo(() => {
+    const segmentMap = new Map<string, string[]>();
+    for (const [imageId, item] of Object.entries(datasetItemByImageId || {})) {
+      segmentMap.set(imageId, normalizeSegmentTags(item.segment_tags));
+    }
+    return computeMetricsWithSegments(predictions, segmentMap);
+  }, [predictions, datasetItemByImageId]);
   const labeledCount = useMemo(
     () =>
       predictions.filter(
@@ -359,6 +365,41 @@ export function HilReview({ detection }: { detection: Detection }) {
                 <div className="text-xs text-gray-500">Parse Fail Rate</div>
               </div>
             </div>
+            {Object.keys(liveMetrics.segment_metrics || {}).length > 0 && (
+              <details className="mt-3 bg-gray-900/40 border border-gray-800 rounded p-2">
+                <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-300">
+                  Segment Breakdown
+                </summary>
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="text-gray-500 border-b border-gray-800">
+                      <tr>
+                        <th className="text-left py-1.5 px-2">Segment</th>
+                        <th className="text-right py-1.5 px-2">Total</th>
+                        <th className="text-right py-1.5 px-2">Accuracy</th>
+                        <th className="text-right py-1.5 px-2">Precision</th>
+                        <th className="text-right py-1.5 px-2">Recall</th>
+                        <th className="text-right py-1.5 px-2">F1</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(liveMetrics.segment_metrics || {})
+                        .sort(([, a], [, b]) => b.total - a.total)
+                        .map(([segment, m]) => (
+                          <tr key={segment} className="border-b border-gray-900/60">
+                            <td className="py-1.5 px-2 text-gray-300">{segment}</td>
+                            <td className="py-1.5 px-2 text-right text-gray-400">{m.total}</td>
+                            <td className="py-1.5 px-2 text-right text-gray-300">{(m.accuracy * 100).toFixed(1)}%</td>
+                            <td className="py-1.5 px-2 text-right text-blue-400">{(m.precision * 100).toFixed(1)}%</td>
+                            <td className="py-1.5 px-2 text-right text-green-400">{(m.recall * 100).toFixed(1)}%</td>
+                            <td className="py-1.5 px-2 text-right text-yellow-400">{(m.f1 * 100).toFixed(1)}%</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
           </div>
           <div className="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden">
           <div className="overflow-x-auto max-h-[600px] overflow-y-auto">

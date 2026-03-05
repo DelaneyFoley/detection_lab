@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuid } from "uuid";
 import { runDetectionInference } from "@/lib/gemini";
-import { computeMetrics } from "@/lib/metrics";
+import { computeMetricsWithSegments } from "@/lib/metrics";
 import type { Prediction } from "@/types";
 import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
@@ -185,6 +185,9 @@ async function executeRunInBackground({
 
   try {
     const predictions: Prediction[] = [];
+    const segmentTagsByImageId = new Map<string, string[]>(
+      items.map((item) => [String(item.image_id || ""), parseSegmentTags(item.segment_tags)])
+    );
     let nextIndex = 0;
     let processed = 0;
 
@@ -270,7 +273,7 @@ async function executeRunInBackground({
     await Promise.all(workers);
 
     // Compute metrics on completed subset (full set if not cancelled).
-    const metrics = computeMetrics(predictions);
+    const metrics = computeMetricsWithSegments(predictions, segmentTagsByImageId);
     const finalStatus = isCancellationRequested() ? "cancelled" : "completed";
 
     runRepository.updateRunCompletion(runId, JSON.stringify(metrics), finalStatus, processed);
@@ -281,6 +284,38 @@ async function executeRunInBackground({
   } finally {
     runQueue.delete(runId);
   }
+}
+
+function parseSegmentTags(value: unknown): string[] {
+  if (Array.isArray(value)) return normalizeSegmentTags(value);
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return normalizeSegmentTags(parsed);
+    } catch {
+      return normalizeSegmentTags(value);
+    }
+  }
+  return ["Baseline"];
+}
+
+function normalizeSegmentTags(value: unknown): string[] {
+  const rawParts = Array.isArray(value)
+    ? value.map((v) => String(v || ""))
+    : String(value || "")
+        .split(/[;,|]/g)
+        .map((v) => String(v || ""));
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const part of rawParts) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(clean);
+  }
+  return tags.length > 0 ? tags : ["Baseline"];
 }
 
 export async function PUT(req: NextRequest) {

@@ -616,6 +616,41 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                               </details>
                                             </div>
                                           )}
+                                        {Object.keys((m.segment_metrics || {}) as Record<string, any>).length > 0 && (
+                                          <details className="bg-gray-950/40 border border-gray-800 rounded p-2">
+                                            <summary className="cursor-pointer text-[11px] text-blue-300 hover:text-blue-200">
+                                              Segment Breakdown
+                                            </summary>
+                                            <div className="mt-2 overflow-x-auto">
+                                              <table className="w-full text-[11px]">
+                                                <thead className="text-gray-500 border-b border-gray-800">
+                                                  <tr>
+                                                    <th className="text-left px-2 py-1">Segment</th>
+                                                    <th className="text-right px-2 py-1">Total</th>
+                                                    <th className="text-right px-2 py-1">Accuracy</th>
+                                                    <th className="text-right px-2 py-1">Precision</th>
+                                                    <th className="text-right px-2 py-1">Recall</th>
+                                                    <th className="text-right px-2 py-1">F1</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {Object.entries((m.segment_metrics || {}) as Record<string, any>)
+                                                    .sort(([, a], [, b]) => Number(b?.total || 0) - Number(a?.total || 0))
+                                                    .map(([segment, metric]) => (
+                                                      <tr key={segment} className="border-b border-gray-900/60">
+                                                        <td className="px-2 py-1 text-gray-300">{segment}</td>
+                                                        <td className="px-2 py-1 text-right text-gray-400">{metric.total ?? 0}</td>
+                                                        <td className="px-2 py-1 text-right text-gray-300">{((metric.accuracy || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="px-2 py-1 text-right text-blue-400">{((metric.precision || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="px-2 py-1 text-right text-green-400">{((metric.recall || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="px-2 py-1 text-right text-yellow-400">{((metric.f1 || 0) * 100).toFixed(1)}%</td>
+                                                      </tr>
+                                                    ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          </details>
+                                        )}
                                         <div className="max-h-72 overflow-auto border border-gray-800 rounded">
                                           <table className="w-full text-xs">
                                             <thead className="sticky top-0 bg-gray-900/90">

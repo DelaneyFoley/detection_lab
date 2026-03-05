@@ -117,6 +117,12 @@ export interface Run {
     rejected: PromptEditSuggestion[];
     created_prompt_version_id?: string | null;
     created_at?: string;
+    test_regression_result?: {
+      previous: { run_id: string; metrics_summary: MetricsSummary } | null;
+      candidate: { run_id: string; metrics_summary: MetricsSummary } | null;
+      passed: boolean | null;
+      evaluated_at: string;
+    } | null;
   } | null;
 }
 
@@ -155,6 +161,22 @@ export interface MetricsSummary {
   prevalence: number;
   parse_failure_rate: number;
   total: number;
+  segment_metrics?: Record<
+    string,
+    {
+      tp: number;
+      fp: number;
+      fn: number;
+      tn: number;
+      precision: number;
+      recall: number;
+      f1: number;
+      accuracy: number;
+      prevalence: number;
+      parse_failure_rate: number;
+      total: number;
+    }
+  >;
 }
 
 // ============ Gemini Response Schema ============

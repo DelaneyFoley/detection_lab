@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { dataStore } from "@/lib/services";
+import { sortByImageId } from "@/lib/imageIdSort";
 
 export class DatasetRepository {
   getDatasetById(datasetId: string): any | undefined {
@@ -9,7 +10,7 @@ export class DatasetRepository {
   getDatasetWithItems(datasetId: string): { dataset: any | undefined; items: any[] } {
     return {
       dataset: this.getDatasetById(datasetId),
-      items: dataStore.all<any>("SELECT * FROM dataset_items WHERE dataset_id = ? ORDER BY image_id", datasetId),
+      items: sortByImageId(dataStore.all<any>("SELECT * FROM dataset_items WHERE dataset_id = ?", datasetId)),
     };
   }
 
@@ -242,9 +243,11 @@ export class DatasetRepository {
   }
 
   refreshDatasetStats(datasetId: string, now: string) {
-    const items = dataStore.all<{ image_id: string; ground_truth_label: string | null; segment_tags: string | null }>(
-      "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ? ORDER BY image_id",
-      datasetId
+    const items = sortByImageId(
+      dataStore.all<{ image_id: string; ground_truth_label: string | null; segment_tags: string | null }>(
+        "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ?",
+        datasetId
+      )
     );
     const hash = crypto
       .createHash("sha256")

@@ -15,10 +15,17 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
   const [recomputedMetrics, setRecomputedMetrics] = useState<any>(null);
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [suggestions, setSuggestions] = useState<PromptEditSuggestion[]>([]);
+  const [editableSuggestions, setEditableSuggestions] = useState<PromptEditSuggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [selectedSuggestions, setSelectedSuggestions] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [loadedFromRunLog, setLoadedFromRunLog] = useState(false);
+  const [testRegressionResult, setTestRegressionResult] = useState<{
+    previous: { run_id: string; metrics_summary: any } | null;
+    candidate: { run_id: string; metrics_summary: any } | null;
+    passed: boolean | null;
+    evaluated_at: string;
+  } | null>(null);
 
   const loadRuns = useCallback(async () => {
     const [runsRes, promptsRes] = await Promise.all([
@@ -55,13 +62,17 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
         if (acceptedKeys.has(suggestionKey(s))) selected.add(i);
       });
       setSuggestions(combined);
+      setEditableSuggestions(combined);
       setSelectedSuggestions(selected);
       setLoadedFromRunLog(true);
     } else {
       setSuggestions([]);
+      setEditableSuggestions([]);
       setSelectedSuggestions(new Set());
       setLoadedFromRunLog(false);
     }
+    const prior = data?.prompt_feedback_log?.test_regression_result || null;
+    setTestRegressionResult(prior);
   }, [selectedRunId]);
 
   useEffect(() => {
@@ -109,7 +120,9 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       });
       const data = await res.json();
       if (data.suggestions) {
-        setSuggestions(data.suggestions);
+        const next = data.suggestions as PromptEditSuggestion[];
+        setSuggestions(next);
+        setEditableSuggestions(next);
         setSelectedSuggestions(new Set());
         setLoadedFromRunLog(false);
       } else {
@@ -145,7 +158,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     let newDecisionRubric = (prompt.prompt_structure as any)?.decision_rubric || "";
 
     for (const i of selectedSuggestions) {
-      const s = suggestions[i];
+      const s = editableSuggestions[i];
       if (s.section === "system_prompt") {
         newSystemPrompt = newSystemPrompt.replace(s.old_text, s.new_text);
       } else if (s.section === "user_prompt_template") {
@@ -158,9 +171,8 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     }
 
     const versionNum = prompts.length + 1;
-    const changeNotes = Array.from(selectedSuggestions)
-      .map((i) => suggestions[i].rationale)
-      .join("; ");
+    const acceptedCount = selectedSuggestions.size;
+    const suggestedCount = editableSuggestions.length;
 
     try {
       const res = await fetch("/api/prompts", {
@@ -180,7 +192,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
           temperature: prompt.temperature,
           top_p: prompt.top_p,
           max_output_tokens: prompt.max_output_tokens,
-          change_notes: `AI-suggested edits: ${changeNotes}`,
+          change_notes: `AI edits accepted: ${acceptedCount}/${suggestedCount}`,
           created_by: "ai-assistant",
         }),
       });
@@ -188,9 +200,64 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       if (!res.ok || !data?.prompt_version_id) {
         throw new Error(data?.error || "Failed to create new prompt version");
       }
-      const accepted = suggestions.filter((_, i) => selectedSuggestions.has(i));
-      const rejected = suggestions.filter((_, i) => !selectedSuggestions.has(i));
+      const accepted = editableSuggestions.filter((_, i) => selectedSuggestions.has(i));
+      const rejected = editableSuggestions.filter((_, i) => !selectedSuggestions.has(i));
 
+      // Run test regression for both previous and candidate prompt versions, if TEST dataset exists.
+      const datasetsRes = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
+      const datasets = await datasetsRes.json();
+      const testDataset = datasets.find((d: any) => d.split_type === "GOLDEN");
+      let regressionResult: {
+        previous: { run_id: string; metrics_summary: any } | null;
+        candidate: { run_id: string; metrics_summary: any } | null;
+        passed: boolean | null;
+        evaluated_at: string;
+      } | null = null;
+
+      if (testDataset) {
+        const previousRun = await runPromptOnDataset({
+          apiKey,
+          selectedModel,
+          promptVersionId: prompt.prompt_version_id,
+          datasetId: testDataset.dataset_id,
+          detectionId: detection.detection_id,
+        });
+        const candidateRun = await runPromptOnDataset({
+          apiKey,
+          selectedModel,
+          promptVersionId: data.prompt_version_id,
+          datasetId: testDataset.dataset_id,
+          detectionId: detection.detection_id,
+        });
+        if (!previousRun?.metrics_summary || !candidateRun?.metrics_summary) {
+          throw new Error("TEST regression runs did not produce metrics.");
+        }
+
+        const thresholds = detection.metric_thresholds;
+        const passed = checkThresholds(candidateRun.metrics_summary, thresholds);
+        regressionResult = {
+          previous: { run_id: previousRun.run_id, metrics_summary: previousRun.metrics_summary },
+          candidate: { run_id: candidateRun.run_id, metrics_summary: candidateRun.metrics_summary },
+          passed,
+          evaluated_at: new Date().toISOString(),
+        };
+        setTestRegressionResult(regressionResult);
+
+        await fetch("/api/prompts", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt_version_id: data.prompt_version_id,
+            golden_set_regression_result: {
+              passed,
+              run_id: candidateRun.run_id,
+              metrics: candidateRun.metrics_summary,
+              previous_metrics: previousRun.metrics_summary,
+              evaluated_at: new Date().toISOString(),
+            },
+          }),
+        });
+      }
       await fetch("/api/runs", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -201,59 +268,16 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
             rejected,
             created_prompt_version_id: data?.prompt_version_id || null,
             created_at: new Date().toISOString(),
+            test_regression_result: regressionResult,
           },
         }),
       });
 
-      // Run golden regression if dataset exists
-      const datasetsRes = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
-      const datasets = await datasetsRes.json();
-      const goldenDataset = datasets.find((d: any) => d.split_type === "GOLDEN");
-
-      if (goldenDataset) {
-        const regRes = await fetch("/api/runs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: apiKey,
-            model_override: selectedModel,
-            prompt_version_id: data.prompt_version_id,
-            dataset_id: goldenDataset.dataset_id,
-            detection_id: detection.detection_id,
-          }),
-        });
-        const regStart = await regRes.json();
-        if (!regRes.ok || !regStart?.run_id) {
-          throw new Error(regStart?.error || "Failed to start golden regression run");
-        }
-        const regRun = await pollRunToTerminalState(regStart.run_id);
-        if (!regRun?.metrics_summary) {
-          throw new Error("Golden regression did not produce metrics.");
-        }
-
-        // Check regression
-        const thresholds = detection.metric_thresholds;
-        const passed = checkThresholds(regRun.metrics_summary, thresholds);
-
-        await fetch("/api/prompts", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt_version_id: data.prompt_version_id,
-            golden_set_regression_result: {
-              passed,
-              run_id: regRun.run_id,
-              metrics: regRun.metrics_summary,
-              previous_metrics: recomputedMetrics || runData?.metrics_summary,
-              evaluated_at: new Date().toISOString(),
-            },
-          }),
-        });
-
-        alert(`New prompt version saved. Golden regression: ${passed ? "PASSED" : "FAILED"}`);
-      } else {
-        alert("New prompt version saved. No golden dataset found for regression.");
-      }
+      alert(
+        regressionResult
+          ? `New prompt version saved. TEST regression: ${regressionResult.passed ? "PASSED" : "FAILED"}`
+          : "New prompt version saved. No TEST dataset found for regression."
+      );
 
       loadRuns();
       triggerRefresh();
@@ -351,7 +375,9 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
           {/* Suggestions */}
           {suggestions.length > 0 && (
             <div className="space-y-3">
-              {suggestions.map((s, i) => (
+              {suggestions.map((s, i) => {
+                const draft = editableSuggestions[i] || s;
+                return (
                 <div
                   key={i}
                   className={`border rounded-lg p-4 cursor-pointer transition-colors ${
@@ -389,19 +415,42 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                       <div className="grid grid-cols-2 gap-3 text-xs font-mono">
                         <div>
                           <span className="text-red-400 text-xs font-sans">OLD:</span>
-                          <div className="bg-red-900/10 border border-red-900/30 rounded p-2 mt-1 whitespace-pre-wrap text-red-300">
-                            {s.old_text}
-                          </div>
+                          <textarea
+                            className="w-full bg-red-900/10 border border-red-900/30 rounded p-2 mt-1 whitespace-pre-wrap text-red-300 min-h-24"
+                            value={draft.old_text}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              setEditableSuggestions((prev) =>
+                                prev.map((item, idx) => (idx === i ? { ...item, old_text: e.target.value } : item))
+                              )
+                            }
+                          />
                         </div>
                         <div>
                           <span className="text-green-400 text-xs font-sans">NEW:</span>
-                          <div className="bg-green-900/10 border border-green-900/30 rounded p-2 mt-1 whitespace-pre-wrap text-green-300">
-                            {s.new_text}
-                          </div>
+                          <textarea
+                            className="w-full bg-green-900/10 border border-green-900/30 rounded p-2 mt-1 whitespace-pre-wrap text-green-300 min-h-24"
+                            value={draft.new_text}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              setEditableSuggestions((prev) =>
+                                prev.map((item, idx) => (idx === i ? { ...item, new_text: e.target.value } : item))
+                              )
+                            }
+                          />
                         </div>
                       </div>
 
-                      <p className="text-xs text-gray-400 mt-2">{s.rationale}</p>
+                      <textarea
+                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 mt-2 text-xs text-gray-300 min-h-16"
+                        value={draft.rationale}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) =>
+                          setEditableSuggestions((prev) =>
+                            prev.map((item, idx) => (idx === i ? { ...item, rationale: e.target.value } : item))
+                          )
+                        }
+                      />
                       {(s.expected_metric_impact || s.expected_parse_fail_impact) && (
                         <div className="mt-2 text-[11px] text-gray-500 space-y-1">
                           {s.expected_metric_impact && (
@@ -415,7 +464,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
 
               <div className="flex gap-3 mt-4">
                 <button
@@ -426,11 +475,27 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                   {saving ? "Saving..." : `Accept ${selectedSuggestions.size} Edit(s) & Save as New Version`}
                 </button>
                 <p className="text-xs text-gray-500 mt-2">
-                  A golden set regression will run automatically after saving.
+                  Previous and new prompt versions will run automatically on the TEST split after saving.
                 </p>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {testRegressionResult && (
+        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5 space-y-3">
+          <h3 className="text-sm font-medium">Latest TEST Regression Outcome</h3>
+          <div className="text-xs text-gray-400">
+            Evaluated: {new Date(testRegressionResult.evaluated_at).toLocaleString()}
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <RegressionMetricsCard title="Previous Prompt (TEST)" run={testRegressionResult.previous} />
+            <RegressionMetricsCard title="Accepted Prompt (TEST)" run={testRegressionResult.candidate} />
+          </div>
+          <div className={`text-sm font-medium ${testRegressionResult.passed ? "text-green-400" : "text-red-400"}`}>
+            Result: {testRegressionResult.passed ? "PASSED" : "FAILED"}
+          </div>
         </div>
       )}
     </div>
@@ -448,6 +513,31 @@ function suggestionKey(s: PromptEditSuggestion): string {
   return [s.section, s.old_text, s.new_text, s.rationale, s.failure_cluster].join("|");
 }
 
+async function runPromptOnDataset(input: {
+  apiKey: string;
+  selectedModel: string;
+  promptVersionId: string;
+  datasetId: string;
+  detectionId: string;
+}): Promise<any> {
+  const regRes = await fetch("/api/runs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: input.apiKey,
+      model_override: input.selectedModel,
+      prompt_version_id: input.promptVersionId,
+      dataset_id: input.datasetId,
+      detection_id: input.detectionId,
+    }),
+  });
+  const regStart = await regRes.json();
+  if (!regRes.ok || !regStart?.run_id) {
+    throw new Error(regStart?.error || "Failed to start TEST run");
+  }
+  return pollRunToTerminalState(regStart.run_id);
+}
+
 async function pollRunToTerminalState(runId: string): Promise<any> {
   while (true) {
     const res = await fetch(`/api/runs?run_id=${runId}`);
@@ -460,4 +550,34 @@ async function pollRunToTerminalState(runId: string): Promise<any> {
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+}
+
+function RegressionMetricsCard({
+  title,
+  run,
+}: {
+  title: string;
+  run: { run_id: string; metrics_summary: any } | null;
+}) {
+  if (!run?.metrics_summary) {
+    return (
+      <div className="bg-gray-900/40 border border-gray-700 rounded p-3">
+        <div className="text-gray-400 mb-1">{title}</div>
+        <div className="text-gray-500">No metrics available.</div>
+      </div>
+    );
+  }
+  const metrics = run.metrics_summary || {};
+  return (
+    <div className="bg-gray-900/40 border border-gray-700 rounded p-3">
+      <div className="text-gray-400 mb-1">{title}</div>
+      <div className="text-gray-500 mb-2 font-mono">Run: {String(run.run_id || "").slice(0, 8)}</div>
+      <div className="grid grid-cols-2 gap-1">
+        <span>Accuracy: <b className="text-gray-300">{((metrics.accuracy || 0) * 100).toFixed(1)}%</b></span>
+        <span>Precision: <b className="text-blue-400">{((metrics.precision || 0) * 100).toFixed(1)}%</b></span>
+        <span>Recall: <b className="text-green-400">{((metrics.recall || 0) * 100).toFixed(1)}%</b></span>
+        <span>F1: <b className="text-yellow-400">{((metrics.f1 || 0) * 100).toFixed(1)}%</b></span>
+      </div>
+    </div>
+  );
 }

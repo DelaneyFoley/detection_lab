@@ -332,7 +332,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
             )}
             {selectedDataset.split_type === "GOLDEN" && (
               <div className="mt-3 bg-yellow-900/15 border border-yellow-800/40 rounded px-3 py-2 text-xs text-yellow-400">
-                Golden set — used for regression gating. Changes will affect regression results.
+                Test set — used for regression gating. Changes will affect regression results.
               </div>
             )}
           </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { computeMetrics } from "@/lib/metrics";
+import { computeMetricsWithSegments } from "@/lib/metrics";
 import type { Prediction } from "@/types";
 import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
@@ -60,7 +60,11 @@ export async function PUT(req: NextRequest) {
     // Recompute metrics only when labels changed.
     if (metricsImpactedByGroundTruthChange || metricsImpactedByCorrectedLabel) {
       const predictions = reviewRepository.getRunPredictions(pred.run_id);
-      const metrics = computeMetrics(predictions);
+      const run = reviewRepository.getRunById(pred.run_id);
+      const segmentTagsByImageId = run
+        ? reviewRepository.getDatasetSegmentTagsByImageId(run.dataset_id)
+        : new Map<string, string[]>();
+      const metrics = computeMetricsWithSegments(predictions, segmentTagsByImageId);
       reviewRepository.updateRunMetrics(pred.run_id, JSON.stringify(metrics));
       return NextResponse.json({ ok: true, run_id: pred.run_id, metrics });
     }
@@ -83,8 +87,11 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) return parsedBody.response;
     const body = parsedBody.data;
     const predictions = reviewRepository.getRunPredictions(body.run_id);
-
-    const metrics = computeMetrics(predictions);
+    const run = reviewRepository.getRunById(body.run_id);
+    const segmentTagsByImageId = run
+      ? reviewRepository.getDatasetSegmentTagsByImageId(run.dataset_id)
+      : new Map<string, string[]>();
+    const metrics = computeMetricsWithSegments(predictions, segmentTagsByImageId);
 
     reviewRepository.updateRunMetrics(body.run_id, JSON.stringify(metrics));
 

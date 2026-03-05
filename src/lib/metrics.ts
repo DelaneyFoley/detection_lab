@@ -8,6 +8,39 @@ function isInferenceCallFailure(prediction: Prediction): boolean {
 }
 
 export function computeMetrics(predictions: Prediction[]): MetricsSummary {
+  return computeMetricsInternal(predictions);
+}
+
+export function computeMetricsWithSegments(
+  predictions: Prediction[],
+  segmentTagsByImageId: Map<string, string[]>
+): MetricsSummary {
+  const overall = computeMetricsInternal(predictions);
+  const bySegment = new Map<string, Prediction[]>();
+
+  for (const prediction of predictions) {
+    const tags = segmentTagsByImageId.get(String(prediction.image_id || "")) || [];
+    const normalizedTags = tags.length > 0 ? tags : ["Baseline"];
+    for (const tag of normalizedTags) {
+      const key = String(tag || "").trim() || "Baseline";
+      const bucket = bySegment.get(key) || [];
+      bucket.push(prediction);
+      bySegment.set(key, bucket);
+    }
+  }
+
+  const segment_metrics: NonNullable<MetricsSummary["segment_metrics"]> = {};
+  for (const [segment, segmentPredictions] of bySegment.entries()) {
+    segment_metrics[segment] = computeMetricsInternal(segmentPredictions);
+  }
+
+  return {
+    ...overall,
+    segment_metrics,
+  };
+}
+
+function computeMetricsInternal(predictions: Prediction[]): MetricsSummary {
   let tp = 0, fp = 0, fn = 0, tn = 0;
   let parseFailures = 0;
   const labeledAndScored = predictions.filter(

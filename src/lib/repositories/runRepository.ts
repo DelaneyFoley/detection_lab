@@ -1,5 +1,6 @@
 import type { Prediction } from "@/types";
 import { dataStore } from "@/lib/services";
+import { sortByImageId } from "@/lib/imageIdSort";
 
 export class RunRepository {
   getRunById(runId: string): any | undefined {
@@ -7,7 +8,7 @@ export class RunRepository {
   }
 
   getRunPredictions(runId: string): Prediction[] {
-    return dataStore.all<Prediction>("SELECT * FROM predictions WHERE run_id = ? ORDER BY image_id", runId);
+    return sortByImageId(dataStore.all<Prediction>("SELECT * FROM predictions WHERE run_id = ?", runId));
   }
 
   listRuns(filters: {
@@ -57,7 +58,7 @@ export class RunRepository {
   }
 
   getDatasetItems(datasetId: string): any[] {
-    return dataStore.all<any>("SELECT * FROM dataset_items WHERE dataset_id = ? ORDER BY image_id", datasetId);
+    return sortByImageId(dataStore.all<any>("SELECT * FROM dataset_items WHERE dataset_id = ?", datasetId));
   }
 
   getDetectionById(detectionId: string): any | undefined {

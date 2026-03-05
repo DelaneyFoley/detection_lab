@@ -42,12 +42,16 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelingRun, setCancelingRun] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [segmentOptionsDraft, setSegmentOptionsDraft] = useState<string[]>(
+    Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []
+  );
+  const [newSegmentOption, setNewSegmentOption] = useState("");
+  const [savingSegments, setSavingSegments] = useState(false);
   const autoSplit = splitType === "AUTO_SPLIT";
 
   const segmentOptions = useMemo(() => {
-    if (!Array.isArray(detection.segment_taxonomy)) return [];
-    return detection.segment_taxonomy.filter(Boolean);
-  }, [detection.segment_taxonomy]);
+    return segmentOptionsDraft;
+  }, [segmentOptionsDraft]);
 
   useEffect(() => {
     setMode("load");
@@ -63,6 +67,10 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setValidationError("");
     setPreviewIndex(null);
   }, [detection.detection_id]);
+
+  useEffect(() => {
+    setSegmentOptionsDraft(Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []);
+  }, [detection.segment_taxonomy, detection.detection_id]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -157,7 +165,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         preview: URL.createObjectURL(file),
         imageId: sanitizeImageId(base || `image_${i + 1}`),
         groundTruthLabel: null,
-        segmentTags: [],
+        segmentTags: ["Baseline"],
         aiAssignedLabel: "" as const,
         aiConfidence: null,
         aiDescription: "",
@@ -228,6 +236,48 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
   const updateRow = (id: string, patch: Partial<BuildRow>) => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  const addSegmentOption = () => {
+    const next = String(newSegmentOption || "").trim();
+    if (!next) return;
+    if (segmentOptionsDraft.some((item) => item.toLowerCase() === next.toLowerCase())) return;
+    setSegmentOptionsDraft((prev) => [...prev, next]);
+    setNewSegmentOption("");
+  };
+
+  const removeSegmentOption = (value: string) => {
+    setSegmentOptionsDraft((prev) => prev.filter((item) => item !== value));
+  };
+
+  const saveSegmentOptions = async () => {
+    setSavingSegments(true);
+    try {
+      const res = await fetch("/api/detections", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          detection_id: detection.detection_id,
+          display_name: detection.display_name,
+          description: detection.description,
+          label_policy: detection.label_policy,
+          decision_rubric: Array.isArray(detection.decision_rubric) ? detection.decision_rubric : [],
+          segment_taxonomy: segmentOptionsDraft,
+          metric_thresholds: detection.metric_thresholds,
+          approved_prompt_version: detection.approved_prompt_version,
+        }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(payload?.error || "Failed to update segment categories");
+      }
+      triggerRefresh();
+      setStatus("Segment categories updated for this detection.");
+    } catch (error: unknown) {
+      setStatus(`Error: ${error instanceof Error ? error.message : "Failed to update segment categories"}`);
+    } finally {
+      setSavingSegments(false);
+    }
   };
 
   const createDatasetOnly = async () => {
@@ -526,8 +576,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       </p>
 
       <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => {
                 setMode("load");
@@ -569,7 +619,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
           <div>
             <label className="text-xs text-gray-400 block mb-1">Prompt Version</label>
             <select
@@ -640,7 +690,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
         {mode === "build" && (
           <div className="space-y-3">
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setBuildInputMode("files")}
@@ -667,7 +717,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
             {buildInputMode === "files" ? (
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Image Files</label>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <input
                     id="build-dataset-files-input"
                     type="file"
@@ -692,7 +742,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                 <label className="text-xs text-gray-400 block mb-1">
                   Excel File (`image_id,image_url,ground_truth_label`) {excelFileName ? `• ${excelFileName}` : ""}
                 </label>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <input
                     id="build-dataset-excel-input"
                     type="file"
@@ -735,10 +785,51 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
             {autoSplit && (
               <p className="text-xs text-gray-400">
-                Auto-split creates TRAIN, TEST, and EVAL datasets in a 70/15/15 split. It stratifies by ground truth label
+                Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split. It stratifies by ground truth label
                 and balances segment tags where available. All rows must have `ground_truth_label` set before saving.
               </p>
             )}
+            <div className="border border-gray-800 bg-gray-950/30 rounded-lg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-gray-400">Segment Categories</div>
+                <div className="text-[11px] text-gray-500">{segmentOptionsDraft.length} total</div>
+              </div>
+              <div className="max-h-24 overflow-auto rounded border border-gray-800 bg-gray-900/50 p-2">
+                <div className="flex flex-wrap gap-1.5">
+                {segmentOptionsDraft.map((segment) => (
+                  <span key={segment} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-gray-800 text-gray-200 text-xs">
+                    {segment}
+                    <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => removeSegmentOption(segment)}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+                {segmentOptionsDraft.length === 0 && <span className="text-xs text-gray-500">No segment categories yet.</span>}
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <input
+                  className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs"
+                  placeholder="Add segment category"
+                  value={newSegmentOption}
+                  onChange={(e) => setNewSegmentOption(e.target.value)}
+                />
+                <button type="button" onClick={addSegmentOption} className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700">
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={saveSegmentOptions}
+                  disabled={savingSegments}
+                  className="px-3 py-1.5 text-xs rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50"
+                >
+                  {savingSegments ? "Saving..." : "Save Categories"}
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-500">
+                Saving here updates the detection segment taxonomy and does not create a new prompt version.
+              </p>
+            </div>
           </div>
         )}
 
@@ -830,7 +921,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           </div>
         )}
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {mode === "build" && (
             <button
               onClick={saveDataset}
@@ -1081,7 +1172,7 @@ function delay(ms: number) {
 }
 
 function normalizeSegmentTags(value: unknown): string[] {
-  if (value == null) return [];
+  if (value == null) return ["Baseline"];
   const parts = Array.isArray(value)
     ? value.map((v) => String(v || ""))
     : String(value)
@@ -1097,7 +1188,7 @@ function normalizeSegmentTags(value: unknown): string[] {
     seen.add(key);
     tags.push(clean);
   }
-  return tags;
+  return tags.length > 0 ? tags : ["Baseline"];
 }
 
 function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {
@@ -1137,7 +1228,7 @@ function splitRowsForAutoSplit(rows: BuildRow[]): Record<"ITERATION" | "GOLDEN" 
   const detected = shuffle(rows.filter((r) => r.groundTruthLabel === "DETECTED"));
   const notDetected = shuffle(rows.filter((r) => r.groundTruthLabel === "NOT_DETECTED"));
 
-  const countsByRatios = (total: number, ratios: [number, number, number] = [0.7, 0.15, 0.15]) => {
+  const countsByRatios = (total: number, ratios: [number, number, number] = [0.5, 0.2, 0.3]) => {
     const exact = ratios.map((r) => r * total);
     const counts = exact.map((v) => Math.floor(v)) as [number, number, number];
     let remaining = total - counts.reduce((acc, n) => acc + n, 0);
@@ -1207,7 +1298,7 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div className="relative">
+    <div className="space-y-1.5">
       <select
         className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
         value=""
@@ -1225,7 +1316,7 @@ function SegmentTagsEditor({
         ))}
       </select>
       {value.length > 0 && (
-        <div className="absolute left-0 top-full mt-1.5 flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1">
           {value.map((tag) => (
             <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
               {tag}

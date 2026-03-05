@@ -5,11 +5,12 @@ import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { compareImageIds } from "@/lib/imageIdSort";
 
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 export function SavedDatasets({ detections }: { detections: Detection[] }) {
-  const { triggerRefresh, refreshCounter, apiKey, selectedModel } = useAppStore();
+  const { triggerRefresh, refreshCounter } = useAppStore();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
@@ -21,8 +22,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [itemSortBy, setItemSortBy] = useState<"image_id" | "ground_truth_label">("image_id");
   const [itemSortDir, setItemSortDir] = useState<"asc" | "desc">("asc");
-  const [describingImages, setDescribingImages] = useState(false);
-  const [describingProgress, setDescribingProgress] = useState("");
   const [appendingImages, setAppendingImages] = useState(false);
   const [appendSelectionCount, setAppendSelectionCount] = useState(0);
 
@@ -68,13 +67,13 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     copy.sort((a, b) => {
       let delta = 0;
       if (itemSortBy === "image_id") {
-        delta = naturalCollator.compare(String(a.image_id || ""), String(b.image_id || ""));
+        delta = compareImageIds(String(a.image_id || ""), String(b.image_id || ""));
       } else {
         delta = naturalCollator.compare(String(a.ground_truth_label || ""), String(b.ground_truth_label || ""));
       }
       if (delta < 0) return itemSortDir === "asc" ? -1 : 1;
       if (delta > 0) return itemSortDir === "asc" ? 1 : -1;
-      const tieBreak = naturalCollator.compare(String(a.image_id || ""), String(b.image_id || ""));
+      const tieBreak = compareImageIds(String(a.image_id || ""), String(b.image_id || ""));
       if (tieBreak < 0) return itemSortDir === "asc" ? -1 : 1;
       if (tieBreak > 0) return itemSortDir === "asc" ? 1 : -1;
       return 0;
@@ -284,50 +283,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     triggerRefresh();
   };
 
-  const populateDescriptionsWithAi = async () => {
-    if (!selectedDatasetId) return;
-    setDescribingImages(true);
-    setDescribingProgress("");
-    try {
-      const pendingItemIds = datasetItems
-        .filter((item) => !String(item.image_description || "").trim())
-        .map((item) => item.item_id);
-      if (pendingItemIds.length === 0) {
-        setDescribingProgress("All descriptions already populated.");
-        return;
-      }
-      let updated = 0;
-      for (let i = 0; i < pendingItemIds.length; i++) {
-        setDescribingProgress(`Describing images: ${i}/${pendingItemIds.length}`);
-        const res = await fetch("/api/gemini/describe-dataset", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: apiKey,
-            model_override: selectedModel,
-            dataset_id: selectedDatasetId,
-            overwrite: false,
-            item_ids: [pendingItemIds[i]],
-          }),
-        });
-        const payload = await res.json();
-        if (!res.ok) throw new Error(payload?.error || "Failed to generate descriptions");
-        updated += Number(payload.updated || 0);
-      }
-      setDescribingProgress(`Describing images: ${pendingItemIds.length}/${pendingItemIds.length}`);
-      await loadDatasets();
-      await loadDatasetItems(selectedDatasetId);
-      triggerRefresh();
-      alert(`Generated ${updated} descriptions.`);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Failed to generate descriptions";
-      alert(msg);
-    } finally {
-      setDescribingProgress("");
-      setDescribingImages(false);
-    }
-  };
-
   const toggleItemSort = (field: "image_id" | "ground_truth_label") => {
     if (itemSortBy === field) {
       setItemSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
@@ -335,6 +290,49 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     }
     setItemSortBy(field);
     setItemSortDir("asc");
+  };
+
+  const exportSelectedDatasetJson = () => {
+    if (!selectedDataset) return;
+    const payload = {
+      dataset: selectedDataset,
+      items: sortedDatasetItems.map((item) => ({
+        image_id: item.image_id,
+        image_uri: item.image_uri,
+        image_description: item.image_description || "",
+        ground_truth_label: item.ground_truth_label || null,
+        segment_tags: normalizeSegmentTags(item.segment_tags),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${sanitizeImageId(selectedDataset.name || "dataset")}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportSelectedDatasetCsv = () => {
+    if (!selectedDataset) return;
+    const headers = ["image_id", "image_uri", "image_description", "ground_truth_label", "segment_tags"];
+    const rows = sortedDatasetItems.map((item) => [
+      item.image_id || "",
+      item.image_uri || "",
+      item.image_description || "",
+      item.ground_truth_label || "",
+      normalizeSegmentTags(item.segment_tags).join("|"),
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((value) => csvEscape(value)).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${sanitizeImageId(selectedDataset.name || "dataset")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -403,9 +401,9 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
       {selectedDataset && (
         <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap justify-between items-center gap-2">
             <h3 className="text-sm font-medium text-gray-200">Dataset Details</h3>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => {
                   if (isEditingDetails) {
@@ -429,11 +427,18 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 </button>
               )}
               <button
-                onClick={populateDescriptionsWithAi}
-                disabled={describingImages || datasetItems.length === 0}
-                className="text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded"
+                onClick={exportSelectedDatasetCsv}
+                disabled={datasetItems.length === 0}
+                className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
               >
-                {describingImages ? "Generating..." : "Populate Descriptions with AI"}
+                Export CSV
+              </button>
+              <button
+                onClick={exportSelectedDatasetJson}
+                disabled={datasetItems.length === 0}
+                className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+              >
+                Export JSON
               </button>
               <button
                 onClick={deleteDataset}
@@ -443,7 +448,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               </button>
             </div>
           </div>
-          {describingProgress && <div className="text-xs text-gray-500">{describingProgress}</div>}
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -1397,7 +1401,7 @@ function normalizeManifestRows(
 }
 
 function normalizeSegmentTags(value: unknown): string[] {
-  if (value == null) return [];
+  if (value == null) return ["Baseline"];
   const rawParts = Array.isArray(value)
     ? value.map((v) => String(v || ""))
     : String(value)
@@ -1413,7 +1417,7 @@ function normalizeSegmentTags(value: unknown): string[] {
     seen.add(key);
     tags.push(clean);
   }
-  return tags;
+  return tags.length > 0 ? tags : ["Baseline"];
 }
 
 function SegmentTagList({ value }: { value: string[] }) {
@@ -1439,7 +1443,7 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div className="relative">
+    <div className="space-y-1.5">
       <select
         className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
         value=""
@@ -1457,7 +1461,7 @@ function SegmentTagsEditor({
         ))}
       </select>
       {value.length > 0 && (
-        <div className="absolute left-0 top-full mt-1.5 flex flex-wrap gap-1">
+        <div className="flex flex-wrap gap-1">
           {value.map((tag) => (
             <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
               {tag}
@@ -1474,6 +1478,12 @@ function SegmentTagsEditor({
       )}
     </div>
   );
+}
+
+function csvEscape(value: unknown): string {
+  const str = String(value ?? "");
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, "\"\"")}"`;
+  return str;
 }
 
 function splitRowsForAutoSplit<T extends { ground_truth_label: "DETECTED" | "NOT_DETECTED"; segment_tags?: string[] }>(
@@ -1493,7 +1503,7 @@ function splitRowsForAutoSplit<T extends { ground_truth_label: "DETECTED" | "NOT
     }
     return copy;
   };
-  const countsByRatios = (total: number, ratios: [number, number, number] = [0.7, 0.15, 0.15]) => {
+  const countsByRatios = (total: number, ratios: [number, number, number] = [0.5, 0.2, 0.3]) => {
     const exact = ratios.map((r) => r * total);
     const counts = exact.map((v) => Math.floor(v)) as [number, number, number];
     let remaining = total - counts.reduce((acc, n) => acc + n, 0);

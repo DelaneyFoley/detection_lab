@@ -41,6 +41,7 @@ export function MetricsDisplay({
       </div>
 
       {showConfusionMatrix && <ConfusionMatrixPanel metrics={metrics} />}
+      <SegmentMetricsPanel metrics={metrics} />
     </div>
   );
 }
@@ -87,6 +88,48 @@ function MetricCard({ label, value, color }: { label: string; value: string; col
     <div className="bg-gray-900/50 rounded px-3 py-2 text-center">
       <div className={`text-lg font-semibold ${color}`}>{value}</div>
       <div className="text-xs text-gray-500">{label}</div>
+    </div>
+  );
+}
+
+function SegmentMetricsPanel({ metrics }: { metrics: MetricsSummary }) {
+  const entries = Object.entries(metrics.segment_metrics || {}).sort(([, a], [, b]) => b.total - a.total);
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mt-4">
+      <p className="text-xs text-gray-500 mb-2 font-medium">Segment Breakdown</p>
+      <div className="overflow-x-auto border border-gray-700 rounded">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-900/60 text-gray-500">
+            <tr>
+              <th className="text-left px-2 py-1.5">Segment</th>
+              <th className="text-right px-2 py-1.5">Total</th>
+              <th className="text-right px-2 py-1.5">Accuracy</th>
+              <th className="text-right px-2 py-1.5">Precision</th>
+              <th className="text-right px-2 py-1.5">Recall</th>
+              <th className="text-right px-2 py-1.5">F1</th>
+              <th className="text-right px-2 py-1.5">Parse Fail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([segment, value]) => (
+              <tr key={segment} className="border-t border-gray-800">
+                <td className="px-2 py-1.5 text-gray-300">{segment}</td>
+                <td className="px-2 py-1.5 text-right text-gray-400">{value.total}</td>
+                <td className="px-2 py-1.5 text-right text-gray-300">{(value.accuracy * 100).toFixed(1)}%</td>
+                <td className="px-2 py-1.5 text-right text-blue-400">{(value.precision * 100).toFixed(1)}%</td>
+                <td className="px-2 py-1.5 text-right text-green-400">{(value.recall * 100).toFixed(1)}%</td>
+                <td className="px-2 py-1.5 text-right text-yellow-400">{(value.f1 * 100).toFixed(1)}%</td>
+                <td className="px-2 py-1.5 text-right text-orange-300">{(value.parse_failure_rate * 100).toFixed(1)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-1 text-[11px] text-gray-500">
+        Images with multiple segment tags are counted in each segment.
+      </p>
     </div>
   );
 }

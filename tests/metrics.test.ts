@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeMetrics } from "@/lib/metrics";
+import { computeMetrics, computeMetricsWithSegments } from "@/lib/metrics";
 import type { Prediction } from "@/types";
 
 function basePrediction(overrides: Partial<Prediction> = {}): Prediction {
@@ -76,5 +76,21 @@ describe("computeMetrics", () => {
     const metrics = computeMetrics(predictions);
     expect(metrics.tp).toBe(1);
     expect(metrics.total).toBe(1);
+  });
+
+  it("computes segment metrics and counts multi-tag images in each segment", () => {
+    const predictions: Prediction[] = [
+      basePrediction({ prediction_id: "a", image_id: "img_a", ground_truth_label: "DETECTED", predicted_decision: "DETECTED" }),
+      basePrediction({ prediction_id: "b", image_id: "img_b", ground_truth_label: "NOT_DETECTED", predicted_decision: "DETECTED" }),
+    ];
+    const segmentMap = new Map<string, string[]>([
+      ["img_a", ["Day", "Baseline"]],
+      ["img_b", ["Baseline"]],
+    ]);
+
+    const metrics = computeMetricsWithSegments(predictions, segmentMap);
+    expect(metrics.segment_metrics?.Baseline?.total).toBe(2);
+    expect(metrics.segment_metrics?.Day?.total).toBe(1);
+    expect(metrics.segment_metrics?.Day?.tp).toBe(1);
   });
 });
