@@ -760,7 +760,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               <tbody>
                 {rows.map((r, index) => (
                   <tr key={r.id} className="border-b border-gray-900/70">
-                    <td className={`px-2 py-2 ${mode === "build" ? "align-top" : "align-middle"}`}>
+                    <td className="px-2 py-2 align-middle">
                       <img
                         src={r.preview}
                         alt={r.imageId}
@@ -779,7 +779,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                         <div className="w-full py-1 text-xs font-mono text-gray-300">{r.imageId}</div>
                       )}
                     </td>
-                    <td className={`px-2 py-2 whitespace-nowrap ${mode === "build" ? "align-top" : "align-middle"}`}>
+                    <td className="px-2 py-2 whitespace-nowrap align-middle">
                       {mode === "build" ? (
                         <select
                           className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
@@ -796,7 +796,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                         <GroundTruthBadge value={r.groundTruthLabel || null} />
                       )}
                     </td>
-                    <td className={`px-2 py-2 min-w-[260px] ${mode === "build" ? "align-top" : "align-middle"}`}>
+                    <td className="px-2 py-2 min-w-[260px] align-middle">
                       {mode === "build" ? (
                         <SegmentTagsEditor
                           value={r.segmentTags}
@@ -1207,27 +1207,25 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="w-full">
-        <select
-          className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
-          value=""
-          onChange={(e) => {
-            const next = e.target.value;
-            if (!next) return;
-            if (!value.includes(next)) onChange([...value, next]);
-          }}
-        >
-          <option value="">Add tag...</option>
-          {options.filter((option) => !value.includes(option)).map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      </div>
+    <div className="relative">
+      <select
+        className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+        value=""
+        onChange={(e) => {
+          const next = e.target.value;
+          if (!next) return;
+          if (!value.includes(next)) onChange([...value, next]);
+        }}
+      >
+        <option value="">Add tag...</option>
+        {options.filter((option) => !value.includes(option)).map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
       {value.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="absolute left-0 top-full mt-1.5 flex flex-wrap gap-1">
           {value.map((tag) => (
             <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
               {tag}

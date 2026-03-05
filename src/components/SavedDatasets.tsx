@@ -542,7 +542,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           onClick={() => setSelectedPreviewIndex(index)}
                         />
                       </td>
-                      <td className={`px-2 py-2 ${isEditingDetails ? "align-top" : "align-middle"}`}>
+                      <td className="px-2 py-2 align-middle">
                         {isEditingDetails ? (
                           <input
                             className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300"
@@ -553,7 +553,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="w-full py-1 text-xs font-mono text-gray-300">{item.image_id}</div>
                         )}
                       </td>
-                      <td className={`px-2 py-2 ${isEditingDetails ? "align-top" : "align-middle"}`}>
+                      <td className="px-2 py-2 align-middle">
                         {isEditingDetails ? (
                           <input
                             className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
@@ -564,7 +564,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="w-full py-1 text-xs text-gray-300">{item.image_description || ""}</div>
                         )}
                       </td>
-                      <td className={`px-2 py-2 ${isEditingDetails ? "align-top" : "align-middle"}`}>
+                      <td className="px-2 py-2 align-middle">
                         {isEditingDetails ? (
                           <select
                             className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
@@ -585,7 +585,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           </div>
                         )}
                       </td>
-                      <td className={`px-2 py-2 min-w-[260px] ${isEditingDetails ? "align-top" : "align-middle"}`}>
+                      <td className="px-2 py-2 min-w-[260px] align-middle">
                         {isEditingDetails ? (
                           <SegmentTagsEditor
                             value={normalizeSegmentTags(item.segment_tags)}
@@ -597,7 +597,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         )}
                       </td>
                       {isEditingDetails && (
-                        <td className={`px-2 py-2 text-right ${isEditingDetails ? "align-top" : "align-middle"}`}>
+                        <td className="px-2 py-2 text-right align-middle">
                           <button
                             onClick={() => void deleteItem(item)}
                             className="text-red-400 hover:text-red-300"
@@ -1439,27 +1439,25 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="w-full">
-        <select
-          className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
-          value=""
-          onChange={(e) => {
-            const next = e.target.value;
-            if (!next) return;
-            if (!value.includes(next)) onChange([...value, next]);
-          }}
-        >
-          <option value="">Add tag...</option>
-          {options.filter((option) => !value.includes(option)).map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      </div>
+    <div className="relative">
+      <select
+        className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+        value=""
+        onChange={(e) => {
+          const next = e.target.value;
+          if (!next) return;
+          if (!value.includes(next)) onChange([...value, next]);
+        }}
+      >
+        <option value="">Add tag...</option>
+        {options.filter((option) => !value.includes(option)).map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
       {value.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
+        <div className="absolute left-0 top-full mt-1.5 flex flex-wrap gap-1">
           {value.map((tag) => (
             <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
               {tag}
