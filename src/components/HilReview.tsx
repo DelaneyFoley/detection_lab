@@ -35,6 +35,7 @@ export function HilReview({ detection }: { detection: Detection }) {
   const [viewMode, setViewMode] = useState<"table" | "image">("table");
   const [currentIndex, setCurrentIndex] = useState(0);
   const [runData, setRunData] = useState<any>(null);
+  const [datasetItemByImageId, setDatasetItemByImageId] = useState<Record<string, { item_id: string; segment_tags: string[] }>>({});
   const [loadingRun, setLoadingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const liveMetrics = useMemo(() => computeMetrics(predictions), [predictions]);
@@ -77,6 +78,7 @@ export function HilReview({ detection }: { detection: Detection }) {
     if (!selectedRunId) {
       setRunData(null);
       setPredictions([]);
+      setDatasetItemByImageId({});
       setRunError(null);
       return;
     }
@@ -95,10 +97,28 @@ export function HilReview({ detection }: { detection: Detection }) {
           ? data.predictions.map((p: Prediction) => withAutoErrorTag(p))
           : []
       );
+      if (data?.dataset_id) {
+        const datasetRes = await fetch(`/api/datasets?dataset_id=${data.dataset_id}`);
+        const datasetPayload = await datasetRes.json();
+        const items = Array.isArray(datasetPayload?.items) ? datasetPayload.items : [];
+        const nextByImageId: Record<string, { item_id: string; segment_tags: string[] }> = {};
+        for (const item of items) {
+          const imageId = String(item?.image_id || "");
+          if (!imageId) continue;
+          nextByImageId[imageId] = {
+            item_id: String(item?.item_id || ""),
+            segment_tags: normalizeSegmentTags(item?.segment_tags),
+          };
+        }
+        setDatasetItemByImageId(nextByImageId);
+      } else {
+        setDatasetItemByImageId({});
+      }
       setCurrentIndex(0);
     } catch (error) {
       setRunData(null);
       setPredictions([]);
+      setDatasetItemByImageId({});
       setRunError(error instanceof Error ? error.message : "Failed to load run");
     } finally {
       setLoadingRun(false);
@@ -194,6 +214,29 @@ export function HilReview({ detection }: { detection: Detection }) {
   };
 
   const currentPrediction = filteredPredictions[currentIndex];
+  const currentDatasetItem = currentPrediction ? datasetItemByImageId[currentPrediction.image_id] : null;
+
+  const updateSegmentTagsForImage = async (imageId: string, nextTags: string[]) => {
+    const item = datasetItemByImageId[imageId];
+    if (!item?.item_id) return;
+    const normalized = normalizeSegmentTags(nextTags);
+    const res = await fetch("/api/datasets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        item_id: item.item_id,
+        segment_tags: normalized,
+      }),
+    });
+    if (!res.ok) return;
+    setDatasetItemByImageId((prev) => ({
+      ...prev,
+      [imageId]: {
+        ...prev[imageId],
+        segment_tags: normalized,
+      },
+    }));
+  };
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -382,6 +425,9 @@ export function HilReview({ detection }: { detection: Detection }) {
           onPrev={() => setCurrentIndex((i) => Math.max(i - 1, 0))}
           onUpdate={updatePrediction}
           isIteration={runData?.split_type === "ITERATION"}
+          segmentTags={currentDatasetItem?.segment_tags || []}
+          segmentOptions={Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy : []}
+          onUpdateSegmentTags={(nextTags) => updateSegmentTagsForImage(currentPrediction.image_id, nextTags)}
         />
       )}
 
@@ -508,6 +554,9 @@ function ImageReviewMode({
   onPrev,
   onUpdate,
   isIteration,
+  segmentTags,
+  segmentOptions,
+  onUpdateSegmentTags,
 }: {
   prediction: Prediction;
   index: number;
@@ -516,6 +565,9 @@ function ImageReviewMode({
   onPrev: () => void;
   onUpdate: (id: string, updates: any) => void;
   isIteration: boolean;
+  segmentTags: string[];
+  segmentOptions: string[];
+  onUpdateSegmentTags: (nextTags: string[]) => void;
 }) {
   const [note, setNote] = useState(p.reviewer_note || "");
   const [noteDirty, setNoteDirty] = useState(false);
@@ -842,6 +894,11 @@ function ImageReviewMode({
           )}
         </div>
 
+        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+          <h4 className="text-xs text-gray-500 font-medium mb-2">Segments</h4>
+          <SegmentTagsEditor value={segmentTags} options={segmentOptions} onChange={onUpdateSegmentTags} />
+        </div>
+
         {/* Error Tag */}
         <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
           <h4 className="text-xs text-gray-500 font-medium mb-2">Error Tag</h4>
@@ -900,6 +957,68 @@ function ImageReviewMode({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function normalizeSegmentTags(value: unknown): string[] {
+  if (value == null) return [];
+  const raw = Array.isArray(value)
+    ? value.map((v) => String(v || ""))
+    : String(value)
+        .split(/[;,|]/g)
+        .map((v) => String(v || ""));
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const part of raw) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tags.push(clean);
+  }
+  return tags;
+}
+
+function SegmentTagsEditor({
+  value,
+  options,
+  onChange,
+}: {
+  value: string[];
+  options: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <select
+        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs"
+        value=""
+        onChange={(e) => {
+          const next = e.target.value;
+          if (!next) return;
+          if (!value.includes(next)) onChange([...value, next]);
+        }}
+      >
+        <option value="">Add tag...</option>
+        {options.filter((option) => !value.includes(option)).map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+      <div className="flex flex-wrap gap-1 min-h-5">
+        {value.length === 0 && <span className="text-[11px] text-gray-500">No segments</span>}
+        {value.map((tag) => (
+          <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+            {tag}
+            <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => onChange(value.filter((v) => v !== tag))}>
+              ×
+            </button>
+          </span>
+        ))}
       </div>
     </div>
   );

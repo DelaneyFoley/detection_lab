@@ -133,6 +133,13 @@ export class DatasetRepository {
     return dataStore.get<any>("SELECT * FROM dataset_items WHERE item_id = ?", itemId);
   }
 
+  getDatasetItemsForDataset(datasetId: string): Array<{ item_id: string; image_id: string }> {
+    return dataStore.all<{ item_id: string; image_id: string }>(
+      "SELECT item_id, image_id FROM dataset_items WHERE dataset_id = ?",
+      datasetId
+    );
+  }
+
   getDuplicateImageItem(datasetId: string, imageId: string, excludeItemId: string): { item_id: string } | undefined {
     return dataStore.get<{ item_id: string }>(
       "SELECT item_id FROM dataset_items WHERE dataset_id = ? AND image_id = ? AND item_id != ? LIMIT 1",
@@ -173,6 +180,38 @@ export class DatasetRepository {
       imageDescription,
       itemId
     );
+  }
+
+  bulkUpdateDatasetItems(
+    items: Array<{
+      itemId: string;
+      imageId: string;
+      imageUri: string;
+      imageDescription: string;
+      segmentTagsJson: string;
+      aiAssignedLabel: string | null;
+      aiConfidence: number | null;
+      groundTruthLabel: string | null;
+    }>
+  ) {
+    const tx = dataStore.transaction((store, payload: typeof items) => {
+      for (const item of payload) {
+        store.run(
+          `UPDATE dataset_items
+           SET image_id = ?, image_uri = ?, image_description = ?, segment_tags = ?, ai_assigned_label = ?, ai_confidence = ?, ground_truth_label = ?
+           WHERE item_id = ?`,
+          item.imageId,
+          item.imageUri,
+          item.imageDescription,
+          item.segmentTagsJson,
+          item.aiAssignedLabel,
+          item.aiConfidence,
+          item.groundTruthLabel,
+          item.itemId
+        );
+      }
+    });
+    tx(items);
   }
 
   deleteDatasetItem(itemId: string) {

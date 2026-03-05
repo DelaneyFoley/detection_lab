@@ -28,12 +28,11 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [selectedExistingDatasetId, setSelectedExistingDatasetId] = useState("");
 
   const [datasetName, setDatasetName] = useState("");
-  const [splitType, setSplitType] = useState<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL">("ITERATION");
+  const [splitType, setSplitType] = useState<"" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT">("");
   const [rows, setRows] = useState<BuildRow[]>([]);
   const [buildInputMode, setBuildInputMode] = useState<"files" | "excel" | "json">("files");
   const [excelFileName, setExcelFileName] = useState("");
   const [jsonInput, setJsonInput] = useState("");
-  const [autoSplit, setAutoSplit] = useState(false);
 
   const [building, setBuilding] = useState(false);
   const [buildMode, setBuildMode] = useState<"save" | "run" | null>(null);
@@ -43,11 +42,27 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelingRun, setCancelingRun] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const autoSplit = splitType === "AUTO_SPLIT";
 
   const segmentOptions = useMemo(() => {
     if (!Array.isArray(detection.segment_taxonomy)) return [];
     return detection.segment_taxonomy.filter(Boolean);
   }, [detection.segment_taxonomy]);
+
+  useEffect(() => {
+    setMode("load");
+    setSelectedExistingDatasetId("");
+    setRows([]);
+    setDatasetName("");
+    setSplitType("");
+    setBuildInputMode("files");
+    setExcelFileName("");
+    setJsonInput("");
+    setBuiltDatasetId(null);
+    setStatus("");
+    setValidationError("");
+    setPreviewIndex(null);
+  }, [detection.detection_id]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -72,9 +87,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       if (promptRows[0]?.prompt_version_id) {
         setSelectedPromptId((prev) => prev || promptRows[0].prompt_version_id);
       }
-      if (datasetRows[0]?.dataset_id) {
-        setSelectedExistingDatasetId((prev) => prev || datasetRows[0].dataset_id);
-      }
+      setSelectedExistingDatasetId((prev) => (datasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
     };
     loadData();
   }, [detection.detection_id, refreshCounter]);
@@ -124,8 +137,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   }, [previewIndex, rows.length]);
 
   const canSave = useMemo(
-    () => mode === "build" && rows.length > 0 && datasetName.trim().length > 0 && validateImageIds(rows).ok,
-    [mode, rows, datasetName]
+    () => mode === "build" && rows.length > 0 && datasetName.trim().length > 0 && splitType !== "" && validateImageIds(rows).ok,
+    [mode, rows, datasetName, splitType]
   );
   const canRun = useMemo(
     () => !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
@@ -218,6 +231,9 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   };
 
   const createDatasetOnly = async () => {
+    if (splitType !== "ITERATION" && splitType !== "GOLDEN" && splitType !== "HELD_OUT_EVAL") {
+      throw new Error("Select TRAIN, TEST, or EVAL to save a single dataset.");
+    }
     const validation = validateImageIds(rows);
     if (!validation.ok) throw new Error(validation.error);
 
@@ -441,7 +457,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setBuildInputMode("files");
     setExcelFileName("");
     setJsonInput("");
-    setAutoSplit(false);
+    setSplitType("");
     setBuiltDatasetId(null);
     setStatus("");
     setValidationError("");
@@ -480,11 +496,6 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       return;
     }
     if (!canRun) return;
-    const validation = validateImageIds(rows);
-    if (mode === "build" && !validation.ok) {
-      setValidationError(validation.error);
-      return;
-    }
     setValidationError("");
     setBuilding(true);
     setBuildMode("run");
@@ -518,7 +529,14 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         <div className="flex items-center justify-between">
           <div className="flex gap-2">
             <button
-              onClick={() => setMode("load")}
+              onClick={() => {
+                setMode("load");
+                setRows([]);
+                setBuiltDatasetId(null);
+                setStatus("");
+                setValidationError("");
+                setPreviewIndex(null);
+              }}
               className={`px-3 py-1.5 text-xs rounded ${mode === "load" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
             >
               Load Dataset
@@ -526,7 +544,16 @@ export function BuildDataset({ detection }: { detection: Detection }) {
             <button
               onClick={() => {
                 setMode("build");
+                setRows([]);
+                setDatasetName("");
+                setSplitType("");
+                setBuildInputMode("files");
+                setExcelFileName("");
+                setJsonInput("");
                 setBuiltDatasetId(null);
+                setStatus("");
+                setValidationError("");
+                setPreviewIndex(null);
               }}
               className={`px-3 py-1.5 text-xs rounded ${mode === "build" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
             >
@@ -580,23 +607,32 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
                 <input
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+                  className={`w-full bg-gray-900 rounded px-3 py-2 text-sm ${
+                    datasetName.trim() ? "border border-gray-700" : "border border-red-500/70"
+                  }`}
                   value={datasetName}
                   onChange={(e) => setDatasetName(e.target.value)}
-                  placeholder="e.g. New Exterior Batch"
                 />
+                {!datasetName.trim() && <p className="mt-1 text-[11px] text-red-400">Dataset name is required.</p>}
               </div>
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Split Type</label>
                 <select
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+                  className={`w-full bg-gray-900 rounded px-3 py-2 text-sm ${
+                    splitType ? "border border-gray-700" : "border border-red-500/70"
+                  }`}
                   value={splitType}
-                  onChange={(e) => setSplitType(e.target.value as "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL")}
+                  onChange={(e) =>
+                    setSplitType(e.target.value as "" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT")
+                  }
                 >
+                  <option value="">Select split type</option>
                   <option value="ITERATION">TRAIN</option>
                   <option value="GOLDEN">TEST</option>
                   <option value="HELD_OUT_EVAL">EVAL</option>
+                  <option value="AUTO_SPLIT">AUTO-SPLIT</option>
                 </select>
+                {!splitType && <p className="mt-1 text-[11px] text-red-400">Split type is required.</p>}
               </div>
             </>
           )}
@@ -697,21 +733,10 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               </div>
             )}
 
-            {buildInputMode !== "files" && (
-              <label className="flex items-center gap-2 text-xs text-gray-400">
-                <input type="checkbox" checked={autoSplit} onChange={(e) => setAutoSplit(e.target.checked)} />
-                Auto-split into TRAIN/TEST/EVAL datasets (label stratification + segment balancing)
-              </label>
-            )}
-            {buildInputMode === "files" && (
-              <label className="flex items-center gap-2 text-xs text-gray-400">
-                <input type="checkbox" checked={autoSplit} onChange={(e) => setAutoSplit(e.target.checked)} />
-                Auto-split uploaded images into TRAIN/TEST/EVAL (requires all ground truth labels)
-              </label>
-            )}
-            {autoSplit && rows.length > 0 && (
-              <p className="text-xs text-gray-500">
-                Review and edit ground truth + segment tags below before clicking Save.
+            {autoSplit && (
+              <p className="text-xs text-gray-400">
+                Auto-split creates TRAIN, TEST, and EVAL datasets in a 70/15/15 split. It stratifies by ground truth label
+                and balances segment tags where available. All rows must have `ground_truth_label` set before saving.
               </p>
             )}
           </div>
@@ -735,7 +760,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               <tbody>
                 {rows.map((r, index) => (
                   <tr key={r.id} className="border-b border-gray-900/70">
-                    <td className="px-2 py-2">
+                    <td className={`px-2 py-2 ${mode === "build" ? "align-top" : "align-middle"}`}>
                       <img
                         src={r.preview}
                         alt={r.imageId}
@@ -743,44 +768,56 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                         onClick={() => setPreviewIndex(index)}
                       />
                     </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-                        value={r.imageId}
-                        onChange={(e) => updateRow(r.id, { imageId: sanitizeImageId(e.target.value) })}
-                      />
+                    <td className="px-2 py-2 align-middle">
+                      {mode === "build" ? (
+                        <input
+                          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
+                          value={r.imageId}
+                          onChange={(e) => updateRow(r.id, { imageId: sanitizeImageId(e.target.value) })}
+                        />
+                      ) : (
+                        <div className="w-full py-1 text-xs font-mono text-gray-300">{r.imageId}</div>
+                      )}
                     </td>
-                    <td className="px-2 py-2 whitespace-nowrap">
-                      <select
-                        className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
-                        value={r.groundTruthLabel || ""}
-                        onChange={(e) =>
-                          updateRow(r.id, { groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null })
-                        }
-                      >
-                        <option value="">UNSET</option>
-                        <option value="DETECTED">DETECTED</option>
-                        <option value="NOT_DETECTED">NOT_DETECTED</option>
-                      </select>
+                    <td className={`px-2 py-2 whitespace-nowrap ${mode === "build" ? "align-top" : "align-middle"}`}>
+                      {mode === "build" ? (
+                        <select
+                          className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                          value={r.groundTruthLabel || ""}
+                          onChange={(e) =>
+                            updateRow(r.id, { groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null })
+                          }
+                        >
+                          <option value="">UNSET</option>
+                          <option value="DETECTED">DETECTED</option>
+                          <option value="NOT_DETECTED">NOT_DETECTED</option>
+                        </select>
+                      ) : (
+                        <GroundTruthBadge value={r.groundTruthLabel || null} />
+                      )}
                     </td>
-                    <td className="px-2 py-2 min-w-[220px]">
-                      <SegmentTagsEditor
-                        value={r.segmentTags}
-                        options={segmentOptions}
-                        onChange={(next) => updateRow(r.id, { segmentTags: next })}
-                      />
+                    <td className={`px-2 py-2 min-w-[260px] ${mode === "build" ? "align-top" : "align-middle"}`}>
+                      {mode === "build" ? (
+                        <SegmentTagsEditor
+                          value={r.segmentTags}
+                          options={segmentOptions}
+                          onChange={(next) => updateRow(r.id, { segmentTags: next })}
+                        />
+                      ) : (
+                        <SegmentTagList value={r.segmentTags} />
+                      )}
                     </td>
-                    <td className="px-2 py-2 whitespace-nowrap">
+                    <td className="px-2 py-2 whitespace-nowrap align-middle">
                       <LabelBadge label={r.aiAssignedLabel || "—"} />
                     </td>
-                    <td className="px-2 py-2 text-gray-300 whitespace-nowrap">
+                    <td className="px-2 py-2 text-gray-300 whitespace-nowrap align-middle">
                       {typeof r.aiConfidence === "number" ? r.aiConfidence.toFixed(2) : "—"}
                     </td>
-                    <td className="px-2 py-2 text-gray-400 max-w-xs truncate" title={r.aiDescription || ""}>
+                    <td className="px-2 py-2 text-gray-400 max-w-xs truncate align-middle" title={r.aiDescription || ""}>
                       {r.aiDescription || "—"}
                     </td>
                     {mode === "build" && (
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2 text-right align-middle">
                         <button className="text-red-400 hover:text-red-300" onClick={() => removeRow(r.id)}>
                           Remove
                         </button>
@@ -798,7 +835,11 @@ export function BuildDataset({ detection }: { detection: Detection }) {
             <button
               onClick={saveDataset}
               disabled={!canSave || building}
-              className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-45 rounded"
+              className={`text-xs px-3 py-1.5 rounded transition-colors ${
+                !canSave || building
+                  ? "bg-emerald-900/50 text-emerald-300/60 cursor-not-allowed"
+                  : "bg-emerald-500 hover:bg-emerald-400 text-white"
+              }`}
             >
               {building && buildMode === "save" ? "Saving..." : "Save"}
             </button>
@@ -806,7 +847,13 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           <button
             onClick={runDataset}
             disabled={!canRun || building || autoSplit}
-            className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-45 rounded"
+            className={`text-xs px-3 py-1.5 rounded transition-colors ${
+              !canRun || building || autoSplit
+                ? "bg-blue-900/40 text-blue-300/60 cursor-not-allowed"
+                : mode === "load" || !!builtDatasetId
+                  ? "bg-blue-500 hover:bg-blue-400 text-white"
+                  : "bg-blue-800 text-blue-200"
+            }`}
           >
             {building && buildMode === "run" ? "Running..." : "Run"}
           </button>
@@ -845,40 +892,72 @@ export function BuildDataset({ detection }: { detection: Detection }) {
             <div className="space-y-3">
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Image ID</label>
-                <input
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs font-mono"
-                  value={previewRow.imageId}
-                  onChange={(e) => updateRow(previewRow.id, { imageId: sanitizeImageId(e.target.value) })}
-                />
+                {mode === "build" ? (
+                  <input
+                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs font-mono"
+                    value={previewRow.imageId}
+                    onChange={(e) => updateRow(previewRow.id, { imageId: sanitizeImageId(e.target.value) })}
+                  />
+                ) : (
+                  <div className="w-full py-1.5 text-xs font-mono text-gray-300">{previewRow.imageId}</div>
+                )}
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Ground Truth</label>
-                <select
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs"
-                  value={previewRow.groundTruthLabel || ""}
-                  onChange={(e) =>
-                    updateRow(previewRow.id, {
-                      groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null,
-                    })
-                  }
-                >
-                  <option value="">UNSET</option>
-                  <option value="DETECTED">DETECTED</option>
-                  <option value="NOT_DETECTED">NOT_DETECTED</option>
-                </select>
+                {mode === "build" ? (
+                  <select
+                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs"
+                    value={previewRow.groundTruthLabel || ""}
+                    onChange={(e) =>
+                      updateRow(previewRow.id, {
+                        groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null,
+                      })
+                    }
+                  >
+                    <option value="">UNSET</option>
+                    <option value="DETECTED">DETECTED</option>
+                    <option value="NOT_DETECTED">NOT_DETECTED</option>
+                  </select>
+                ) : (
+                  <div className="w-full py-1.5 text-xs text-gray-300">
+                    <GroundTruthBadge value={previewRow.groundTruthLabel || null} />
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Segments</label>
-                <SegmentTagsEditor
-                  value={previewRow.segmentTags}
-                  options={segmentOptions}
-                  onChange={(next) => updateRow(previewRow.id, { segmentTags: next })}
-                />
+                {mode === "build" ? (
+                  <SegmentTagsEditor
+                    value={previewRow.segmentTags}
+                    options={segmentOptions}
+                    onChange={(next) => updateRow(previewRow.id, { segmentTags: next })}
+                  />
+                ) : (
+                  <SegmentTagList value={previewRow.segmentTags} />
+                )}
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1">AI Description</label>
                 <div className="text-xs text-gray-300 whitespace-pre-wrap break-words">{previewRow.aiDescription || "—"}</div>
               </div>
+              {mode === "build" && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    className="text-xs px-2.5 py-1 rounded bg-red-700 hover:bg-red-600 text-white"
+                    onClick={() => {
+                      removeRow(previewRow.id);
+                      setPreviewIndex((idx) => {
+                        if (idx == null) return null;
+                        if (rows.length <= 1) return null;
+                        return Math.max(0, Math.min(idx, rows.length - 2));
+                      });
+                    }}
+                  >
+                    Remove Image
+                  </button>
+                </div>
+              )}
             </div>
           ) : null
         }
@@ -1021,6 +1100,25 @@ function normalizeSegmentTags(value: unknown): string[] {
   return tags;
 }
 
+function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {
+  if (value === "DETECTED") return <span className="px-2 py-0.5 rounded bg-purple-900/40 text-purple-300">DETECTED</span>;
+  if (value === "NOT_DETECTED") return <span className="px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300">NOT_DETECTED</span>;
+  return <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-400">UNSET</span>;
+}
+
+function SegmentTagList({ value }: { value: string[] }) {
+  if (!value.length) return <span className="text-gray-500 text-[11px]">No segments</span>;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {value.map((tag) => (
+        <span key={tag} className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function splitRowsForAutoSplit(rows: BuildRow[]): Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", BuildRow[]> {
   const order: Array<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
   const splits: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", BuildRow[]> = {
@@ -1108,28 +1206,11 @@ function SegmentTagsEditor({
   options: string[];
   onChange: (next: string[]) => void;
 }) {
-  const [customTag, setCustomTag] = useState("");
-
   return (
-    <div className="space-y-1">
-      <div className="flex flex-wrap gap-1">
-        {value.length === 0 && <span className="text-[11px] text-gray-500">No segments</span>}
-        {value.map((tag) => (
-          <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
-            {tag}
-            <button
-              type="button"
-              className="text-gray-400 hover:text-red-300"
-              onClick={() => onChange(value.filter((v) => v !== tag))}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-1">
+    <div className="flex flex-col gap-1.5">
+      <div className="w-full">
         <select
-          className="bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+          className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
           value=""
           onChange={(e) => {
             const next = e.target.value;
@@ -1137,32 +1218,30 @@ function SegmentTagsEditor({
             if (!value.includes(next)) onChange([...value, next]);
           }}
         >
-          <option value="">+ Taxonomy tag</option>
+          <option value="">Add tag...</option>
           {options.filter((option) => !value.includes(option)).map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
         </select>
-        <input
-          className="w-24 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
-          placeholder="Custom"
-          value={customTag}
-          onChange={(e) => setCustomTag(e.target.value)}
-        />
-        <button
-          type="button"
-          className="px-1.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700"
-          onClick={() => {
-            const clean = customTag.trim();
-            if (!clean) return;
-            if (!value.includes(clean)) onChange([...value, clean]);
-            setCustomTag("");
-          }}
-        >
-          Add
-        </button>
       </div>
+      {value.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {value.map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+              {tag}
+              <button
+                type="button"
+                className="text-gray-400 hover:text-red-300"
+                onClick={() => onChange(value.filter((v) => v !== tag))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

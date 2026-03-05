@@ -162,24 +162,25 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
         throw new Error(text || "Failed to save dataset metadata");
       }
 
-      // Save item edits sequentially to avoid sqlite write contention.
-      for (const item of datasetItems) {
-        const itemRes = await fetch("/api/datasets", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+      const itemRes = await fetch("/api/datasets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "bulk_update_items",
+          dataset_id: selectedDataset.dataset_id,
+          items: datasetItems.map((item) => ({
             item_id: item.item_id,
             image_id: item.image_id.trim(),
             image_uri: item.image_uri,
             image_description: item.image_description || "",
             ground_truth_label: item.ground_truth_label,
             segment_tags: normalizeSegmentTags(item.segment_tags),
-          }),
-        });
-        if (!itemRes.ok) {
-          const text = await itemRes.text();
-          throw new Error(text || `Failed saving item ${item.image_id}`);
-        }
+          })),
+        }),
+      });
+      if (!itemRes.ok) {
+        const text = await itemRes.text();
+        throw new Error(text || "Failed to save dataset items");
       }
 
       await loadDatasets();
@@ -532,8 +533,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 </thead>
                 <tbody>
                   {sortedDatasetItems.map((item, index) => (
-                    <tr key={item.item_id} className="border-b border-gray-900/70 align-top">
-                      <td className="px-2 py-2 w-44">
+                    <tr key={item.item_id} className="border-b border-gray-900/70">
+                      <td className="px-2 py-2 w-44 align-middle">
                         <img
                           src={item.image_uri}
                           alt={item.image_id}
@@ -541,7 +542,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           onClick={() => setSelectedPreviewIndex(index)}
                         />
                       </td>
-                      <td className="px-2 py-2">
+                      <td className={`px-2 py-2 ${isEditingDetails ? "align-top" : "align-middle"}`}>
                         {isEditingDetails ? (
                           <input
                             className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300"
@@ -552,7 +553,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="w-full py-1 text-xs font-mono text-gray-300">{item.image_id}</div>
                         )}
                       </td>
-                      <td className="px-2 py-2">
+                      <td className={`px-2 py-2 ${isEditingDetails ? "align-top" : "align-middle"}`}>
                         {isEditingDetails ? (
                           <input
                             className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
@@ -563,7 +564,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="w-full py-1 text-xs text-gray-300">{item.image_description || ""}</div>
                         )}
                       </td>
-                      <td className="px-2 py-2">
+                      <td className={`px-2 py-2 ${isEditingDetails ? "align-top" : "align-middle"}`}>
                         {isEditingDetails ? (
                           <select
                             className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
@@ -584,7 +585,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           </div>
                         )}
                       </td>
-                      <td className="px-2 py-2 min-w-[220px]">
+                      <td className={`px-2 py-2 min-w-[260px] ${isEditingDetails ? "align-top" : "align-middle"}`}>
                         {isEditingDetails ? (
                           <SegmentTagsEditor
                             value={normalizeSegmentTags(item.segment_tags)}
@@ -596,7 +597,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         )}
                       </td>
                       {isEditingDetails && (
-                        <td className="px-2 py-2 text-right">
+                        <td className={`px-2 py-2 text-right ${isEditingDetails ? "align-top" : "align-middle"}`}>
                           <button
                             onClick={() => void deleteItem(item)}
                             className="text-red-400 hover:text-red-300"
@@ -1437,28 +1438,11 @@ function SegmentTagsEditor({
   options: string[];
   onChange: (next: string[]) => void;
 }) {
-  const [customTag, setCustomTag] = useState("");
-
   return (
-    <div className="space-y-1">
-      <div className="flex flex-wrap gap-1">
-        {value.length === 0 && <span className="text-gray-500 text-[11px]">No segments</span>}
-        {value.map((tag) => (
-          <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
-            {tag}
-            <button
-              type="button"
-              className="text-gray-400 hover:text-red-300"
-              onClick={() => onChange(value.filter((v) => v !== tag))}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-1">
+    <div className="flex flex-col gap-1.5">
+      <div className="w-full">
         <select
-          className="bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
+          className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
           value=""
           onChange={(e) => {
             const next = e.target.value;
@@ -1466,32 +1450,30 @@ function SegmentTagsEditor({
             if (!value.includes(next)) onChange([...value, next]);
           }}
         >
-          <option value="">+ Taxonomy tag</option>
+          <option value="">Add tag...</option>
           {options.filter((option) => !value.includes(option)).map((option) => (
             <option key={option} value={option}>
               {option}
             </option>
           ))}
         </select>
-        <input
-          className="w-24 bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
-          placeholder="Custom"
-          value={customTag}
-          onChange={(e) => setCustomTag(e.target.value)}
-        />
-        <button
-          type="button"
-          className="px-1.5 py-1 text-[11px] rounded bg-gray-800 hover:bg-gray-700"
-          onClick={() => {
-            const clean = customTag.trim();
-            if (!clean) return;
-            if (!value.includes(clean)) onChange([...value, clean]);
-            setCustomTag("");
-          }}
-        >
-          Add
-        </button>
       </div>
+      {value.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {value.map((tag) => (
+            <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
+              {tag}
+              <button
+                type="button"
+                className="text-gray-400 hover:text-red-300"
+                onClick={() => onChange(value.filter((v) => v !== tag))}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

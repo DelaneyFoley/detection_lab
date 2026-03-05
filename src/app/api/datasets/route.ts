@@ -398,6 +398,88 @@ export async function PUT(req: NextRequest) {
 
   const body = await req.json();
 
+  if (body.action === "bulk_update_items") {
+    const datasetId = String(body.dataset_id || "").trim();
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!datasetId) {
+      return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
+    }
+    if (rawItems.length === 0) {
+      return NextResponse.json({ error: "items must be a non-empty array" }, { status: 400 });
+    }
+
+    const dataset = datasetRepository.getDatasetById(datasetId);
+    if (!dataset) {
+      return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
+    }
+
+    const allItems = datasetRepository.getDatasetItemsForDataset(datasetId);
+    const imageByItemId = new Map<string, string>(allItems.map((item) => [item.item_id, normalizeImageId(item.image_id)]));
+    const pendingUpdates: Array<{
+      itemId: string;
+      imageId: string;
+      imageUri: string;
+      imageDescription: string;
+      segmentTagsJson: string;
+      aiAssignedLabel: string | null;
+      aiConfidence: number | null;
+      groundTruthLabel: string | null;
+    }> = [];
+    const seenItemIds = new Set<string>();
+
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i] ?? {};
+      const itemId = String(item.item_id || "").trim();
+      if (!itemId) {
+        return NextResponse.json({ error: `item_id is required (item ${i + 1})` }, { status: 400 });
+      }
+      if (seenItemIds.has(itemId)) {
+        return NextResponse.json({ error: `Duplicate item_id in request: ${itemId}` }, { status: 400 });
+      }
+      seenItemIds.add(itemId);
+
+      const existing = datasetRepository.getDatasetItemById(itemId);
+      if (!existing || existing.dataset_id !== datasetId) {
+        return NextResponse.json({ error: `Invalid item_id for dataset: ${itemId}` }, { status: 400 });
+      }
+
+      const nextImageId = normalizeImageId(item.image_id ?? existing.image_id);
+      if (!nextImageId) {
+        return NextResponse.json({ error: `image_id cannot be blank (item ${i + 1})` }, { status: 400 });
+      }
+
+      imageByItemId.set(itemId, nextImageId);
+      pendingUpdates.push({
+        itemId,
+        imageId: nextImageId,
+        imageUri: item.image_uri ?? existing.image_uri,
+        imageDescription: item.image_description ?? existing.image_description ?? "",
+        segmentTagsJson: JSON.stringify(
+          Object.prototype.hasOwnProperty.call(item, "segment_tags")
+            ? normalizeSegmentTags(item.segment_tags)
+            : parseSegmentTags(existing.segment_tags)
+        ),
+        aiAssignedLabel: existing.ai_assigned_label ?? null,
+        aiConfidence: existing.ai_confidence ?? null,
+        groundTruthLabel: Object.prototype.hasOwnProperty.call(item, "ground_truth_label")
+          ? item.ground_truth_label ?? null
+          : existing.ground_truth_label ?? null,
+      });
+    }
+
+    const seenImageIds = new Set<string>();
+    for (const imageId of imageByItemId.values()) {
+      if (seenImageIds.has(imageId)) {
+        return NextResponse.json({ error: `Duplicate image_id: ${imageId}` }, { status: 400 });
+      }
+      seenImageIds.add(imageId);
+    }
+
+    datasetRepository.bulkUpdateDatasetItems(pendingUpdates);
+    datasetRepository.refreshDatasetStats(datasetId, now);
+    return NextResponse.json({ ok: true, updated: pendingUpdates.length });
+  }
+
   if (body.item_id) {
     const existing = datasetRepository.getDatasetItemById(body.item_id);
     if (!existing) {

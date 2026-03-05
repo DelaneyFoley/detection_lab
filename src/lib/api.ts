@@ -71,6 +71,11 @@ export function applyRateLimit(
     windowMs,
   }: { key: string; maxRequests: number; windowMs: number }
 ): NextResponse | null {
+  // Disabled by default during active development. Re-enable pre-deploy with ENABLE_RATE_LIMIT=true.
+  if (process.env.ENABLE_RATE_LIMIT !== "true") {
+    return null;
+  }
+
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
   const bucketKey = `${ip}:${key}`;
   const now = Date.now();
