@@ -79,6 +79,7 @@ export async function POST(req: NextRequest) {
     if (!parsedBody.success) return parsedBody.response;
     const payload = parsedBody.data;
     const { prompt_version_id, dataset_id, detection_id, model_override } = payload;
+    const allowEvalRun = payload.allow_eval_run === true;
     const apiKey = String(payload.api_key || process.env.GEMINI_API_KEY || "").trim();
     const requestedConcurrency = Number(payload.max_concurrency);
     const maxConcurrency = Number.isFinite(requestedConcurrency)
@@ -96,6 +97,12 @@ export async function POST(req: NextRequest) {
     // Fetch dataset
     const dataset = runRepository.getDatasetById(dataset_id);
     if (!dataset) return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
+    if (dataset.split_type === "HELD_OUT_EVAL" && !allowEvalRun) {
+      return NextResponse.json(
+        { error: "EVALUATE datasets can only be run from the Held-Out Eval tab." },
+        { status: 400 }
+      );
+    }
 
     const items = runRepository.getDatasetItems(dataset_id);
 

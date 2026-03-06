@@ -91,10 +91,6 @@ export class DetectionRepository {
     );
   }
 
-  getDatasetIdsByDetection(detectionId: string): Array<{ dataset_id: string }> {
-    return dataStore.all<{ dataset_id: string }>("SELECT dataset_id FROM datasets WHERE detection_id = ?", detectionId);
-  }
-
   deleteDetectionCascade(detectionId: string) {
     const tx = dataStore.transaction((store, targetDetectionId: string) => {
       const runs = store.all<{ run_id: string }>("SELECT run_id FROM runs WHERE detection_id = ?", targetDetectionId);
@@ -102,12 +98,8 @@ export class DetectionRepository {
         store.run("DELETE FROM predictions WHERE run_id = ?", r.run_id);
       }
       store.run("DELETE FROM runs WHERE detection_id = ?", targetDetectionId);
-
-      const ds = store.all<{ dataset_id: string }>("SELECT dataset_id FROM datasets WHERE detection_id = ?", targetDetectionId);
-      for (const d of ds) {
-        store.run("DELETE FROM dataset_items WHERE dataset_id = ?", d.dataset_id);
-      }
-      store.run("DELETE FROM datasets WHERE detection_id = ?", targetDetectionId);
+      // Preserve datasets and dataset_items; unassign them from this detection.
+      store.run("UPDATE datasets SET detection_id = NULL WHERE detection_id = ?", targetDetectionId);
       store.run("DELETE FROM prompt_versions WHERE detection_id = ?", targetDetectionId);
       store.run("DELETE FROM detections WHERE detection_id = ?", targetDetectionId);
     });

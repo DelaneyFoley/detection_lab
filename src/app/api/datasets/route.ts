@@ -12,6 +12,8 @@ export async function GET(req: NextRequest) {
   try {
     const detectionId = req.nextUrl.searchParams.get("detection_id");
     const datasetId = req.nextUrl.searchParams.get("dataset_id");
+    const includeUnassigned = req.nextUrl.searchParams.get("include_unassigned") === "1";
+    const unassignedOnly = req.nextUrl.searchParams.get("unassigned") === "1";
     const search = parseSearch(req.nextUrl.searchParams.get("search"));
     const hasPagination = req.nextUrl.searchParams.has("page") || req.nextUrl.searchParams.has("page_size");
     const { page, pageSize } = parsePagination(req, { page: 1, pageSize: 50 });
@@ -27,6 +29,8 @@ export async function GET(req: NextRequest) {
     }
     const { rows, total } = datasetRepository.listDatasets({
       detectionId: detectionId || undefined,
+      includeUnassigned,
+      unassignedOnly,
       search,
       page,
       pageSize,
@@ -57,14 +61,14 @@ export async function POST(req: NextRequest) {
     const contentType = req.headers.get("content-type") || "";
 
     let name = "";
-    let detectionId = "";
+    let detectionId: string | null = null;
     let splitType = "ITERATION";
     let items: any[] = [];
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       name = String(formData.get("name") || "").trim();
-      detectionId = String(formData.get("detection_id") || "").trim();
+      detectionId = String(formData.get("detection_id") || "").trim() || null;
       splitType = String(formData.get("split_type") || "ITERATION").trim();
 
       const metaRaw = String(formData.get("items") || "[]");
@@ -78,8 +82,8 @@ export async function POST(req: NextRequest) {
       }>;
       const files = formData.getAll("files") as File[];
 
-      if (!name || !detectionId) {
-        return NextResponse.json({ error: "name and detection_id are required" }, { status: 400 });
+      if (!name) {
+        return NextResponse.json({ error: "name is required" }, { status: 400 });
       }
       if (!Array.isArray(itemMeta) || itemMeta.length === 0 || files.length === 0) {
         return NextResponse.json({ error: "files and items are required" }, { status: 400 });
@@ -125,10 +129,10 @@ export async function POST(req: NextRequest) {
 
       if (body?.action === "create_split_datasets") {
         const namePrefix = String(body.name_prefix || "").trim();
-        const detectionId = String(body.detection_id || "").trim();
+        const detectionId = String(body.detection_id || "").trim() || null;
         const rawItems = Array.isArray(body.items) ? body.items : [];
-        if (!namePrefix || !detectionId) {
-          return NextResponse.json({ error: "name_prefix and detection_id are required" }, { status: 400 });
+        if (!namePrefix) {
+          return NextResponse.json({ error: "name_prefix is required" }, { status: 400 });
         }
         if (rawItems.length === 0) {
           return NextResponse.json({ error: "items must be a non-empty array" }, { status: 400 });
@@ -243,7 +247,7 @@ export async function POST(req: NextRequest) {
       }
 
       name = body.name;
-      detectionId = body.detection_id;
+      detectionId = String(body.detection_id || "").trim() || null;
       splitType = body.split_type;
       items = body.items || [];
     }

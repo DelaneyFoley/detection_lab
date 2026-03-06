@@ -18,7 +18,7 @@ type BuildRow = {
   aiDescription?: string;
 };
 
-export function BuildDataset({ detection }: { detection: Detection }) {
+export function BuildDataset({ detection }: { detection: Detection | null }) {
   const { apiKey, selectedModel, setActiveTab, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -43,7 +43,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   const [cancelingRun, setCancelingRun] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [segmentOptionsDraft, setSegmentOptionsDraft] = useState<string[]>(
-    Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []
+    Array.isArray(detection?.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []
   );
   const [newSegmentOption, setNewSegmentOption] = useState("");
   const [savingSegments, setSavingSegments] = useState(false);
@@ -54,6 +54,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   }, [segmentOptionsDraft]);
 
   useEffect(() => {
+    if (!detection) return;
     setMode("load");
     setSelectedExistingDatasetId("");
     setRows([]);
@@ -66,17 +67,17 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     setStatus("");
     setValidationError("");
     setPreviewIndex(null);
-  }, [detection.detection_id]);
+  }, [detection]);
 
   useEffect(() => {
-    setSegmentOptionsDraft(Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []);
-  }, [detection.segment_taxonomy, detection.detection_id]);
+    setSegmentOptionsDraft(Array.isArray(detection?.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []);
+  }, [detection?.segment_taxonomy, detection?.detection_id]);
 
   useEffect(() => {
     const loadData = async () => {
       const [promptsRes, datasetsRes] = await Promise.all([
-        fetch(`/api/prompts?detection_id=${detection.detection_id}`),
-        fetch(`/api/datasets?detection_id=${detection.detection_id}`),
+        detection ? fetch(`/api/prompts?detection_id=${detection.detection_id}`) : Promise.resolve(new Response("[]")),
+        detection ? fetch(`/api/datasets?detection_id=${detection.detection_id}`) : fetch("/api/datasets?unassigned=1"),
       ]);
       const promptPayload = await promptsRes.json();
       const datasetPayload = await datasetsRes.json();
@@ -98,7 +99,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       setSelectedExistingDatasetId((prev) => (datasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
     };
     loadData();
-  }, [detection.detection_id, refreshCounter]);
+  }, [detection, refreshCounter]);
 
   useEffect(() => {
     if (mode !== "load" || !selectedExistingDatasetId) return;
@@ -149,8 +150,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     [mode, rows, datasetName, splitType]
   );
   const canRun = useMemo(
-    () => !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
-    [selectedPromptId, mode, selectedExistingDatasetId, canSave]
+    () => !!detection && !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
+    [detection, selectedPromptId, mode, selectedExistingDatasetId, canSave]
   );
   const selectedBuildFileCount = useMemo(() => rows.filter((r) => !!r.file).length, [rows]);
 
@@ -251,6 +252,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   };
 
   const saveSegmentOptions = async () => {
+    if (!detection) return;
     setSavingSegments(true);
     try {
       const res = await fetch("/api/detections", {
@@ -289,11 +291,11 @@ export function BuildDataset({ detection }: { detection: Detection }) {
 
     setStatus("Saving dataset...");
     const allRowsHaveFiles = rows.every((r) => !!r.file);
-    const createRes = allRowsHaveFiles
+      const createRes = allRowsHaveFiles
       ? await (async () => {
           const formData = new FormData();
           formData.append("name", datasetName.trim());
-          formData.append("detection_id", detection.detection_id);
+          if (detection?.detection_id) formData.append("detection_id", detection.detection_id);
           formData.append("split_type", splitType);
           formData.append(
             "items",
@@ -316,7 +318,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: datasetName.trim(),
-            detection_id: detection.detection_id,
+            detection_id: detection?.detection_id || null,
             split_type: splitType,
             items: rows.map((r) => ({
               image_id: r.imageId.trim(),
@@ -338,7 +340,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
     return datasetId;
   };
 
-  const createSplitDatasets = async () => {
+  const createSplitDatasets = async (): Promise<string | null> => {
     const validation = validateImageIds(rows);
     if (!validation.ok) throw new Error(validation.error);
     if (rows.some((r) => !r.groundTruthLabel)) {
@@ -354,7 +356,7 @@ export function BuildDataset({ detection }: { detection: Detection }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "create_split_datasets",
-          detection_id: detection.detection_id,
+          detection_id: detection?.detection_id || null,
           name_prefix: datasetName.trim(),
           items: rows.map((r) => ({
             image_id: r.imageId.trim(),
@@ -372,7 +374,9 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       setStatus(
         `Created split datasets: TRAIN=${payload?.created?.[0]?.size || 0}, TEST=${payload?.created?.[1]?.size || 0}, EVAL=${payload?.created?.[2]?.size || 0}.`
       );
-      return;
+      const created = Array.isArray(payload?.created) ? payload.created : [];
+      const train = created.find((d: any) => d?.split_type === "ITERATION");
+      return train?.dataset_id || null;
     }
 
     const splitDefinitions: Array<{ key: "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"; label: string }> = [
@@ -381,12 +385,13 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       { key: "HELD_OUT_EVAL", label: "EVAL" },
     ];
 
+    let trainDatasetId: string | null = null;
     for (const split of splitDefinitions) {
       const itemsForSplit = splitRows[split.key];
       if (itemsForSplit.length === 0) continue;
       const formData = new FormData();
       formData.append("name", `${datasetName.trim()} (${split.label})`);
-      formData.append("detection_id", detection.detection_id);
+      if (detection?.detection_id) formData.append("detection_id", detection.detection_id);
       formData.append("split_type", split.key);
       formData.append(
         "items",
@@ -409,15 +414,20 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       if (!res.ok) {
         throw new Error(payload?.error || `Failed to create ${split.label} dataset`);
       }
+      if (split.key === "ITERATION" && payload?.dataset_id) {
+        trainDatasetId = String(payload.dataset_id);
+      }
     }
 
     triggerRefresh();
     setStatus(
       `Created split datasets: TRAIN=${splitRows.ITERATION.length}, TEST=${splitRows.GOLDEN.length}, EVAL=${splitRows.HELD_OUT_EVAL.length}.`
     );
+    return trainDatasetId;
   };
 
   const runOnDataset = async (datasetId: string) => {
+    if (!detection) throw new Error("Select a detection to run prompts.");
     setStatus("Starting run...");
     const runRes = await fetch("/api/runs", {
       method: "POST",
@@ -541,15 +551,20 @@ export function BuildDataset({ detection }: { detection: Detection }) {
   };
 
   const runDataset = async () => {
-    if (autoSplit) {
-      setValidationError("Run is disabled for auto-split mode. Create split datasets first, then run from another tab.");
-      return;
-    }
     if (!canRun) return;
     setValidationError("");
     setBuilding(true);
     setBuildMode("run");
     try {
+      if (autoSplit) {
+        const trainDatasetId = await createSplitDatasets();
+        if (!trainDatasetId) {
+          throw new Error("Auto-split did not produce a TRAIN dataset to run.");
+        }
+        await runOnDataset(trainDatasetId);
+        setBuiltDatasetId(trainDatasetId);
+        return;
+      }
       let datasetId = selectedExistingDatasetId;
       if (mode === "build") {
         datasetId = builtDatasetId || (await createDatasetOnly());
@@ -574,6 +589,11 @@ export function BuildDataset({ detection }: { detection: Detection }) {
       <p className="text-sm text-gray-500">
         Option 1: load an existing labeled dataset. Option 2: build from images, Excel, or JSON.
       </p>
+      {!detection && (
+        <p className="text-xs text-amber-300">
+          No detection selected: you can build/save unassigned datasets, but running prompt inference is disabled.
+        </p>
+      )}
 
       <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -789,7 +809,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
                 and balances segment tags where available. All rows must have `ground_truth_label` set before saving.
               </p>
             )}
-            <div className="border border-gray-800 bg-gray-950/30 rounded-lg p-3 space-y-3">
+            {detection && (
+              <div className="border border-gray-800 bg-gray-950/30 rounded-lg p-3 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="text-xs text-gray-400">Segment Categories</div>
                 <div className="text-[11px] text-gray-500">{segmentOptionsDraft.length} total</div>
@@ -829,7 +850,8 @@ export function BuildDataset({ detection }: { detection: Detection }) {
               <p className="text-[11px] text-gray-500">
                 Saving here updates the detection segment taxonomy and does not create a new prompt version.
               </p>
-            </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -937,9 +959,9 @@ export function BuildDataset({ detection }: { detection: Detection }) {
           )}
           <button
             onClick={runDataset}
-            disabled={!canRun || building || autoSplit}
+            disabled={!canRun || building}
             className={`text-xs px-3 py-1.5 rounded transition-colors ${
-              !canRun || building || autoSplit
+              !canRun || building
                 ? "bg-blue-900/40 text-blue-300/60 cursor-not-allowed"
                 : mode === "load" || !!builtDatasetId
                   ? "bg-blue-500 hover:bg-blue-400 text-white"

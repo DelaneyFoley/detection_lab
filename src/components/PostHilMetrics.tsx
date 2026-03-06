@@ -215,10 +215,13 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       } | null = null;
 
       if (testDataset) {
+        const previousPrompt =
+          [...prompts]
+            .sort((a, b) => Date.parse(String(b.created_at || 0)) - Date.parse(String(a.created_at || 0)))[0] || prompt;
         const previousRun = await runPromptOnDataset({
           apiKey,
           selectedModel,
-          promptVersionId: prompt.prompt_version_id,
+          promptVersionId: previousPrompt.prompt_version_id,
           datasetId: testDataset.dataset_id,
           detectionId: detection.detection_id,
         });

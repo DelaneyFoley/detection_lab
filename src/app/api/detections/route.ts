@@ -8,7 +8,6 @@ import {
   DetectionDeleteSchema,
   DetectionUpdateSchema,
 } from "@/lib/schemas";
-import { fileStore } from "@/lib/services";
 import { detectionRepository, promptRepository, runRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
@@ -173,14 +172,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Detection not found" }, { status: 404 });
     }
 
-    const datasetIds = detectionRepository.getDatasetIdsByDetection(detectionId);
-
     detectionRepository.deleteDetectionCascade(detectionId);
-
-    // Best-effort cleanup for local uploaded files belonging to deleted datasets.
-    for (const d of datasetIds) {
-      await fileStore.removeDatasetUploadDir(d.dataset_id);
-    }
 
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {

@@ -382,7 +382,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 onClick={() => setSelectedDatasetId(d.dataset_id)}
               >
                 <td className="px-3 py-2 text-gray-200">{d.name}</td>
-                <td className="px-3 py-2 text-gray-400">{detectionNameById.get(d.detection_id) || d.detection_id}</td>
+                <td className="px-3 py-2 text-gray-400">{detectionNameById.get(String(d.detection_id || "")) || "Unassigned"}</td>
                 <td className="px-3 py-2 text-gray-400">{splitTypeLabel(d.split_type)}</td>
                 <td className="px-3 py-2 text-right text-gray-300">{d.size}</td>
                 <td className="px-3 py-2 text-gray-500">{new Date(d.updated_at).toLocaleDateString()}</td>
@@ -733,7 +733,7 @@ function GlobalDatasetUploadForm({
 }) {
   const [detectionId, setDetectionId] = useState<string>(detections[0]?.detection_id || "");
   const [name, setName] = useState("");
-  const [splitType, setSplitType] = useState<string>("ITERATION");
+  const [splitType, setSplitType] = useState<"" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT">("");
   const [mode, setMode] = useState<"json" | "excel" | "files">("files");
   const [jsonInput, setJsonInput] = useState("");
   const [jsonRows, setJsonRows] = useState<
@@ -753,7 +753,6 @@ function GlobalDatasetUploadForm({
     }>
   >([]);
   const [excelFileName, setExcelFileName] = useState("");
-  const [autoSplit, setAutoSplit] = useState(false);
   const [fileRows, setFileRows] = useState<
     Array<{
       id: string;
@@ -821,11 +820,6 @@ function GlobalDatasetUploadForm({
       setError("Dataset name is required");
       return;
     }
-    if (!detectionId) {
-      setError("Select a detection");
-      return;
-    }
-
     try {
       setUploading(true);
       if (mode === "files") {
@@ -847,7 +841,7 @@ function GlobalDatasetUploadForm({
           imageIds.add(imageId);
         }
 
-        if (autoSplit) {
+        if (splitType === "AUTO_SPLIT") {
           if (fileRows.some((r) => !r.label)) {
             setError("Auto-split requires all ground truth labels to be set.");
             return;
@@ -870,7 +864,7 @@ function GlobalDatasetUploadForm({
             if (items.length === 0) continue;
             const formData = new FormData();
             formData.append("name", `${name.trim()} (${split.label})`);
-            formData.append("detection_id", detectionId);
+            if (detectionId) formData.append("detection_id", detectionId);
             formData.append("split_type", split.key);
             formData.append(
               "items",
@@ -891,9 +885,13 @@ function GlobalDatasetUploadForm({
             }
           }
         } else {
+          if (!splitType) {
+            setError("Choose TRAIN, TEST, or EVALUATE split.");
+            return;
+          }
           const formData = new FormData();
           formData.append("name", name.trim());
-          formData.append("detection_id", detectionId);
+          if (detectionId) formData.append("detection_id", detectionId);
           formData.append("split_type", splitType);
           formData.append(
             "items",
@@ -907,7 +905,9 @@ function GlobalDatasetUploadForm({
             )
           );
           fileRows.forEach((r) => formData.append("files", r.file));
-          await fetch("/api/datasets", { method: "POST", body: formData });
+          const res = await fetch("/api/datasets", { method: "POST", body: formData });
+          const payload = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(payload?.error || "Failed to create dataset");
         }
       } else if (mode === "excel") {
         const items = excelRows.map((row) => ({
@@ -916,28 +916,40 @@ function GlobalDatasetUploadForm({
           ground_truth_label: row.ground_truth_label,
           segment_tags: normalizeSegmentTags(row.segment_tags),
         }));
-        if (autoSplit) {
-          await fetch("/api/datasets", {
+        if (splitType === "AUTO_SPLIT") {
+          if (items.some((item) => !item.ground_truth_label)) {
+            setError("Auto-split requires all ground truth labels to be set.");
+            return;
+          }
+          const res = await fetch("/api/datasets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "create_split_datasets",
               name_prefix: name.trim(),
-              detection_id: detectionId,
+              detection_id: detectionId || null,
               items,
             }),
           });
+          const payload = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(payload?.error || "Failed to create split datasets");
         } else {
-          await fetch("/api/datasets", {
+          if (!splitType) {
+            setError("Choose TRAIN, TEST, or EVALUATE split.");
+            return;
+          }
+          const res = await fetch("/api/datasets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               name: name.trim(),
-              detection_id: detectionId,
+              detection_id: detectionId || null,
               split_type: splitType,
               items,
             }),
           });
+          const payload = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(payload?.error || "Failed to create dataset");
         }
       } else {
         const sourceRows = jsonRows.length > 0 ? jsonRows : parseJsonManifest(jsonInput);
@@ -962,33 +974,45 @@ function GlobalDatasetUploadForm({
             return;
           }
         }
-        if (autoSplit) {
-          await fetch("/api/datasets", {
+        if (splitType === "AUTO_SPLIT") {
+          if (items.some((item) => !item.ground_truth_label)) {
+            setError("Auto-split requires all ground truth labels to be set.");
+            return;
+          }
+          const res = await fetch("/api/datasets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               action: "create_split_datasets",
               name_prefix: name.trim(),
-              detection_id: detectionId,
+              detection_id: detectionId || null,
               items,
             }),
           });
+          const payload = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(payload?.error || "Failed to create split datasets");
         } else {
-          await fetch("/api/datasets", {
+          if (!splitType) {
+            setError("Choose TRAIN, TEST, or EVALUATE split.");
+            return;
+          }
+          const res = await fetch("/api/datasets", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               name: name.trim(),
-              detection_id: detectionId,
+              detection_id: detectionId || null,
               split_type: splitType,
               items,
             }),
           });
+          const payload = await res.json().catch(() => null);
+          if (!res.ok) throw new Error(payload?.error || "Failed to create dataset");
         }
       }
       onUploaded();
-    } catch {
-      setError("Upload failed");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Upload failed");
     } finally {
       setUploading(false);
     }
@@ -1013,6 +1037,7 @@ function GlobalDatasetUploadForm({
             value={detectionId}
             onChange={(e) => setDetectionId(e.target.value)}
           >
+            <option value="">Unassigned (no detection yet)</option>
             {detections.map((d) => (
               <option key={d.detection_id} value={d.detection_id}>
                 {d.display_name}
@@ -1025,11 +1050,13 @@ function GlobalDatasetUploadForm({
           <select
             className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
             value={splitType}
-            onChange={(e) => setSplitType(e.target.value)}
+            onChange={(e) => setSplitType(e.target.value as "" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT")}
           >
+            <option value="">Select split type</option>
             <option value="ITERATION">TRAIN</option>
             <option value="GOLDEN">TEST</option>
             <option value="HELD_OUT_EVAL">EVALUATE</option>
+            <option value="AUTO_SPLIT">AUTO-SPLIT</option>
           </select>
         </div>
       </div>
@@ -1268,15 +1295,11 @@ function GlobalDatasetUploadForm({
 
       {error && <div className="text-xs text-red-400">{error}</div>}
 
-      {(mode === "excel" || mode === "json" || mode === "files") && (
-        <label className="flex items-center gap-2 text-xs text-gray-400">
-          <input
-            type="checkbox"
-            checked={autoSplit}
-            onChange={(e) => setAutoSplit(e.target.checked)}
-          />
-          Auto-split into TRAIN/TEST/EVAL datasets (label stratification + segment balancing; requires labels)
-        </label>
+      {splitType === "AUTO_SPLIT" && (
+        <p className="text-xs text-gray-400">
+          Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split with label stratification and segment balancing.
+          All rows must have `ground_truth_label` set.
+        </p>
       )}
 
       <button

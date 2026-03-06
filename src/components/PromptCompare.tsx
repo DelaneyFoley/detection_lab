@@ -13,6 +13,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   const { refreshCounter } = useAppStore();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [runs, setRuns] = useState<Run[]>([]);
   const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
   const [running, setRunning] = useState(false);
@@ -24,14 +25,25 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   const runningRef = useRef(false);
 
   const loadData = useCallback(async () => {
-    const [pRes, dRes] = await Promise.all([
+    const [pRes, dRes, rRes] = await Promise.all([
       fetch(`/api/prompts?detection_id=${detection.detection_id}`),
-      fetch(`/api/datasets?detection_id=${detection.detection_id}`),
+      fetch(`/api/datasets?detection_id=${detection.detection_id}&include_unassigned=1`),
+      fetch(`/api/runs?detection_id=${detection.detection_id}`),
     ]);
     const ps = await safeJsonArray<PromptVersion>(pRes, "prompts");
     const ds = await safeJsonArray<Dataset>(dRes, "datasets");
+    const rs = await safeJsonArray<Run>(rRes, "runs");
     setPrompts(ps);
-    setDatasets(ds.filter((d: Dataset) => d.split_type === "GOLDEN" || d.split_type === "ITERATION" || d.split_type === "CUSTOM"));
+    setDatasets(
+      ds.filter(
+        (d: Dataset) =>
+          d.split_type === "GOLDEN" ||
+          d.split_type === "ITERATION" ||
+          d.split_type === "HELD_OUT_EVAL" ||
+          d.split_type === "CUSTOM"
+      )
+    );
+    setRuns(rs.filter((r: Run) => r.status === "completed"));
   }, [detection.detection_id]);
 
   useEffect(() => {
@@ -45,6 +57,36 @@ export function PromptCompare({ detection }: { detection: Detection }) {
       return [...prev, id];
     });
   };
+
+  const comparableDatasetIds = useMemo(() => {
+    if (selectedPromptIds.length === 0) return new Set<string>();
+    const datasetSets = selectedPromptIds.map((promptId) => {
+      const ids = new Set<string>();
+      for (const run of runs) {
+        if (run.prompt_version_id === promptId && run.dataset_id) {
+          ids.add(run.dataset_id);
+        }
+      }
+      return ids;
+    });
+    const intersection = new Set<string>(datasetSets[0] || []);
+    for (const id of Array.from(intersection)) {
+      if (datasetSets.some((s) => !s.has(id))) {
+        intersection.delete(id);
+      }
+    }
+    return intersection;
+  }, [runs, selectedPromptIds]);
+
+  const comparableDatasets = useMemo(() => {
+    return datasets.filter((d) => comparableDatasetIds.has(d.dataset_id));
+  }, [datasets, comparableDatasetIds]);
+
+  useEffect(() => {
+    if (!selectedDatasetId) return;
+    const stillVisible = comparableDatasets.some((d) => d.dataset_id === selectedDatasetId);
+    if (!stillVisible) setSelectedDatasetId("");
+  }, [selectedDatasetId, comparableDatasets]);
 
   const runComparison = async () => {
     if (runningRef.current) return;
@@ -61,9 +103,6 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     setRunning(true);
     setResults(new Map());
     try {
-      const runsRes = await fetch(`/api/runs?detection_id=${detection.detection_id}`);
-      const runs = await safeJsonArray<Run>(runsRes, "runs");
-
       const nextResults = new Map<string, { run: any; predictions: Prediction[] }>();
 
       for (let i = 0; i < selectedPromptIds.length; i++) {
@@ -272,7 +311,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           <div>
             <h3 className="text-xs text-gray-400 font-medium mb-2">Select Dataset</h3>
             <div className="space-y-1.5">
-              {datasets.map((d) => (
+              {comparableDatasets.map((d) => (
                 <label
                   key={d.dataset_id}
                   className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
@@ -294,6 +333,11 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                   </span>
                 </label>
               ))}
+              {selectedPromptIds.length > 0 && comparableDatasets.length === 0 && (
+                <p className="text-xs text-gray-500 py-3">
+                  No shared datasets with completed runs for the selected prompt versions.
+                </p>
+              )}
             </div>
 
             <div className="mt-3 p-2 bg-gray-900/50 rounded border border-gray-700 text-xs text-gray-400">

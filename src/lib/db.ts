@@ -56,7 +56,7 @@ function initSchema(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS datasets (
       dataset_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      detection_id TEXT NOT NULL,
+      detection_id TEXT,
       split_type TEXT NOT NULL CHECK(split_type IN ('GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
       dataset_hash TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
@@ -147,11 +147,50 @@ function initSchema(db: Database.Database) {
   `);
 
   ensureDatasetItemColumns(db);
+  ensureNullableDatasetDetectionId(db);
   ensureDetectionColumns(db);
   ensureNullableGroundTruthColumns(db);
   ensureRunsColumns(db);
   ensurePredictionParseColumns(db);
   ensurePredictionRuntimeColumns(db);
+}
+
+function ensureNullableDatasetDetectionId(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string; notnull: number }>;
+  const detectionIdColumn = columns.find((c) => c.name === "detection_id");
+  if (!detectionIdColumn || detectionIdColumn.notnull === 0) return;
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+
+    CREATE TABLE datasets_new (
+      dataset_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      detection_id TEXT,
+      split_type TEXT NOT NULL CHECK(split_type IN ('GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
+      dataset_hash TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (detection_id) REFERENCES detections(detection_id)
+    );
+
+    INSERT INTO datasets_new (dataset_id, name, detection_id, split_type, dataset_hash, size, created_at, updated_at)
+    SELECT dataset_id, name, detection_id, split_type, dataset_hash, size, created_at, updated_at
+    FROM datasets;
+
+    DROP TABLE datasets;
+    ALTER TABLE datasets_new RENAME TO datasets;
+
+    CREATE INDEX IF NOT EXISTS idx_datasets_detection_id ON datasets(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_datasets_split_type ON datasets(split_type);
+    CREATE INDEX IF NOT EXISTS idx_datasets_created_at ON datasets(created_at);
+    CREATE INDEX IF NOT EXISTS idx_datasets_name ON datasets(name);
+
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
 }
 
 function ensureDatasetItemColumns(db: Database.Database) {

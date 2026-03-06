@@ -32,7 +32,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
   const loadData = useCallback(async () => {
     const [pRes, dRes, rRes] = await Promise.all([
       fetch(`/api/prompts?detection_id=${detection.detection_id}`),
-      fetch(`/api/datasets?detection_id=${detection.detection_id}`),
+      fetch(`/api/datasets?detection_id=${detection.detection_id}&include_unassigned=1`),
       fetch(`/api/runs?detection_id=${detection.detection_id}`),
     ]);
     setPrompts(await safeJsonArray<PromptVersion>(pRes, "prompts"));
@@ -76,6 +76,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           prompt_version_id: selectedPromptId,
           dataset_id: selectedDatasetId,
           detection_id: detection.detection_id,
+          allow_eval_run: true,
         }),
       });
       const data = await res.json();

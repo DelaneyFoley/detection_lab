@@ -75,7 +75,7 @@ export interface RegressionResult {
 export interface Dataset {
   dataset_id: string;
   name: string;
-  detection_id: string;
+  detection_id: string | null;
   split_type: SplitType;
   dataset_hash: string;
   size: number;

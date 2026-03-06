@@ -288,7 +288,7 @@ export default function Home() {
 
         {/* Tab Content */}
         <div className="flex-1 overflow-auto p-6">
-          {!hasStarted && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
+          {!hasStarted && activeTab !== 1 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
             <div className="max-w-3xl mx-auto pt-16">
               <div className="bg-gray-800/40 border border-gray-700 rounded-lg p-8 text-center">
                 <h3 className="text-2xl font-semibold text-white">Getting Started</h3>
@@ -310,7 +310,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          ) : !selectedDetectionId && activeTab !== 0 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
+          ) : !selectedDetectionId && activeTab !== 0 && activeTab !== 1 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
             <div className="text-center py-20 text-gray-500">
               <p className="text-lg">Select a detection to get started</p>
               <p className="text-sm mt-2">
@@ -327,11 +327,9 @@ export default function Home() {
                   createTrigger={createTrigger}
                 />
               </div>
-              {selectedDetection && (
-                <div className={activeTab === 1 ? "block" : "hidden"}>
-                  <BuildDataset detection={selectedDetection} />
-                </div>
-              )}
+              <div className={activeTab === 1 ? "block" : "hidden"}>
+                <BuildDataset detection={selectedDetection || null} />
+              </div>
               {selectedDetection && (
                 <div className={activeTab === 2 ? "block" : "hidden"}>
                   <HilReview detection={selectedDetection} />

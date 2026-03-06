@@ -31,6 +31,7 @@ export const RunCreateSchema = z.object({
   prompt_version_id: z.string().trim().min(1),
   dataset_id: z.string().trim().min(1),
   detection_id: z.string().trim().min(1),
+  allow_eval_run: z.boolean().optional(),
   model_override: z.string().trim().min(1).optional(),
   api_key: z.string().trim().min(1).optional(),
   max_concurrency: z.number().int().min(1).max(12).optional(),

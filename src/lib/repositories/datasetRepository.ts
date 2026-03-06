@@ -16,18 +16,27 @@ export class DatasetRepository {
 
   listDatasets(filters: {
     detectionId?: string;
+    includeUnassigned?: boolean;
+    unassignedOnly?: boolean;
     search?: string;
     page?: number;
     pageSize?: number;
     paginated?: boolean;
   }): { rows: any[]; total: number } {
-    const { detectionId, search = "", page = 1, pageSize = 50, paginated = false } = filters;
+    const { detectionId, includeUnassigned = false, unassignedOnly = false, search = "", page = 1, pageSize = 50, paginated = false } = filters;
     const whereClauses: string[] = [];
     const params: Array<string | number> = [];
 
-    if (detectionId) {
-      whereClauses.push("detection_id = ?");
-      params.push(detectionId);
+    if (unassignedOnly) {
+      whereClauses.push("(detection_id IS NULL OR detection_id = '')");
+    } else if (detectionId) {
+      if (includeUnassigned) {
+        whereClauses.push("(detection_id = ? OR detection_id IS NULL OR detection_id = '')");
+        params.push(detectionId);
+      } else {
+        whereClauses.push("detection_id = ?");
+        params.push(detectionId);
+      }
     }
     if (search) {
       whereClauses.push("(name LIKE ? OR split_type LIKE ?)");
@@ -48,7 +57,7 @@ export class DatasetRepository {
   createDataset(input: {
     datasetId: string;
     name: string;
-    detectionId: string;
+    detectionId: string | null;
     splitType: string;
     datasetHash: string;
     size: number;
