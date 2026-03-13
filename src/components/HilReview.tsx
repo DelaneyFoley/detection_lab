@@ -376,8 +376,8 @@ export function HilReview({ detection }: { detection: Detection }) {
           <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
             <table className="app-table app-table-fixed text-sm">
               <colgroup>
-                <col style={{ width: "11rem" }} />
                 <col style={{ width: "6rem" }} />
+                <col style={{ width: "11rem" }} />
                 <col style={{ width: "9rem" }} />
                 <col style={{ width: "10rem" }} />
                 <col style={{ width: "6rem" }} />
@@ -388,8 +388,8 @@ export function HilReview({ detection }: { detection: Detection }) {
               </colgroup>
               <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="app-table-col-label">Image</th>
-                  <th className="app-table-col-label">Thumbnail</th>
+                  <th className="app-table-col-label">Preview</th>
+                  <th className="app-table-col-label">Image ID</th>
                   <th className="app-table-col-label">Predicted</th>
                   <th className="app-table-col-label">Ground Truth</th>
                   <th className="app-table-col-label">Match</th>
@@ -504,7 +504,6 @@ function PredictionRow({
 
   return (
     <tr className={!isCorrect ? "app-table-row-alert" : ""}>
-      <td className="font-mono text-xs">{p.image_id}</td>
       <td>
         <img
           src={p.image_uri}
@@ -513,6 +512,7 @@ function PredictionRow({
           onClick={onImageReview}
         />
       </td>
+      <td className="font-mono text-xs">{p.image_id}</td>
       <td className="app-table-col-label">
         <div className="app-table-left-slot">
           <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
