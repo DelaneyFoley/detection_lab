@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { v4 as uuid } from "uuid";
 import { getDb } from "./db";
 
@@ -131,52 +130,6 @@ export function seedDefaultData() {
       SET approved_prompt_version = ?, updated_at = ?
       WHERE detection_id = ? AND approved_prompt_version IS NULL
     `).run(promptId, now, detectionId);
-  }
-
-  const datasetName = "Residential Pools Iteration Set (Diving Board, 50)";
-  const existingDataset = db
-    .prepare("SELECT dataset_id FROM datasets WHERE detection_id = ? AND name = ?")
-    .get(detectionId, datasetName) as { dataset_id: string } | undefined;
-
-  if (!existingDataset) {
-    const detectedItems = Array.from({ length: 25 }, (_, i) => {
-      const imageId = `pool_db_${String(i + 1).padStart(3, "0")}`;
-      return {
-        image_id: imageId,
-        image_uri: `/sample-data/pools-diving-board/${imageId}.svg`,
-        ground_truth_label: "DETECTED",
-      };
-    });
-    const notDetectedItems = Array.from({ length: 25 }, (_, i) => {
-      const imageId = `pool_nodb_${String(i + 1).padStart(3, "0")}`;
-      return {
-        image_id: imageId,
-        image_uri: `/sample-data/pools-diving-board/${imageId}.svg`,
-        ground_truth_label: "NOT_DETECTED",
-      };
-    });
-    const items = [...detectedItems, ...notDetectedItems];
-
-    const datasetHash = crypto
-      .createHash("sha256")
-      .update(JSON.stringify(items.map((it) => ({ image_id: it.image_id, label: it.ground_truth_label }))))
-      .digest("hex")
-      .slice(0, 16);
-
-    const datasetId = uuid();
-    db.prepare(`
-      INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(datasetId, datasetName, detectionId, "ITERATION", datasetHash, items.length, now, now);
-
-    const insertItem = db.prepare(`
-      INSERT INTO dataset_items (item_id, dataset_id, image_id, image_uri, ground_truth_label)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-
-    for (const item of items) {
-      insertItem.run(uuid(), datasetId, item.image_id, item.image_uri, item.ground_truth_label);
-    }
   }
 
   db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('seed_initialized', '1')").run();
