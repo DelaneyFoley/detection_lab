@@ -1,15 +1,27 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, type ChangeEvent } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type ChangeEvent } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
-import type { Detection, PromptVersion } from "@/types";
+import { InfoTip } from "@/components/shared/InfoTip";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
+import { DecisionBadge } from "@/components/shared/DecisionBadge";
+import type { Detection, DetectionCategory, PromptVersion } from "@/types";
+import {
+  buildUserPromptTemplate,
+  DEFAULT_CATEGORY_PROMPT_TEMPLATES,
+  DEFAULT_DETECTION_CATEGORY,
+  DETECTION_CATEGORY_LABELS,
+  DETECTION_CATEGORY_OPTIONS,
+} from "@/lib/detectionPrompts";
 
-const DEFAULT_SYSTEM_PROMPT =
-  "You are a visual detection system for property insurance underwriting. Analyze one image and return only valid JSON matching the required schema. Do not include markdown, explanations, or extra keys.";
-const DEFAULT_USER_PROMPT_TEMPLATE =
-  "Analyze this image for detection code {{DETECTION_CODE}}.\n\nReturn ONLY this JSON:\n{\n  \"detection_code\": \"{{DETECTION_CODE}}\",\n  \"decision\": \"DETECTED\" or \"NOT_DETECTED\",\n  \"confidence\": <float 0-1>,\n  \"evidence\": \"<short phrase describing visual basis>\"\n}";
+type AdminPromptSettings = {
+  incorrect_capture_system_prompt: string;
+  incorrect_capture_user_prompt: string;
+  hazard_identification_system_prompt: string;
+  hazard_identification_user_prompt: string;
+};
 
 export function DetectionSetup({
   detections,
@@ -23,6 +35,7 @@ export function DetectionSetup({
   createTrigger?: number;
 }) {
   const { apiKey, selectedModel, refreshCounter, triggerRefresh, setSelectedDetectionId } = useAppStore();
+  const { notify, confirm } = useAppFeedback();
   const [mode, setMode] = useState<"view" | "create" | "edit">("view");
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [runs, setRuns] = useState<any[]>([]);
@@ -56,18 +69,20 @@ export function DetectionSetup({
     detected: "",
     notDetected: "",
   });
-  const [editSystemPrompt, setEditSystemPrompt] = useState("");
-  const [editUserPromptTemplate, setEditUserPromptTemplate] = useState("");
   const [editVersionName, setEditVersionName] = useState("");
   const [editPromptSource, setEditPromptSource] = useState<PromptVersion | null>(null);
   const [createMode, setCreateMode] = useState<"blank" | "assist">("blank");
   const [assistInput, setAssistInput] = useState("");
   const [assistLoading, setAssistLoading] = useState(false);
   const [assistError, setAssistError] = useState<string | null>(null);
-  const [createSystemPrompt, setCreateSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
-  const [createUserPromptTemplate, setCreateUserPromptTemplate] = useState(DEFAULT_USER_PROMPT_TEMPLATE);
   const [createVersionName, setCreateVersionName] = useState("Detection baseline");
   const [lastHandledCreateTrigger, setLastHandledCreateTrigger] = useState(0);
+  const [adminPromptSettings, setAdminPromptSettings] = useState<AdminPromptSettings>({
+    incorrect_capture_system_prompt: DEFAULT_CATEGORY_PROMPT_TEMPLATES.INCORRECT_CAPTURE.system_prompt,
+    incorrect_capture_user_prompt: DEFAULT_CATEGORY_PROMPT_TEMPLATES.INCORRECT_CAPTURE.user_prompt_template,
+    hazard_identification_system_prompt: DEFAULT_CATEGORY_PROMPT_TEMPLATES.HAZARD_IDENTIFICATION.system_prompt,
+    hazard_identification_user_prompt: DEFAULT_CATEGORY_PROMPT_TEMPLATES.HAZARD_IDENTIFICATION.user_prompt_template,
+  });
   const [quickTestFiles, setQuickTestFiles] = useState<Array<{ id: string; file: File; preview: string }>>([]);
   const [quickTesting, setQuickTesting] = useState(false);
   const [quickTestProgress, setQuickTestProgress] = useState("");
@@ -87,13 +102,16 @@ export function DetectionSetup({
       parse_retry_count: number | null;
     }>
   >([]);
+  const promptEditorDraftKeyRef = useRef("");
 
   // Form state for create/edit detection
   const [form, setForm] = useState({
     detection_code: "",
     display_name: "",
     description: "",
+    detection_category: DEFAULT_DETECTION_CATEGORY as DetectionCategory,
     label_policy: "",
+    user_prompt_addendum: "",
     decision_rubric: [""],
     segment_taxonomy: [""],
     metric_thresholds: { primary_metric: "f1" as const, min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
@@ -112,6 +130,45 @@ export function DetectionSetup({
   useEffect(() => {
     loadRelated();
   }, [loadRelated, refreshCounter]);
+
+  useEffect(() => {
+    const loadAdminPrompts = async () => {
+      try {
+        const res = await fetch("/api/admin/prompts");
+        const data = await safeJsonObject<Partial<AdminPromptSettings>>(res);
+        if (!data) return;
+        setAdminPromptSettings({
+          incorrect_capture_system_prompt:
+            String(data.incorrect_capture_system_prompt || DEFAULT_CATEGORY_PROMPT_TEMPLATES.INCORRECT_CAPTURE.system_prompt),
+          incorrect_capture_user_prompt:
+            String(data.incorrect_capture_user_prompt || DEFAULT_CATEGORY_PROMPT_TEMPLATES.INCORRECT_CAPTURE.user_prompt_template),
+          hazard_identification_system_prompt:
+            String(data.hazard_identification_system_prompt || DEFAULT_CATEGORY_PROMPT_TEMPLATES.HAZARD_IDENTIFICATION.system_prompt),
+          hazard_identification_user_prompt:
+            String(data.hazard_identification_user_prompt || DEFAULT_CATEGORY_PROMPT_TEMPLATES.HAZARD_IDENTIFICATION.user_prompt_template),
+        });
+      } catch {
+        // Keep defaults when admin templates fail to load.
+      }
+    };
+    loadAdminPrompts();
+  }, []);
+
+  const getCategoryTemplates = useCallback(
+    (category: DetectionCategory) => {
+      if (category === "INCORRECT_CAPTURE") {
+        return {
+          system_prompt: adminPromptSettings.incorrect_capture_system_prompt,
+          user_prompt_template: adminPromptSettings.incorrect_capture_user_prompt,
+        };
+      }
+      return {
+        system_prompt: adminPromptSettings.hazard_identification_system_prompt,
+        user_prompt_template: adminPromptSettings.hazard_identification_user_prompt,
+      };
+    },
+    [adminPromptSettings]
+  );
 
   useEffect(() => {
     if (prompts.length === 0) {
@@ -166,11 +223,11 @@ export function DetectionSetup({
 
   const handleCreateDetection = async () => {
     if (!form.detection_code.trim()) {
-      alert("Detection code is required.");
+      notify({ message: "Detection code is required.", tone: "warning" });
       return;
     }
     if (!form.display_name.trim()) {
-      alert("Display name is required.");
+      notify({ message: "Display name is required.", tone: "warning" });
       return;
     }
     const cleanedRubric = form.decision_rubric.filter((r) => r.trim());
@@ -186,7 +243,7 @@ export function DetectionSetup({
     });
     const data = await safeJsonObject<{ detection_id?: string; error?: string }>(res);
     if (!res.ok || !data?.detection_id) {
-      alert(data?.error || "Failed to create detection");
+      notify({ message: data?.error || "Failed to create detection.", tone: "error" });
       return;
     }
 
@@ -197,12 +254,11 @@ export function DetectionSetup({
       body: JSON.stringify({
         detection_id: data.detection_id,
         version_label: (createVersionName || "Detection baseline").trim(),
-        system_prompt: createSystemPrompt,
-        user_prompt_template: createUserPromptTemplate,
         prompt_structure: {
           detection_identity: `${form.display_name} (${form.detection_code})`,
           label_policy: form.label_policy,
           decision_rubric: decisionRubricText,
+          user_prompt_addendum: form.user_prompt_addendum,
           output_schema: `{"detection_code":"${form.detection_code}","decision":"DETECTED|NOT_DETECTED","confidence":0.0,"evidence":"short phrase"}`,
           examples: "",
         },
@@ -216,7 +272,10 @@ export function DetectionSetup({
     });
     if (!promptRes.ok) {
       const promptErr = await safeJsonObject<{ error?: string }>(promptRes);
-      alert(promptErr?.error || "Detection saved, but failed to create baseline prompt version.");
+      notify({
+        message: promptErr?.error || "Detection saved, but failed to create baseline prompt version.",
+        tone: "error",
+      });
     }
 
     setSelectedDetectionId(data.detection_id);
@@ -241,6 +300,7 @@ export function DetectionSetup({
           api_key: apiKey,
           model_override: selectedModel,
           request: assistInput.trim(),
+          detection_category: form.detection_category,
         }),
       });
       const data = await res.json();
@@ -252,6 +312,9 @@ export function DetectionSetup({
       const rubric = Array.isArray(data.decision_rubric)
         ? data.decision_rubric.map((r: string) => String(r || "").trim()).filter(Boolean)
         : [];
+      const imageAttributes = Array.isArray(data.image_attributes)
+        ? data.image_attributes.map((value: string) => String(value || "").trim()).filter(Boolean)
+        : [];
       const detected = String(data.label_policy_detected || "").trim();
       const notDetected = String(data.label_policy_not_detected || "").trim();
 
@@ -262,12 +325,13 @@ export function DetectionSetup({
           .replace(/[^A-Z0-9_]/g, ""),
         display_name: String(data.display_name || prev.display_name || ""),
         description: String(data.description || prev.description || ""),
+        detection_category: (data.detection_category as DetectionCategory) || prev.detection_category,
         label_policy: composeLabelPolicySections({ detected, notDetected }),
+        user_prompt_addendum: String(data.user_prompt_addendum || prev.user_prompt_addendum || ""),
         decision_rubric: rubric.length > 0 ? rubric : prev.decision_rubric,
+        segment_taxonomy: imageAttributes.length > 0 ? imageAttributes : prev.segment_taxonomy,
       }));
       setFormLabelPolicySections({ detected, notDetected });
-      setCreateSystemPrompt(String(data.system_prompt || createSystemPrompt));
-      setCreateUserPromptTemplate(String(data.user_prompt_template || createUserPromptTemplate));
       if (String(data.version_label || "").trim()) {
         setCreateVersionName(String(data.version_label).trim());
       }
@@ -287,7 +351,9 @@ export function DetectionSetup({
         detection_id: selectedDetection.detection_id,
         display_name: form.display_name,
         description: form.description,
+        detection_category: form.detection_category,
         label_policy: form.label_policy,
+        user_prompt_addendum: form.user_prompt_addendum,
         decision_rubric: form.decision_rubric.filter((r) => r.trim()),
         segment_taxonomy: form.segment_taxonomy.map((s) => s.trim()).filter(Boolean),
         metric_thresholds: form.metric_thresholds,
@@ -296,8 +362,6 @@ export function DetectionSetup({
     });
     if (editPromptSource) {
       const nextVersionName = (editVersionName || "").trim();
-      const systemChanged = editSystemPrompt.trim() !== (editPromptSource.system_prompt || "").trim();
-      const userChanged = editUserPromptTemplate.trim() !== (editPromptSource.user_prompt_template || "").trim();
       const labelPolicyChanged =
         form.label_policy.trim() !== ((editPromptSource.prompt_structure as any)?.label_policy || "").trim();
       const rubricChanged =
@@ -306,20 +370,22 @@ export function DetectionSetup({
           .map((r, i) => `${i + 1}. ${r}`)
           .join("\n")
           .trim() !== (((editPromptSource.prompt_structure as any)?.decision_rubric || "").trim());
+      const addendumChanged =
+        form.user_prompt_addendum.trim() !==
+        (((editPromptSource.prompt_structure as any)?.user_prompt_addendum || selectedDetection.user_prompt_addendum || "").trim());
       const versionChanged = nextVersionName.length > 0 && nextVersionName !== editPromptSource.version_label;
 
-      if (systemChanged || userChanged || labelPolicyChanged || rubricChanged || versionChanged) {
+      if (labelPolicyChanged || rubricChanged || addendumChanged || versionChanged) {
         const promptRes = await fetch("/api/prompts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             detection_id: selectedDetection.detection_id,
             version_label: nextVersionName || `${editPromptSource.version_label}-rev`,
-            system_prompt: editSystemPrompt,
-            user_prompt_template: editUserPromptTemplate,
             prompt_structure: {
               ...(editPromptSource.prompt_structure || {}),
               label_policy: form.label_policy,
+              user_prompt_addendum: form.user_prompt_addendum,
               decision_rubric: form.decision_rubric
                 .filter((r) => r.trim())
                 .map((r, i) => `${i + 1}. ${r}`)
@@ -347,7 +413,16 @@ export function DetectionSetup({
 
   const deletePromptVersion = async (promptVersionId: string) => {
     if (!selectedDetection) return;
-    if (!confirm("Delete this prompt version and its run artifacts? This cannot be undone.")) return;
+    if (
+      !(await confirm({
+        title: "Delete Prompt Version",
+        message: "Delete this prompt version and its run artifacts? This cannot be undone.",
+        confirmLabel: "Delete Prompt",
+        tone: "danger",
+      }))
+    ) {
+      return;
+    }
 
     const res = await fetch("/api/prompts", {
       method: "DELETE",
@@ -357,7 +432,7 @@ export function DetectionSetup({
 
     if (!res.ok) {
       const text = await res.text();
-      alert(`Failed to delete prompt version: ${text}`);
+      notify({ message: `Failed to delete prompt version: ${text}`, tone: "error" });
       return;
     }
 
@@ -378,7 +453,9 @@ export function DetectionSetup({
       detection_code: selectedDetection.detection_code,
       display_name: selectedDetection.display_name,
       description: selectedDetection.description,
+      detection_category: selectedDetection.detection_category,
       label_policy: selectedDetection.label_policy,
+      user_prompt_addendum: selectedDetection.user_prompt_addendum || "",
       decision_rubric: selectedDetection.decision_rubric.length > 0 ? selectedDetection.decision_rubric : [""],
       segment_taxonomy:
         Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0
@@ -388,8 +465,6 @@ export function DetectionSetup({
     });
     setFormLabelPolicySections(parsedLabelPolicy);
     setEditPromptSource(sourcePrompt);
-    setEditSystemPrompt(sourcePrompt?.system_prompt || "");
-    setEditUserPromptTemplate(sourcePrompt?.user_prompt_template || "");
     setEditVersionName(sourcePrompt ? `${sourcePrompt.version_label}-rev` : `v${prompts.length + 1}.0`);
     setMode("edit");
   };
@@ -399,21 +474,19 @@ export function DetectionSetup({
       detection_code: "",
       display_name: "",
       description: "",
+      detection_category: DEFAULT_DETECTION_CATEGORY,
       label_policy: "",
+      user_prompt_addendum: "",
       decision_rubric: [""],
       segment_taxonomy: [""],
       metric_thresholds: { primary_metric: "f1", min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
     });
     setFormLabelPolicySections({ detected: "", notDetected: "" });
     setEditPromptSource(null);
-    setEditSystemPrompt("");
-    setEditUserPromptTemplate("");
     setEditVersionName(`v${prompts.length + 1}.0`);
     setCreateMode("blank");
     setAssistInput("");
     setAssistError(null);
-    setCreateSystemPrompt(DEFAULT_SYSTEM_PROMPT);
-    setCreateUserPromptTemplate(DEFAULT_USER_PROMPT_TEMPLATE);
     setCreateVersionName("Detection baseline");
     setMode("create");
   }, [prompts.length]);
@@ -596,7 +669,7 @@ export function DetectionSetup({
     if (promptVersionId) {
       const eligibility = approvalEligibilityByPrompt.get(promptVersionId);
       if (!eligibility?.eligible) {
-        alert(eligibility?.reason || "Prompt is not eligible for approval yet.");
+        notify({ message: eligibility?.reason || "Prompt is not eligible for approval yet.", tone: "warning" });
         return;
       }
     }
@@ -608,7 +681,9 @@ export function DetectionSetup({
         detection_id: selectedDetection.detection_id,
         display_name: selectedDetection.display_name,
         description: selectedDetection.description,
+        detection_category: selectedDetection.detection_category,
         label_policy: selectedDetection.label_policy,
+        user_prompt_addendum: selectedDetection.user_prompt_addendum,
         decision_rubric: selectedDetection.decision_rubric,
         metric_thresholds: selectedDetection.metric_thresholds,
         approved_prompt_version: promptVersionId,
@@ -616,7 +691,7 @@ export function DetectionSetup({
     });
     const payload = await safeJsonObject<{ error?: string }>(res);
     if (!res.ok) {
-      alert(payload?.error || "Failed to update approved prompt.");
+      notify({ message: payload?.error || "Failed to update approved prompt.", tone: "error" });
       return;
     }
     await loadRelated();
@@ -643,6 +718,53 @@ export function DetectionSetup({
   const activePromptRubricText: string =
     (activePromptForTopPanel?.prompt_structure as any)?.decision_rubric ||
     (selectedDetection?.decision_rubric || []).map((r, i) => `${i + 1}. ${r}`).join("\n");
+  const draftCategory =
+    mode === "view" ? (selectedDetection?.detection_category || DEFAULT_DETECTION_CATEGORY) : form.detection_category;
+  const draftAddendum =
+    mode === "view" ? (selectedDetection?.user_prompt_addendum || "") : form.user_prompt_addendum;
+  const currentCategoryTemplates = useMemo(
+    () => getCategoryTemplates(draftCategory),
+    [draftCategory, getCategoryTemplates]
+  );
+  const promptEditorSyncDepsKey = useMemo(
+    () =>
+      JSON.stringify({
+        promptVersionId: activePromptForTopPanel?.prompt_version_id || "",
+        versionLabel: activePromptForTopPanel?.version_label || "",
+        systemPrompt: activePromptForTopPanel?.system_prompt || currentCategoryTemplates.system_prompt,
+        userPromptTemplate:
+          activePromptForTopPanel?.user_prompt_template ||
+          buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, selectedDetection?.user_prompt_addendum || ""),
+        detectionIdentity: (activePromptForTopPanel?.prompt_structure as any)?.detection_identity || "",
+        outputSchema: (activePromptForTopPanel?.prompt_structure as any)?.output_schema || "",
+        examples: (activePromptForTopPanel?.prompt_structure as any)?.examples || "",
+        userPromptAddendum:
+          (activePromptForTopPanel?.prompt_structure as any)?.user_prompt_addendum ||
+          selectedDetection?.user_prompt_addendum ||
+          "",
+        policy: activePromptPolicy,
+        rubric: activePromptRubricText,
+        model: activePromptForTopPanel?.model || "gemini-2.5-flash",
+        temperature: activePromptForTopPanel?.temperature ?? 0,
+        topP: activePromptForTopPanel?.top_p ?? 1,
+        maxOutputTokens: activePromptForTopPanel?.max_output_tokens ?? 1024,
+        changeNotes: activePromptForTopPanel?.change_notes || "",
+        detectionId: selectedDetection?.detection_id || "",
+        detectionCode: selectedDetection?.detection_code || "",
+        promptsLength: prompts.length,
+      }),
+    [
+      activePromptForTopPanel,
+      activePromptPolicy,
+      activePromptRubricText,
+      currentCategoryTemplates.system_prompt,
+      currentCategoryTemplates.user_prompt_template,
+      selectedDetection?.detection_id,
+      selectedDetection?.detection_code,
+      selectedDetection?.user_prompt_addendum,
+      prompts.length,
+    ]
+  );
   const compiledPromptPreview = useMemo(() => {
     const detectionCode = mode === "view"
       ? selectedDetection?.detection_code || ""
@@ -655,13 +777,13 @@ export function DetectionSetup({
     let rubric = "";
 
     if (mode === "create") {
-      systemPrompt = createSystemPrompt || "";
-      userTemplate = createUserPromptTemplate || "";
+      systemPrompt = currentCategoryTemplates.system_prompt || "";
+      userTemplate = buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, form.user_prompt_addendum);
       policy = (form.label_policy || "").trim();
       rubric = form.decision_rubric.filter((r) => r.trim()).map((r, i) => `${i + 1}. ${r.trim()}`).join("\n");
     } else if (mode === "edit") {
-      systemPrompt = editSystemPrompt || "";
-      userTemplate = editUserPromptTemplate || "";
+      systemPrompt = currentCategoryTemplates.system_prompt || "";
+      userTemplate = buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, form.user_prompt_addendum);
       policy = (form.label_policy || "").trim();
       rubric = form.decision_rubric.filter((r) => r.trim()).map((r, i) => `${i + 1}. ${r.trim()}`).join("\n");
     } else {
@@ -688,16 +810,14 @@ export function DetectionSetup({
     mode,
     form.detection_code,
     form.label_policy,
+    form.user_prompt_addendum,
     form.decision_rubric,
-    createSystemPrompt,
-    createUserPromptTemplate,
-    editSystemPrompt,
-    editUserPromptTemplate,
     selectedDetection,
     selectedPrompt,
     activePromptForTopPanel,
     activePromptPolicy,
     activePromptRubricText,
+    currentCategoryTemplates,
   ]);
 
   useEffect(() => {
@@ -705,14 +825,18 @@ export function DetectionSetup({
       version_label: activePromptForTopPanel ? `${activePromptForTopPanel.version_label}-rev` : `v${prompts.length + 1}.0`,
       system_prompt:
         activePromptForTopPanel?.system_prompt ||
-        `You are a visual detection system. Your task is to analyze images for a specific detection type and return a structured JSON response.\n\nYou must ONLY return valid JSON matching the exact schema provided. No markdown, no commentary, no extra text.`,
+        currentCategoryTemplates.system_prompt,
       user_prompt_template:
         activePromptForTopPanel?.user_prompt_template ||
-        `Analyze this image for the detection: {{DETECTION_CODE}}\n\nReturn ONLY this JSON:\n{\n  "detection_code": "{{DETECTION_CODE}}",\n  "decision": "DETECTED" or "NOT_DETECTED",\n  "confidence": <float 0-1>,\n  "evidence": "<short phrase describing visual basis>"\n}`,
+        buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, selectedDetection?.user_prompt_addendum || ""),
       prompt_structure: {
         detection_identity: (activePromptForTopPanel?.prompt_structure as any)?.detection_identity || "",
         label_policy: activePromptPolicy,
         decision_rubric: activePromptRubricText,
+        user_prompt_addendum:
+          (activePromptForTopPanel?.prompt_structure as any)?.user_prompt_addendum ||
+          selectedDetection?.user_prompt_addendum ||
+          "",
         output_schema:
           (activePromptForTopPanel?.prompt_structure as any)?.output_schema ||
           (selectedDetection
@@ -726,33 +850,35 @@ export function DetectionSetup({
       max_output_tokens: activePromptForTopPanel?.max_output_tokens ?? 1024,
       change_notes: activePromptForTopPanel?.change_notes || "",
     };
+    const nextDraftKey = JSON.stringify(nextDraft);
+    if (promptEditorDraftKeyRef.current === nextDraftKey) return;
+    promptEditorDraftKeyRef.current = nextDraftKey;
 
     setPromptEditorDraft(nextDraft);
     setLabelPolicySections(parseLabelPolicySections(nextDraft.prompt_structure.label_policy));
     setDecisionRubricCriteria(parseDecisionRubricCriteria(nextDraft.prompt_structure.decision_rubric));
-  }, [
-    activePromptForTopPanel,
-    activePromptPolicy,
-    activePromptRubricText,
-    prompts.length,
-    selectedDetection,
-  ]);
+  }, [promptEditorSyncDepsKey, activePromptForTopPanel, activePromptPolicy, activePromptRubricText, currentCategoryTemplates, prompts.length, selectedDetection]);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       {/* Header Actions */}
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Detection Setup</h2>
-        <div className="flex gap-2">
+      <div className="flex flex-col gap-4 px-2 pt-1 pb-2 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Detection Setup</h2>
+          <p className="app-page-copy">
+            Define detection behavior, inspect the active prompt version, and manage prompt revisions used across your evaluation workflow.
+          </p>
+        </div>
+        <div className="flex gap-2 lg:pt-1">
           {mode === "view" && (
             <>
-              <button onClick={startCreate} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm">
+              <button onClick={startCreate} className="app-btn app-btn-primary app-btn-lg text-sm">
                 New Detection
               </button>
             </>
           )}
           {mode !== "view" && (
-            <button onClick={() => setMode("view")} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">
+            <button onClick={() => setMode("view")} className="app-btn app-btn-subtle app-btn-md text-sm">
               Cancel
             </button>
           )}
@@ -761,48 +887,54 @@ export function DetectionSetup({
 
       {/* Create/Edit Form */}
       {mode !== "view" && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-6 space-y-4">
-          <h3 className="text-sm font-medium text-gray-300">
-            {mode === "create" ? "Create Detection" : "Edit Detection"}
-          </h3>
+        <div className="app-section space-y-5">
+          <div>
+            <div className="app-kicker mb-2">{mode === "create" ? "Create Flow" : "Edit Flow"}</div>
+            <h3 className="app-section-title">{mode === "create" ? "Create Detection" : "Edit Detection"}</h3>
+            <p className="app-section-copy mt-1">
+              {mode === "create"
+                ? "Start from a blank template or let Prompt Assist draft a strong first version."
+                : "Update detection metadata and create a new prompt version when policy, rubric, or addendum changes."}
+            </p>
+          </div>
 
           {mode === "create" && (
-            <div className="space-y-3">
-              <div className="text-xs text-gray-400">Creation mode</div>
+            <div className="app-card space-y-3 p-4">
+              <div className="app-label">Creation mode</div>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={() => setCreateMode("blank")}
-                  className={`text-left rounded border px-3 py-2 ${
+                  className={`text-left rounded-2xl border px-3 py-3 ${
                     createMode === "blank"
-                      ? "border-blue-600 bg-blue-900/20 text-blue-200"
-                      : "border-gray-700 bg-gray-900/40 text-gray-300 hover:bg-gray-900/70"
+                      ? "border-[rgba(92,184,255,0.3)] bg-[rgba(35,74,108,0.36)] text-blue-100"
+                      : "border-white/8 bg-[rgba(6,13,20,0.68)] text-gray-300 hover:bg-[rgba(10,20,31,0.94)]"
                   }`}
                 >
                   <div className="text-sm font-medium">Blank Template</div>
-                  <div className="text-xs text-gray-500 mt-0.5">Start from defaults and fill manually.</div>
+                  <div className="mt-1 text-xs text-[var(--app-text-subtle)]">Start from defaults and fill manually.</div>
                 </button>
                 <button
                   type="button"
                   onClick={() => setCreateMode("assist")}
-                  className={`text-left rounded border px-3 py-2 ${
+                  className={`text-left rounded-2xl border px-3 py-3 ${
                     createMode === "assist"
-                      ? "border-blue-600 bg-blue-900/20 text-blue-200"
-                      : "border-gray-700 bg-gray-900/40 text-gray-300 hover:bg-gray-900/70"
+                      ? "border-[rgba(92,184,255,0.3)] bg-[rgba(35,74,108,0.36)] text-blue-100"
+                      : "border-white/8 bg-[rgba(6,13,20,0.68)] text-gray-300 hover:bg-[rgba(10,20,31,0.94)]"
                   }`}
                 >
                   <div className="text-sm font-medium">Prompt Assist</div>
-                  <div className="text-xs text-gray-500 mt-0.5">Generate underwriting-grade defaults with Gemini.</div>
+                  <div className="mt-1 text-xs text-[var(--app-text-subtle)]">Generate underwriting-grade defaults with Gemini.</div>
                 </button>
               </div>
 
               {createMode === "assist" && (
-                <div className="bg-gray-900/40 border border-gray-700 rounded p-3 space-y-2">
-                  <label className="text-xs text-gray-400 block">
+                <div className="rounded-2xl border border-white/8 bg-[rgba(6,13,20,0.68)] p-4 space-y-2">
+                  <label className="app-label block">
                     Describe the detection you want to build
                   </label>
                   <textarea
-                    className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-24"
+                    className="app-textarea h-24 px-3 py-2 text-sm"
                     value={assistInput}
                     onChange={(e) => setAssistInput(e.target.value)}
                     placeholder="Example: Detect severe rusting on exposed exterior plumbing and joints..."
@@ -812,7 +944,7 @@ export function DetectionSetup({
                       type="button"
                       onClick={generateWithPromptAssist}
                       disabled={assistLoading}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-xs font-medium"
+                      className="app-btn app-btn-primary px-3 py-2 text-xs"
                     >
                       {assistLoading ? "Generating..." : "Generate with Prompt Assist"}
                     </button>
@@ -823,7 +955,7 @@ export function DetectionSetup({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div>
               <label className="text-xs text-gray-400 block mb-1">Detection Code</label>
               <input
@@ -845,7 +977,23 @@ export function DetectionSetup({
             </div>
           </div>
 
-          {(mode === "edit" || mode === "create") && (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Detection Category</label>
+              <select
+                className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+                value={form.detection_category}
+                onChange={(e) =>
+                  setForm({ ...form, detection_category: e.target.value as DetectionCategory })
+                }
+              >
+                {DETECTION_CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="text-xs text-gray-400 block mb-1">Version</label>
               <input
@@ -857,7 +1005,7 @@ export function DetectionSetup({
                 placeholder={mode === "create" ? "Detection baseline" : "v2.0"}
               />
             </div>
-          )}
+          </div>
 
           <div>
             <label className="text-xs text-gray-400 block mb-1">Description</label>
@@ -868,32 +1016,32 @@ export function DetectionSetup({
             />
           </div>
 
-          {(mode === "edit" || mode === "create") && (
-            <>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">System Prompt</label>
-                <textarea
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-24"
-                  value={mode === "create" ? createSystemPrompt : editSystemPrompt}
-                  onChange={(e) =>
-                    mode === "create" ? setCreateSystemPrompt(e.target.value) : setEditSystemPrompt(e.target.value)
-                  }
-                />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">System Prompt</label>
+              <div className="app-card w-full px-3 py-2 text-sm min-h-24 whitespace-pre-wrap text-[var(--app-text)]">
+                {currentCategoryTemplates.system_prompt}
               </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">User Prompt</label>
-                <textarea
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-32"
-                  value={mode === "create" ? createUserPromptTemplate : editUserPromptTemplate}
-                  onChange={(e) =>
-                    mode === "create"
-                      ? setCreateUserPromptTemplate(e.target.value)
-                      : setEditUserPromptTemplate(e.target.value)
-                  }
-                />
+              <div className="mt-1 text-[11px] text-gray-500">Managed in Admin by detection category.</div>
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">User Prompt</label>
+              <div className="app-card w-full px-3 py-2 text-sm min-h-32 whitespace-pre-wrap text-[var(--app-text)]">
+                {buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, form.user_prompt_addendum) || "No user prompt template."}
               </div>
-            </>
-          )}
+              <div className="mt-1 text-[11px] text-gray-500">Base template is Admin-managed; addendum is detection-specific.</div>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">User Prompt Addendum</label>
+            <textarea
+              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-24"
+              value={form.user_prompt_addendum}
+              onChange={(e) => setForm({ ...form, user_prompt_addendum: e.target.value })}
+              placeholder="Optional detection-specific guidance appended to the category user prompt."
+            />
+          </div>
 
           <div>
             <label className="text-xs text-gray-400 block mb-2">Decision Policy</label>
@@ -954,9 +1102,16 @@ export function DetectionSetup({
           </div>
 
           <div>
-            <label className="text-xs text-gray-400 block mb-1">Segment Taxonomy (optional)</label>
+            <div className="flex items-center gap-2 mb-1">
+              <label className="text-xs text-gray-400 block">Image Attributes (optional)</label>
+              <InfoTip label="What are image attributes?">
+                Use attributes to tag conditions that can change model performance or hide the target, such as
+                `snow_on_ground`, `dark_image`, `blurry_image`, `glare`, or `partial_view`. Pick reusable tags that
+                help you balance datasets and compare results by slice later.
+              </InfoTip>
+            </div>
             <p className="text-[11px] text-gray-500 mb-2">
-              Define reusable image segment tags for dataset review and split balancing.
+              Define reusable tags for conditions, quality issues, and edge cases you want represented and measured.
             </p>
             {form.segment_taxonomy.map((segment, index) => (
               <div key={`segment_${index}`} className="flex gap-2 mb-2">
@@ -990,11 +1145,11 @@ export function DetectionSetup({
               onClick={() => setForm({ ...form, segment_taxonomy: [...form.segment_taxonomy, ""] })}
               className="text-xs text-blue-400 hover:text-blue-300"
             >
-              + Add segment option
+              + Add attribute
             </button>
           </div>
 
-          <details className="border border-gray-700 rounded-lg p-3 bg-gray-900/30">
+          <details className="app-card p-3">
             <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
               Compiled Prompt Preview (used at run time)
             </summary>
@@ -1004,9 +1159,9 @@ export function DetectionSetup({
           </details>
 
           {mode === "create" && (
-            <div>
+            <div className="app-card p-4">
               <label className="text-xs text-gray-400 block mb-2">Metric Thresholds</label>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <div>
                   <label className="text-xs text-gray-500">Primary Metric</label>
                   <select
@@ -1049,7 +1204,7 @@ export function DetectionSetup({
 
           <button
             onClick={mode === "create" ? handleCreateDetection : handleUpdateDetection}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium"
+            className="app-btn app-btn-success app-btn-md text-sm"
           >
             {mode === "create" ? "Save Detection" : "Save Changes"}
           </button>
@@ -1059,123 +1214,198 @@ export function DetectionSetup({
       {/* Detection Details View */}
       {mode === "view" && selectedDetection && (
         <>
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-            <div className="flex items-start justify-between gap-4 mb-3">
-              <div>
-                <h3 className="text-lg font-semibold">{selectedDetection.display_name}</h3>
-                <code className="text-xs text-gray-400 mt-1 block">
-                  {selectedDetection.detection_code}
-                </code>
-                <div className="mt-2 text-xs text-gray-400">
-                  <span className="text-gray-500">Version:</span>{" "}
-                  <span className="text-gray-300">{activePromptForTopPanel?.version_label || "Detection baseline"}</span>
-                </div>
+          <div className="app-card-strong p-5">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div className="max-w-4xl">
+                <div className="app-kicker mb-2">Detection Configuration</div>
+                <h3 className="text-xl font-semibold text-white">{selectedDetection.display_name}</h3>
+                <p className="mt-3 text-sm leading-7 text-[var(--app-text-muted)]">
+                  {selectedDetection.description}
+                </p>
               </div>
               <div className="flex flex-col items-end gap-2">
                 {selectedDetection.approved_prompt_version &&
                   approvedPromptIsEligible &&
                   selectedPromptId === selectedDetection.approved_prompt_version && (
-                  <span className="text-xs bg-green-900/30 text-green-400 border border-green-800/50 px-2 py-1 rounded">
+                  <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300">
                     Approved prompt
                   </span>
                 )}
                 <button
                   onClick={startEdit}
-                  className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded"
+                  className="app-btn app-btn-subtle app-btn-md"
                 >
                   Edit Detection
                 </button>
               </div>
             </div>
 
-            <p className="text-sm text-gray-400 mb-3">{selectedDetection.description}</p>
+            <div className="space-y-5">
+              <div className="grid grid-cols-1 gap-6 border-t border-white/8 pt-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.9fr)] xl:items-start">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_120px_220px]">
+                  <div>
+                    <div className="app-label mb-1">Detection Code</div>
+                    <div className="overflow-hidden text-ellipsis whitespace-nowrap text-sm leading-6 text-gray-200">
+                      {selectedDetection.detection_code}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="app-label mb-1">Version</div>
+                    <div className="text-sm leading-6 text-gray-200">
+                      {activePromptForTopPanel?.version_label || "Detection baseline"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="app-label mb-1">Detection Category</div>
+                    <div className="text-sm leading-6 text-gray-200">
+                      {DETECTION_CATEGORY_LABELS[selectedDetection.detection_category]}
+                    </div>
+                  </div>
+                </div>
 
-            <div className="mb-3">
-              <div className="text-xs text-gray-500 mb-1">Segment Taxonomy</div>
-              {Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedDetection.segment_taxonomy.map((segment) => (
-                    <span key={segment} className="px-2 py-0.5 rounded bg-gray-800 text-gray-300 text-xs border border-gray-700">
-                      {segment}
+                <div className="min-w-0">
+                  <div className="mb-2 flex items-center gap-2">
+                    <div className="app-label">Image Attributes</div>
+                    <InfoTip label="What are image attributes?">
+                      Use attributes to tag conditions that can change model performance or hide the target, such as
+                      `snow_on_ground`, `dark_image`, `blurry_image`, `glare`, or `partial_view`. Pick reusable tags that
+                      help you balance datasets and compare results by slice later.
+                    </InfoTip>
+                  </div>
+                  {Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedDetection.segment_taxonomy.map((segment) => (
+                        <span key={segment} className="rounded-xl border border-white/10 bg-black/20 px-2.5 py-1 text-xs text-gray-200">
+                          {segment}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-gray-500">No image attributes configured.</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                <div>
+                  <div className="app-label mb-1">Prompt Details</div>
+                  <p className="text-xs text-[var(--app-text-muted)]">
+                    Expand the sections below to inspect the detection’s current prompt components and compiled runtime view.
+                  </p>
+                </div>
+
+                <details className="rounded-lg px-1 py-1">
+                  <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300/80">▶</span>
+                      <span>System Prompt</span>
                     </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">No segment taxonomy configured.</div>
-              )}
-            </div>
-
-            <div className="space-y-3 mb-3">
-              <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">System Prompt</summary>
-                <div className="mt-2">
-                  <div className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono min-h-24 whitespace-pre-wrap text-gray-300">
-                    {promptEditorDraft.system_prompt || "No system prompt."}
-                  </div>
-                </div>
-              </details>
-
-              <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">User Prompt</summary>
-                <div className="mt-2">
-                  <div className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono min-h-32 whitespace-pre-wrap text-gray-300">
-                    {promptEditorDraft.user_prompt_template || "No user prompt template."}
-                  </div>
-                </div>
-              </details>
-
-              <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">Decision Policy</summary>
-                <div className="mt-2 space-y-2">
-                  <div className="grid grid-cols-[130px,1fr] gap-2 items-start">
-                    <div className="text-xs text-gray-400">DETECTED:</div>
-                    <div className="text-xs text-gray-300 whitespace-pre-wrap">
-                      {labelPolicySections.detected || "No DETECTED guidance."}
+                  </summary>
+                  <div className="mt-2">
+                    <div className="px-3 py-2 text-sm min-h-24 whitespace-pre-wrap text-[var(--app-text)]">
+                      {promptEditorDraft.system_prompt || "No system prompt."}
                     </div>
                   </div>
-                  <div className="grid grid-cols-[130px,1fr] gap-2 items-start">
-                    <div className="text-xs text-gray-400">NOT DETECTED:</div>
-                    <div className="text-xs text-gray-300 whitespace-pre-wrap">
-                      {labelPolicySections.notDetected || "No NOT_DETECTED guidance."}
+                </details>
+
+                <details className="rounded-lg px-1 py-1">
+                  <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300/80">▶</span>
+                      <span>User Prompt</span>
+                    </span>
+                  </summary>
+                  <div className="mt-2">
+                    <div className="px-3 py-2 text-sm min-h-32 whitespace-pre-wrap text-[var(--app-text)]">
+                      {promptEditorDraft.user_prompt_template || "No user prompt template."}
                     </div>
                   </div>
-                </div>
-              </details>
+                </details>
 
-              <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">Decision Rubric</summary>
-                <div className="mt-2">
-                  <ol className="list-decimal list-inside text-xs text-gray-300 space-y-0.5">
-                    {decisionRubricCriteria.length > 0 ? (
-                      decisionRubricCriteria.map((r, i) => <li key={i}>{r}</li>)
-                    ) : (
-                      <li>No decision rubric.</li>
-                    )}
-                  </ol>
-                </div>
-              </details>
+                <details className="rounded-lg px-1 py-1">
+                  <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300/80">▶</span>
+                      <span>User Prompt Addendum</span>
+                    </span>
+                  </summary>
+                  <div className="mt-2">
+                    <div className="px-3 py-2 text-sm whitespace-pre-wrap text-[var(--app-text)]">
+                      {selectedDetection.user_prompt_addendum || "No addendum."}
+                    </div>
+                  </div>
+                </details>
 
-              <details className="px-1 py-1">
-                <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
-                  Compiled Prompt Preview (used at run time)
-                </summary>
-                <pre className="mt-2 text-xs font-mono whitespace-pre-wrap text-gray-300 bg-gray-950/50 border border-gray-800 rounded p-3 max-h-72 overflow-auto">
-                  {compiledPromptPreview || "Select a prompt version to view the compiled prompt."}
-                </pre>
-              </details>
+                <details className="rounded-lg px-1 py-1">
+                  <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300/80">▶</span>
+                      <span>Decision Policy</span>
+                    </span>
+                  </summary>
+                  <div className="mt-2 space-y-3 px-3 py-2">
+                    <div className="grid grid-cols-[130px,1fr] gap-2 items-start">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--app-text-subtle)]">
+                        Detected
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap text-[var(--app-text)]">
+                        {labelPolicySections.detected || "No DETECTED guidance."}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-[130px,1fr] gap-2 items-start">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--app-text-subtle)]">
+                        Not Detected
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap text-[var(--app-text)]">
+                        {labelPolicySections.notDetected || "No NOT_DETECTED guidance."}
+                      </div>
+                    </div>
+                  </div>
+                </details>
+
+                <details className="rounded-lg px-1 py-1">
+                  <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300/80">▶</span>
+                      <span>Decision Rubric</span>
+                    </span>
+                  </summary>
+                  <div className="mt-2">
+                    <ol className="list-decimal list-inside px-3 py-2 text-sm text-[var(--app-text)] space-y-1">
+                      {decisionRubricCriteria.length > 0 ? (
+                        decisionRubricCriteria.map((r, i) => <li key={i}>{r}</li>)
+                      ) : (
+                        <li>No decision rubric.</li>
+                      )}
+                    </ol>
+                  </div>
+                </details>
+
+                <details className="rounded-lg px-1 py-1">
+                  <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+                    <span className="inline-flex items-center gap-2">
+                      <span className="text-[10px] text-blue-300/80">▶</span>
+                      <span>Compiled Prompt Preview (used at run time)</span>
+                    </span>
+                  </summary>
+                  <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-[#09111a]/80 p-3 text-xs font-mono text-gray-300">
+                    {compiledPromptPreview || "Select a prompt version to view the compiled prompt."}
+                  </pre>
+                </details>
+              </div>
             </div>
           </div>
 
           {/* Quick Test */}
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+          <div className="app-card-strong p-5">
             <div className="flex items-start justify-between gap-3 mb-3">
               <div>
                 <h3 className="text-sm font-medium">Quick Test (up to 10 images)</h3>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="mt-1 text-xs text-[var(--app-text-muted)]">
                   Test the selected prompt on a small image set for quick feedback.
                 </p>
               </div>
-              <div className="text-xs text-gray-500">
+              <div className="text-xs text-[var(--app-text-muted)]">
                 Prompt:{" "}
                 <span className="text-gray-300">
                   {prompts.find((p) => p.prompt_version_id === selectedPromptId)?.version_label || "None selected"}
@@ -1197,8 +1427,8 @@ export function DetectionSetup({
                   />
                   <label
                     htmlFor="quick-test-files-input"
-                    className={`px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 ${
-                      quickTesting ? "opacity-50 pointer-events-none" : "cursor-pointer hover:bg-gray-800"
+                    className={`app-btn app-btn-secondary ${
+                      quickTesting ? "pointer-events-none opacity-50" : "cursor-pointer"
                     }`}
                   >
                     Choose Files
@@ -1211,14 +1441,14 @@ export function DetectionSetup({
                   <button
                     onClick={runQuickTest}
                     disabled={quickTesting || quickTestFiles.length === 0 || !selectedPromptId}
-                    className="px-3 py-2 text-xs bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded font-medium"
+                    className="app-btn app-btn-subtle app-btn-md disabled:opacity-50"
                   >
                     {quickTesting ? "Running..." : "Run Quick Test"}
                   </button>
                   <button
                     onClick={resetQuickTest}
                     disabled={quickTesting || (quickTestFiles.length === 0 && quickTestResults.length === 0)}
-                    className="px-3 py-2 text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+                    className="app-btn app-btn-subtle app-btn-md disabled:opacity-50"
                   >
                     Reset
                   </button>
@@ -1226,30 +1456,35 @@ export function DetectionSetup({
               </div>
 
               {quickTestError && (
-                <div className="text-xs text-red-400 bg-red-900/15 border border-red-900/40 rounded px-3 py-2">
+                <div className="rounded-2xl border border-[rgba(255,123,136,0.22)] bg-[rgba(85,24,31,0.68)] px-3 py-2 text-xs text-[var(--app-danger)]">
                   {quickTestError}
                 </div>
               )}
               {quickTestProgress && (
-                <div className="text-xs text-gray-500 bg-gray-900/40 border border-gray-800 rounded px-3 py-2">
+                <div className="app-card px-3 py-2 text-xs text-[var(--app-text-muted)]">
                   {quickTestProgress}
                 </div>
               )}
 
               {quickTestFiles.length > 0 && (
-                <div className="max-h-64 overflow-auto border border-gray-800 rounded">
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 bg-gray-800">
-                      <tr className="text-gray-500 border-b border-gray-700">
-                        <th className="text-left py-2 px-2">Preview</th>
-                        <th className="text-left py-2 px-2">File</th>
-                        <th className="text-right py-2 px-2">Action</th>
+                <div className="app-table-wrap max-h-64 overflow-auto">
+                  <table className="app-table app-table-fixed text-xs">
+                    <colgroup>
+                      <col style={{ width: "8rem" }} />
+                      <col />
+                      <col style={{ width: "6rem" }} />
+                    </colgroup>
+                    <thead className="sticky top-0">
+                      <tr>
+                        <th className="app-table-col-label">Preview</th>
+                        <th className="app-table-col-label">File</th>
+                        <th className="app-table-col-right">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {quickTestFiles.map((row) => (
-                        <tr key={row.id} className="border-b border-gray-900/70">
-                          <td className="py-2 px-2">
+                        <tr key={row.id}>
+                          <td>
                             <img
                               src={row.preview}
                               alt={row.file.name}
@@ -1257,8 +1492,8 @@ export function DetectionSetup({
                               onClick={() => setQuickTestPreviewIndex(quickTestFiles.findIndex((f) => f.id === row.id))}
                             />
                           </td>
-                          <td className="py-2 px-2 text-gray-300">{row.file.name}</td>
-                          <td className="py-2 px-2 text-right">
+                          <td className="text-gray-300">{row.file.name}</td>
+                          <td className="app-table-col-right">
                             <button
                               onClick={() => removeQuickTestFile(row.id)}
                               disabled={quickTesting}
@@ -1276,23 +1511,29 @@ export function DetectionSetup({
 
               {quickTestResults.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-[var(--app-text-muted)]">
                     Quick Test Results ({quickTestResults.length})
                   </div>
-                  <div className="max-h-[420px] overflow-auto border border-gray-800 rounded">
-                    <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-gray-800">
-                        <tr className="text-gray-500 border-b border-gray-700">
-                          <th className="text-left py-2 px-2">Image</th>
-                          <th className="text-left py-2 px-2">Prediction</th>
-                          <th className="text-left py-2 px-2">Evidence</th>
-                          <th className="text-left py-2 px-2">Output</th>
+                  <div className="app-table-wrap max-h-[420px] overflow-auto">
+                    <table className="app-table app-table-fixed text-xs">
+                      <colgroup>
+                        <col style={{ width: "14rem" }} />
+                        <col style={{ width: "16rem" }} />
+                        <col />
+                        <col />
+                      </colgroup>
+                      <thead className="sticky top-0">
+                        <tr>
+                          <th className="app-table-col-label">Image</th>
+                          <th className="app-table-col-label">Prediction</th>
+                          <th className="app-table-col-label">Evidence</th>
+                          <th className="app-table-col-label">Output</th>
                         </tr>
                       </thead>
                       <tbody>
                         {quickTestResults.map((r, i) => (
-                          <tr key={`${r.image_name}_${i}`} className="border-b border-gray-900/70 align-top">
-                            <td className="py-2 px-2 text-gray-300 font-mono">
+                          <tr key={`${r.image_name}_${i}`} className="align-top">
+                            <td className="text-gray-300">
                               <div className="flex items-center gap-2">
                                 {quickTestPreviewByName.has(r.image_name) && (
                                   <img
@@ -1305,21 +1546,19 @@ export function DetectionSetup({
                                 <span>{r.image_name}</span>
                               </div>
                             </td>
-                            <td className="py-2 px-2 whitespace-nowrap">
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${quickDecisionClass(r.predicted_decision)}`}>
-                                {r.predicted_decision || "PARSE_FAIL"}
-                              </span>
+                            <td className="whitespace-nowrap">
+                              <DecisionBadge decision={r.predicted_decision || "PARSE_FAIL"} />
                               <span className="ml-2 text-gray-400">
                                 {typeof r.confidence === "number" ? r.confidence.toFixed(2) : "—"}
                               </span>
-                              <span className={`ml-2 ${r.parse_ok ? "text-green-400" : "text-red-400"}`}>
+                              <span className={`ml-2 ${r.parse_ok ? "app-status-ok" : "app-status-fail"}`}>
                                 {r.parse_ok ? "OK" : "FAIL"}
                               </span>
                               {typeof r.inference_runtime_ms === "number" && (
                                 <span className="ml-2 text-gray-500">{r.inference_runtime_ms}ms</span>
                               )}
                             </td>
-                            <td className="py-2 px-2 text-gray-300">
+                            <td className="text-gray-300">
                               <div className="max-h-28 overflow-auto whitespace-pre-wrap break-words">{r.evidence || "—"}</div>
                               {!r.parse_ok && (
                                 <div className="mt-1 text-[11px] text-red-300">
@@ -1327,7 +1566,7 @@ export function DetectionSetup({
                                 </div>
                               )}
                             </td>
-                            <td className="py-2 px-2">
+                            <td>
                               <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-words bg-black/20 rounded p-2 text-gray-300">
                                 {formatQuickModelOutput(r.raw_response || "")}
                               </pre>
@@ -1358,13 +1597,11 @@ export function DetectionSetup({
                     <div className="space-y-2">
                       <div className="flex items-center gap-2">
                         <span className="text-gray-500">Prediction:</span>
-                        <span className={`px-1.5 py-0.5 rounded ${quickDecisionClass(currentQuickPreviewResult.predicted_decision)}`}>
-                          {currentQuickPreviewResult.predicted_decision || "PARSE_FAIL"}
-                        </span>
+                        <DecisionBadge decision={currentQuickPreviewResult.predicted_decision || "PARSE_FAIL"} />
                         <span className="text-gray-400">
                           {typeof currentQuickPreviewResult.confidence === "number" ? currentQuickPreviewResult.confidence.toFixed(2) : "—"}
                         </span>
-                        <span className={currentQuickPreviewResult.parse_ok ? "text-green-400" : "text-red-400"}>
+                        <span className={currentQuickPreviewResult.parse_ok ? "app-status-ok" : "app-status-fail"}>
                           {currentQuickPreviewResult.parse_ok ? "OK" : "FAIL"}
                         </span>
                       </div>
@@ -1400,7 +1637,7 @@ export function DetectionSetup({
           </div>
 
           {/* Prompt Versions */}
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+          <div className="app-card-strong p-5">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-sm font-medium">Prompt Versions ({prompts.length})</h3>
               <div className="flex gap-2">
@@ -1412,7 +1649,7 @@ export function DetectionSetup({
                     }
                     openNewPromptForm();
                   }}
-                  className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded"
+                  className="app-btn app-btn-subtle app-btn-md"
                 >
                   {showPromptForm ? "Cancel" : "New Prompt Version"}
                 </button>
@@ -1423,8 +1660,11 @@ export function DetectionSetup({
               <PromptForm
                 detectionId={selectedDetection.detection_id}
                 detectionCode={selectedDetection.detection_code}
+                detectionCategory={selectedDetection.detection_category}
                 detectionLabelPolicy={selectedDetection.label_policy}
                 detectionDecisionRubric={selectedDetection.decision_rubric}
+                userPromptAddendum={selectedDetection.user_prompt_addendum}
+                adminPromptSettings={adminPromptSettings}
                 suggestedVersionLabel={promptFormSuggestedVersionLabel}
                 initialData={promptFormInitialData}
                 onSaved={() => {
@@ -1443,10 +1683,10 @@ export function DetectionSetup({
                   return (
                 <div
                   key={p.prompt_version_id}
-                  className={`border rounded-lg p-3 text-sm ${
+                  className={`rounded-2xl border p-3 text-sm ${
                     showApproved
-                      ? "border-green-700 bg-green-900/10"
-                      : "border-gray-700 bg-gray-900/30"
+                      ? "border-emerald-400/25 bg-emerald-500/10"
+                      : "border-white/10 bg-white/5"
                   }`}
                 >
                   <div className="flex justify-between items-start">
@@ -1467,20 +1707,20 @@ export function DetectionSetup({
                       <span className="text-xs text-gray-500">{new Date(p.created_at).toLocaleDateString()}</span>
                       <button
                         onClick={() => setSelectedPromptId(p.prompt_version_id)}
-                        className="text-xs px-2 py-0.5 bg-blue-700/50 hover:bg-blue-700 rounded"
+                        className="app-btn app-btn-subtle app-btn-sm text-xs"
                       >
                         Select
                       </button>
                       <button
                         onClick={() => deletePromptVersion(p.prompt_version_id)}
-                        className="text-xs px-2 py-0.5 bg-red-900/40 hover:bg-red-900/60 text-red-300 rounded"
+                        className="app-btn app-btn-danger app-btn-sm text-xs"
                       >
                         Delete
                       </button>
                       {isApproved ? (
                         <button
                           onClick={() => setApprovedPrompt(null)}
-                          className="text-xs px-2 py-0.5 bg-gray-700/70 hover:bg-gray-700 rounded"
+                          className="app-btn app-btn-subtle app-btn-sm text-xs"
                         >
                           Remove Approved
                         </button>
@@ -1489,7 +1729,7 @@ export function DetectionSetup({
                           onClick={() => setApprovedPrompt(p.prompt_version_id)}
                           disabled={!eligibility?.eligible}
                           title={eligibility?.reason || "Not eligible"}
-                          className="text-xs px-2 py-0.5 bg-green-800/60 hover:bg-green-700 disabled:opacity-40 rounded"
+                          className="app-btn app-btn-success app-btn-sm text-xs disabled:opacity-40"
                         >
                           Mark Approved
                         </button>
@@ -1505,13 +1745,13 @@ export function DetectionSetup({
                       View Decision Policy & Decision Rubric Snapshot
                     </summary>
                     <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="bg-gray-950/40 border border-gray-700 rounded p-3">
+                      <div className="app-card p-3">
                         <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Policy</h4>
                         <p className="text-xs text-gray-300 whitespace-pre-wrap">
                           {p.prompt_structure?.label_policy || "No decision policy snapshot saved in this version."}
                         </p>
                       </div>
-                      <div className="bg-gray-950/40 border border-gray-700 rounded p-3">
+                      <div className="app-card p-3">
                         <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Rubric</h4>
                         <p className="text-xs text-gray-300 whitespace-pre-wrap">
                           {p.prompt_structure?.decision_rubric || "No decision rubric snapshot saved in this version."}
@@ -1629,12 +1869,6 @@ function metricsMeetThresholds(
   return true;
 }
 
-function quickDecisionClass(decision: string | null): string {
-  if (decision === "DETECTED") return "bg-purple-900/30 text-purple-300";
-  if (decision === "NOT_DETECTED") return "bg-emerald-900/30 text-emerald-300";
-  return "bg-red-900/30 text-red-400";
-}
-
 function formatQuickModelOutput(raw: string): string {
   const text = String(raw || "").trim();
   if (!text) return "—";
@@ -1653,16 +1887,22 @@ function formatQuickModelOutput(raw: string): string {
 function PromptForm({
   detectionId,
   detectionCode,
+  detectionCategory,
   detectionLabelPolicy,
   detectionDecisionRubric,
+  userPromptAddendum,
+  adminPromptSettings,
   suggestedVersionLabel,
   onSaved,
   initialData,
 }: {
   detectionId: string;
   detectionCode: string;
+  detectionCategory: DetectionCategory;
   detectionLabelPolicy: string;
   detectionDecisionRubric: string[];
+  userPromptAddendum: string;
+  adminPromptSettings: AdminPromptSettings;
   suggestedVersionLabel?: string;
   onSaved: () => void;
   initialData?: Partial<PromptVersion>;
@@ -1673,12 +1913,11 @@ function PromptForm({
 
   const [form, setForm] = useState({
     version_label: initialData?.version_label || suggestedVersionLabel || "",
-    system_prompt: initialData?.system_prompt || `You are a visual detection system. Your task is to analyze images for a specific detection type and return a structured JSON response.\n\nYou must ONLY return valid JSON matching the exact schema provided. No markdown, no commentary, no extra text.`,
-    user_prompt_template: initialData?.user_prompt_template || `Analyze this image for the detection: {{DETECTION_CODE}}\n\nReturn ONLY this JSON:\n{\n  "detection_code": "{{DETECTION_CODE}}",\n  "decision": "DETECTED" or "NOT_DETECTED",\n  "confidence": <float 0-1>,\n  "evidence": "<short phrase describing visual basis>"\n}`,
     prompt_structure: initialData?.prompt_structure || {
       detection_identity: "",
       label_policy: detectionLabelPolicy,
       decision_rubric: defaultDecisionRubric,
+      user_prompt_addendum: userPromptAddendum,
       output_schema: `{"detection_code":"${detectionCode}","decision":"DETECTED|NOT_DETECTED","confidence":0.0,"evidence":"short phrase"}`,
       examples: "",
     },
@@ -1692,6 +1931,16 @@ function PromptForm({
   const [labelPolicyParts, setLabelPolicyParts] = useState(() =>
     parseLabelPolicySections((initialData?.prompt_structure as any)?.label_policy || detectionLabelPolicy || "")
   );
+  const categoryTemplates =
+    detectionCategory === "INCORRECT_CAPTURE"
+      ? {
+          system_prompt: adminPromptSettings.incorrect_capture_system_prompt,
+          user_prompt_template: adminPromptSettings.incorrect_capture_user_prompt,
+        }
+      : {
+          system_prompt: adminPromptSettings.hazard_identification_system_prompt,
+          user_prompt_template: adminPromptSettings.hazard_identification_user_prompt,
+        };
 
   useEffect(() => {
     setLabelPolicyParts(parseLabelPolicySections(detectionLabelPolicy || ""));
@@ -1774,7 +2023,7 @@ function PromptForm({
           <div>
             <label className="text-[11px] text-gray-500 uppercase tracking-wide mb-1 block">DETECTED</label>
             <textarea
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-20"
+              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-20"
               value={labelPolicyParts.detected}
               onChange={(e) => updatePromptFormLabelPolicy("detected", e.target.value)}
               placeholder="Criteria for DETECTED"
@@ -1783,7 +2032,7 @@ function PromptForm({
           <div>
             <label className="text-[11px] text-gray-500 uppercase tracking-wide mb-1 block">NOT_DETECTED</label>
             <textarea
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-20"
+              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-20"
               value={labelPolicyParts.notDetected}
               onChange={(e) => updatePromptFormLabelPolicy("notDetected", e.target.value)}
               placeholder="Criteria for NOT_DETECTED"
@@ -1798,7 +2047,7 @@ function PromptForm({
           <span className="text-[10px] text-gray-600">Primary iteration target</span>
         </div>
         <textarea
-          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-40"
+          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-40"
           value={(form.prompt_structure as any).decision_rubric || ""}
           onChange={(e) =>
             setForm({
@@ -1809,24 +2058,21 @@ function PromptForm({
         />
       </div>
 
-      <div>
-        <label className="text-xs text-gray-400 block mb-1">System Prompt</label>
-        <textarea
-          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-24"
-          value={form.system_prompt}
-          onChange={(e) => setForm({ ...form, system_prompt: e.target.value })}
-        />
-      </div>
-
-      <div>
-        <label className="text-xs text-gray-400 block mb-1">
-          User Prompt <span className="text-gray-600">(use {"{{DETECTION_CODE}}"} as placeholder)</span>
-        </label>
-        <textarea
-          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm font-mono h-40"
-          value={form.user_prompt_template}
-          onChange={(e) => setForm({ ...form, user_prompt_template: e.target.value })}
-        />
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-gray-400 block mb-1">System Prompt</label>
+          <div className="app-card w-full px-3 py-2 text-sm min-h-24 whitespace-pre-wrap text-[var(--app-text)]">
+            {categoryTemplates.system_prompt}
+          </div>
+          <div className="mt-1 text-[11px] text-gray-500">Read-only category template managed in Admin.</div>
+        </div>
+        <div>
+          <label className="text-xs text-gray-400 block mb-1">User Prompt</label>
+          <div className="app-card w-full px-3 py-2 text-sm min-h-40 whitespace-pre-wrap text-[var(--app-text)]">
+            {buildUserPromptTemplate(categoryTemplates.user_prompt_template, userPromptAddendum)}
+          </div>
+          <div className="mt-1 text-[11px] text-gray-500">Includes the detection’s current addendum.</div>
+        </div>
       </div>
 
       <details className="text-sm">
@@ -1838,7 +2084,7 @@ function PromptForm({
             <div key={key}>
               <label className="text-xs text-gray-500 block mb-1">{key.replace(/_/g, " ")}</label>
               <textarea
-                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs font-mono h-16"
+                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs h-16"
                 value={(form.prompt_structure as any)[key] || ""}
                 onChange={(e) =>
                   setForm({

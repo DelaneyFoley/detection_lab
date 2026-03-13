@@ -12,8 +12,10 @@ export function getDb(): Database.Database {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   _db = new Database(DB_PATH);
   _db.pragma("journal_mode = WAL");
+  _db.pragma("synchronous = NORMAL");
   _db.pragma("foreign_keys = ON");
   _db.pragma("busy_timeout = 5000");
+  _db.pragma("temp_store = MEMORY");
 
   initSchema(_db);
   return _db;
@@ -26,7 +28,9 @@ function initSchema(db: Database.Database) {
       detection_code TEXT UNIQUE NOT NULL,
       display_name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
+      detection_category TEXT NOT NULL DEFAULT 'HAZARD_IDENTIFICATION',
       label_policy TEXT NOT NULL DEFAULT '',
+      user_prompt_addendum TEXT NOT NULL DEFAULT '',
       decision_rubric TEXT NOT NULL DEFAULT '[]',
       segment_taxonomy TEXT NOT NULL DEFAULT '[]',
       metric_thresholds TEXT NOT NULL DEFAULT '{}',
@@ -122,18 +126,24 @@ function initSchema(db: Database.Database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_predictions_run_id ON predictions(run_id);
+    CREATE INDEX IF NOT EXISTS idx_predictions_run_id_parse_ok ON predictions(run_id, parse_ok);
+    CREATE INDEX IF NOT EXISTS idx_predictions_run_id_error_tag ON predictions(run_id, error_tag);
     CREATE INDEX IF NOT EXISTS idx_predictions_error_tag ON predictions(error_tag);
     CREATE INDEX IF NOT EXISTS idx_predictions_parse_ok ON predictions(parse_ok);
     CREATE INDEX IF NOT EXISTS idx_predictions_image_id ON predictions(image_id);
     CREATE INDEX IF NOT EXISTS idx_dataset_items_dataset_id ON dataset_items(dataset_id);
+    CREATE INDEX IF NOT EXISTS idx_dataset_items_dataset_id_image_id ON dataset_items(dataset_id, image_id);
     CREATE INDEX IF NOT EXISTS idx_dataset_items_image_id ON dataset_items(image_id);
     CREATE INDEX IF NOT EXISTS idx_dataset_items_gt ON dataset_items(ground_truth_label);
     CREATE INDEX IF NOT EXISTS idx_prompt_versions_detection_id ON prompt_versions(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_prompt_versions_detection_id_created_at ON prompt_versions(detection_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_detection_id ON datasets(detection_id);
     CREATE INDEX IF NOT EXISTS idx_datasets_split_type ON datasets(split_type);
     CREATE INDEX IF NOT EXISTS idx_datasets_created_at ON datasets(created_at);
     CREATE INDEX IF NOT EXISTS idx_datasets_name ON datasets(name);
     CREATE INDEX IF NOT EXISTS idx_runs_detection_id ON runs(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_prompt_version_id ON runs(prompt_version_id);
+    CREATE INDEX IF NOT EXISTS idx_runs_detection_id_created_at ON runs(detection_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
     CREATE INDEX IF NOT EXISTS idx_runs_split_type ON runs(split_type);
     CREATE INDEX IF NOT EXISTS idx_runs_dataset_id ON runs(dataset_id);
@@ -216,8 +226,16 @@ function ensureDatasetItemColumns(db: Database.Database) {
 function ensureDetectionColumns(db: Database.Database) {
   const columns = db.prepare("PRAGMA table_info(detections)").all() as Array<{ name: string }>;
   const hasSegmentTaxonomy = columns.some((c) => c.name === "segment_taxonomy");
+  const hasDetectionCategory = columns.some((c) => c.name === "detection_category");
+  const hasUserPromptAddendum = columns.some((c) => c.name === "user_prompt_addendum");
   if (!hasSegmentTaxonomy) {
     db.exec("ALTER TABLE detections ADD COLUMN segment_taxonomy TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!hasDetectionCategory) {
+    db.exec("ALTER TABLE detections ADD COLUMN detection_category TEXT NOT NULL DEFAULT 'HAZARD_IDENTIFICATION'");
+  }
+  if (!hasUserPromptAddendum) {
+    db.exec("ALTER TABLE detections ADD COLUMN user_prompt_addendum TEXT NOT NULL DEFAULT ''");
   }
 }
 

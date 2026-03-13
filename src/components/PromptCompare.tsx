@@ -2,15 +2,17 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "@/lib/store";
-import { MetricsDisplay } from "@/components/MetricsDisplay";
+import { ConfusionMatrixPanel } from "@/components/MetricsDisplay";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import type { Detection, PromptVersion, Dataset, MetricsSummary, Run, Prediction } from "@/types";
-import { splitTypeLabel } from "@/lib/splitType";
-import { fmtPercent, formatModelOutput, getResolvedGroundTruth, safeJsonArray } from "@/lib/ui/review";
+import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
+import { fmtMetric, formatModelOutput, getResolvedGroundTruth, safeJsonArray } from "@/lib/ui/review";
 
 export function PromptCompare({ detection }: { detection: Detection }) {
   const { refreshCounter } = useAppStore();
+  const { notify } = useAppFeedback();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -23,8 +25,10 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     { promptId: string; imageId: string; source: "disagreement" | "full" } | null
   >(null);
   const runningRef = useRef(false);
+  const loadDataKeyRef = useRef("");
 
   const loadData = useCallback(async () => {
+    if (!detection?.detection_id) return;
     const [pRes, dRes, rRes] = await Promise.all([
       fetch(`/api/prompts?detection_id=${detection.detection_id}`),
       fetch(`/api/datasets?detection_id=${detection.detection_id}&include_unassigned=1`),
@@ -33,17 +37,25 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     const ps = await safeJsonArray<PromptVersion>(pRes, "prompts");
     const ds = await safeJsonArray<Dataset>(dRes, "datasets");
     const rs = await safeJsonArray<Run>(rRes, "runs");
-    setPrompts(ps);
-    setDatasets(
-      ds.filter(
-        (d: Dataset) =>
-          d.split_type === "GOLDEN" ||
-          d.split_type === "ITERATION" ||
-          d.split_type === "HELD_OUT_EVAL" ||
-          d.split_type === "CUSTOM"
-      )
+    const nextDatasets = ds.filter(
+      (d: Dataset) =>
+        d.split_type === "GOLDEN" ||
+        d.split_type === "ITERATION" ||
+        d.split_type === "HELD_OUT_EVAL" ||
+        d.split_type === "CUSTOM"
     );
-    setRuns(rs.filter((r: Run) => r.status === "completed"));
+    const nextRuns = rs.filter((r: Run) => r.status === "completed");
+    const nextKey = JSON.stringify({
+      prompts: ps.map((p) => p.prompt_version_id),
+      datasets: nextDatasets.map((d) => `${d.dataset_id}:${d.updated_at}`),
+      runs: nextRuns.map((r) => `${r.run_id}:${r.status}:${r.processed_images}`),
+    });
+    if (loadDataKeyRef.current === nextKey) return;
+    loadDataKeyRef.current = nextKey;
+
+    setPrompts(ps);
+    setDatasets(nextDatasets);
+    setRuns(nextRuns);
   }, [detection.detection_id]);
 
   useEffect(() => {
@@ -91,11 +103,11 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   const runComparison = async () => {
     if (runningRef.current) return;
     if (selectedPromptIds.length < 1) {
-      alert("Select at least 1 prompt version");
+      notify({ message: "Select at least 1 prompt version.", tone: "warning" });
       return;
     }
     if (!selectedDatasetId) {
-      alert("Select a dataset");
+      notify({ message: "Select a dataset.", tone: "warning" });
       return;
     }
 
@@ -131,11 +143,15 @@ export function PromptCompare({ detection }: { detection: Detection }) {
 
       setResults(nextResults);
       if (nextResults.size === 0) {
-        alert("No completed runs found for the selected prompt(s) + dataset. Run them first in Detection Setup or Build Dataset.");
+        notify({
+          message:
+            "No completed runs found for the selected prompt(s) and dataset. Run them first in Detection Setup or Build & Run Datasets.",
+          tone: "warning",
+        });
       }
     } catch (err) {
       console.error("Failed to load comparison runs:", err);
-      alert("Failed to load comparison runs.");
+      notify({ message: "Failed to load comparison runs.", tone: "error" });
     } finally {
       setRunning(false);
       setProgress("");
@@ -272,23 +288,31 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   }, [previewState, activePreviewImageIds]);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <h2 className="text-xl font-semibold">Prompt Compare</h2>
+    <div className="mx-auto max-w-7xl space-y-6">
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Prompt Compare</h2>
+          <p className="app-page-copy">
+            Compare the latest existing completed runs across prompt versions on the same dataset to understand performance tradeoffs.
+            Prompt Compare does not create new runs.
+          </p>
+        </div>
+      </div>
 
       {/* Config */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-        <div className="grid grid-cols-2 gap-6">
+      <div className="app-section">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           {/* Prompt selection */}
           <div>
-            <h3 className="text-xs text-gray-400 font-medium mb-2">Select 2–4 Prompt Versions</h3>
-            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+            <h3 className="app-label mb-2">Select 2–4 Prompt Versions</h3>
+            <div className="max-h-48 overflow-y-auto border-y border-[var(--app-border)]">
               {prompts.map((p) => (
                 <label
                   key={p.prompt_version_id}
-                  className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
+                  className={`flex cursor-pointer items-center gap-2 border-b border-[var(--app-border)] px-2 py-3 text-sm last:border-b-0 ${
                     selectedPromptIds.includes(p.prompt_version_id)
-                      ? "border-blue-600 bg-blue-900/20"
-                      : "border-gray-700 bg-gray-900/30 hover:border-gray-600"
+                      ? "bg-[rgba(18,42,68,0.62)]"
+                      : "hover:bg-[rgba(255,255,255,0.02)]"
                   }`}
                 >
                   <input
@@ -298,9 +322,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     className="rounded"
                   />
                   <span>{p.version_label}</span>
-                  <span className="text-xs text-gray-500">{p.model} | temp={p.temperature}</span>
+                  <span className="text-xs text-[var(--app-text-subtle)]">{p.model} | temp={p.temperature}</span>
                   {p.prompt_version_id === detection.approved_prompt_version && (
-                    <span className="text-xs text-green-400 ml-auto">APPROVED</span>
+                    <span className="ml-auto text-xs text-[var(--app-success)]">APPROVED</span>
                   )}
                 </label>
               ))}
@@ -309,15 +333,15 @@ export function PromptCompare({ detection }: { detection: Detection }) {
 
           {/* Dataset selection */}
           <div>
-            <h3 className="text-xs text-gray-400 font-medium mb-2">Select Dataset</h3>
-            <div className="space-y-1.5">
+            <h3 className="app-label mb-2">Select Dataset</h3>
+            <div className="border-y border-[var(--app-border)]">
               {comparableDatasets.map((d) => (
                 <label
                   key={d.dataset_id}
-                  className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
+                  className={`flex cursor-pointer items-center gap-2 border-b border-[var(--app-border)] px-2 py-3 text-sm last:border-b-0 ${
                     selectedDatasetId === d.dataset_id
-                      ? "border-blue-600 bg-blue-900/20"
-                      : "border-gray-700 bg-gray-900/30 hover:border-gray-600"
+                      ? "bg-[rgba(18,42,68,0.62)]"
+                      : "hover:bg-[rgba(255,255,255,0.02)]"
                   }`}
                 >
                   <input
@@ -327,23 +351,19 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     onChange={() => setSelectedDatasetId(d.dataset_id)}
                   />
                   <span>{d.name}</span>
-                  <span className="text-xs text-gray-500">{d.size} images</span>
-                  <span className={`text-xs ml-auto px-1.5 py-0.5 rounded ${splitColor(d.split_type)}`}>
+                  <span className="text-xs text-[var(--app-text-subtle)]">{d.size} images</span>
+                  <span className={`ml-auto ${splitTypeBadgeClass(d.split_type)}`}>
                     {splitTypeLabel(d.split_type)}
                   </span>
                 </label>
               ))}
               {selectedPromptIds.length > 0 && comparableDatasets.length === 0 && (
-                <p className="text-xs text-gray-500 py-3">
+                <p className="py-3 text-xs text-[var(--app-text-muted)]">
                   No shared datasets with completed runs for the selected prompt versions.
                 </p>
               )}
             </div>
 
-            <div className="mt-3 p-2 bg-gray-900/50 rounded border border-gray-700 text-xs text-gray-400">
-              <b>Comparison mode:</b> Uses the latest existing completed run for each selected prompt + dataset.
-              Prompt Compare does not create new runs.
-            </div>
           </div>
         </div>
 
@@ -351,11 +371,11 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           <button
             onClick={runComparison}
             disabled={running || selectedPromptIds.length < 1 || !selectedDatasetId}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium"
+            className="app-btn app-btn-success app-btn-md text-sm"
           >
             {running ? "Loading..." : "Compare Latest Runs"}
           </button>
-          {progress && <span className="text-sm text-gray-400">{progress}</span>}
+          {progress && <span className="text-sm text-[var(--app-text-muted)]">{progress}</span>}
         </div>
       </div>
 
@@ -367,10 +387,11 @@ export function PromptCompare({ detection }: { detection: Detection }) {
             {resultEntries.map(([promptId, { run }]) => {
               const prompt = prompts.find((p) => p.prompt_version_id === promptId);
               return (
-                <MetricsDisplay
+                <CompareResultSheet
                   key={promptId}
                   metrics={run.metrics_summary}
-                  label={`${prompt?.version_label || promptId.slice(0, 8)} — ${run?.model_used || prompt?.model || "unknown-model"}`}
+                  title={prompt?.version_label || promptId.slice(0, 8)}
+                  subtitle={run?.model_used || prompt?.model || "unknown-model"}
                 />
               );
             })}
@@ -378,19 +399,28 @@ export function PromptCompare({ detection }: { detection: Detection }) {
 
           {/* Metric Deltas */}
           {resultEntries.length >= 2 && (
-            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+            <div className="app-card-strong p-5">
               <h3 className="text-sm font-medium mb-3">Metric Deltas (vs first prompt)</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="app-table-wrap overflow-x-auto">
+                <table className="app-table app-table-fixed text-sm">
+                  <colgroup>
+                    <col style={{ width: "12rem" }} />
+                    <col style={{ width: "7rem" }} />
+                    <col style={{ width: "7rem" }} />
+                    <col style={{ width: "7rem" }} />
+                    <col style={{ width: "7rem" }} />
+                    <col style={{ width: "8rem" }} />
+                    <col style={{ width: "8rem" }} />
+                  </colgroup>
                   <thead>
-                    <tr className="text-xs text-gray-500 border-b border-gray-700">
-                      <th className="text-left py-2 px-3">Prompt</th>
-                      <th className="text-right py-2 px-3">Accuracy</th>
-                      <th className="text-right py-2 px-3">Precision</th>
-                      <th className="text-right py-2 px-3">Recall</th>
-                      <th className="text-right py-2 px-3">F1</th>
-                      <th className="text-right py-2 px-3">Prevalence</th>
-                      <th className="text-right py-2 px-3">Parse Fail %</th>
+                    <tr>
+                      <th className="app-table-col-label">Prompt</th>
+                      <th className="app-table-col-label">Accuracy</th>
+                      <th className="app-table-col-label">Precision</th>
+                      <th className="app-table-col-label">Recall</th>
+                      <th className="app-table-col-label">F1</th>
+                      <th className="app-table-col-label">Prevalence</th>
+                      <th className="app-table-col-label">Parse Fail %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -401,33 +431,53 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                       const isBase = i === 0;
 
                       return (
-                        <tr key={promptId} className="border-b border-gray-800">
-                          <td className="py-2 px-3 font-medium">
+                        <tr key={promptId}>
+                          <td className="font-medium">
                             {prompt?.version_label}
                             {isBase && <span className="text-xs text-gray-500 ml-1">(baseline)</span>}
                           </td>
-                          <td className="text-right py-2 px-3">
-                            {fmtPercent(m.accuracy)}
-                            {!isBase && <Delta value={m.accuracy - base.accuracy} />}
+                          <td className="app-table-col-label">
+                            <div className="space-y-0.5 tabular-nums">
+                              <div>{fmtMetric(m, "accuracy")}</div>
+                              {!isBase && fmtMetric(m, "accuracy") !== "N/A" && fmtMetric(base, "accuracy") !== "N/A" && (
+                                <div><Delta value={m.accuracy - base.accuracy} /></div>
+                              )}
+                            </div>
                           </td>
-                          <td className="text-right py-2 px-3">
-                            {fmtPercent(m.precision)}
-                            {!isBase && <Delta value={m.precision - base.precision} />}
+                          <td className="app-table-col-label">
+                            <div className="space-y-0.5 tabular-nums">
+                              <div>{fmtMetric(m, "precision")}</div>
+                              {!isBase && fmtMetric(m, "precision") !== "N/A" && fmtMetric(base, "precision") !== "N/A" && (
+                                <div><Delta value={m.precision - base.precision} /></div>
+                              )}
+                            </div>
                           </td>
-                          <td className="text-right py-2 px-3">
-                            {fmtPercent(m.recall)}
-                            {!isBase && <Delta value={m.recall - base.recall} />}
+                          <td className="app-table-col-label">
+                            <div className="space-y-0.5 tabular-nums">
+                              <div>{fmtMetric(m, "recall")}</div>
+                              {!isBase && fmtMetric(m, "recall") !== "N/A" && fmtMetric(base, "recall") !== "N/A" && (
+                                <div><Delta value={m.recall - base.recall} /></div>
+                              )}
+                            </div>
                           </td>
-                          <td className="text-right py-2 px-3">
-                            {fmtPercent(m.f1)}
-                            {!isBase && <Delta value={m.f1 - base.f1} />}
+                          <td className="app-table-col-label">
+                            <div className="space-y-0.5 tabular-nums">
+                              <div>{fmtMetric(m, "f1")}</div>
+                              {!isBase && fmtMetric(m, "f1") !== "N/A" && fmtMetric(base, "f1") !== "N/A" && (
+                                <div><Delta value={m.f1 - base.f1} /></div>
+                              )}
+                            </div>
                           </td>
-                          <td className="text-right py-2 px-3">
-                            {fmtPercent(m.prevalence)}
-                            {!isBase && <Delta value={m.prevalence - base.prevalence} />}
+                          <td className="app-table-col-label">
+                            <div className="space-y-0.5 tabular-nums">
+                              <div>{fmtMetric(m, "prevalence")}</div>
+                              {!isBase && fmtMetric(m, "prevalence") !== "N/A" && fmtMetric(base, "prevalence") !== "N/A" && (
+                                <div><Delta value={m.prevalence - base.prevalence} /></div>
+                              )}
+                            </div>
                           </td>
-                          <td className="text-right py-2 px-3">
-                            {fmtPercent(m.parse_failure_rate)}
+                          <td className="app-table-col-label">
+                            <div className="tabular-nums">{fmtMetric(m, "parse_failure_rate")}</div>
                           </td>
                         </tr>
                       );
@@ -440,21 +490,29 @@ export function PromptCompare({ detection }: { detection: Detection }) {
 
           {/* Disagreements */}
           {disagreements.size > 0 && (
-            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+            <div className="app-card-strong p-5">
               <h3 className="text-sm font-medium mb-3">
                 Disagreement Cases ({disagreements.size} images)
               </h3>
-              <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-gray-800">
-                    <tr className="text-gray-500 border-b border-gray-700">
-                      <th className="text-left py-2 px-3">Preview</th>
-                      <th className="text-left py-2 px-3">Image ID</th>
-                      <th className="text-center py-2 px-3">Ground Truth</th>
+              <div className="app-table-wrap max-h-96 overflow-x-auto overflow-y-auto">
+                <table className="app-table app-table-fixed text-xs">
+                  <colgroup>
+                    <col style={{ width: "8rem" }} />
+                    <col style={{ width: "14rem" }} />
+                    <col style={{ width: "10rem" }} />
+                    {resultEntries.map(([promptId]) => (
+                      <col key={promptId} style={{ width: "10rem" }} />
+                    ))}
+                  </colgroup>
+                  <thead className="sticky top-0">
+                    <tr>
+                      <th className="app-table-col-label">Preview</th>
+                      <th className="app-table-col-label">Image ID</th>
+                      <th className="app-table-col-label">Ground Truth</th>
                       {resultEntries.map(([promptId]) => {
                         const prompt = prompts.find((p) => p.prompt_version_id === promptId);
                         return (
-                          <th key={promptId} className="text-center py-2 px-3">
+                          <th key={promptId} className="app-table-col-label">
                             {prompt?.version_label}
                           </th>
                         );
@@ -463,8 +521,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                   </thead>
                   <tbody>
                     {Array.from(disagreements.entries()).map(([imageId, disagreement]) => (
-                      <tr key={imageId} className="border-b border-gray-800">
-                        <td className="py-2 px-3">
+                      <tr key={imageId}>
+                        <td>
                           {disagreement.sample?.image_uri ? (
                             <img
                               src={disagreement.sample.image_uri}
@@ -485,14 +543,14 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                             <span className="text-gray-600">—</span>
                           )}
                         </td>
-                        <td className="py-2 px-3 font-mono">{imageId}</td>
-                        <td className="text-center py-2 px-3">
+                        <td className="font-mono">{imageId}</td>
+                        <td className="app-table-col-label">
                           <DecisionBadge decision={disagreement.groundTruth} />
                         </td>
                         {resultEntries.map(([promptId]) => {
                           const decision = disagreement.decisions.get(promptId) ?? null;
                           return (
-                            <td key={promptId} className="text-center py-2 px-3">
+                            <td key={promptId} className="app-table-col-label">
                               <DecisionBadge decision={decision || "PARSE_FAIL"} />
                             </td>
                           );
@@ -506,7 +564,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           )}
 
           {/* Full outcomes table */}
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+          <div className="app-card-strong p-5">
             <h3 className="text-sm font-medium mb-3">Full Outcomes</h3>
             {resultEntries.map(([promptId, { predictions }]) => {
               const prompt = prompts.find((p) => p.prompt_version_id === promptId);
@@ -515,18 +573,28 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                   <summary className="cursor-pointer text-sm text-gray-300 hover:text-white">
                     {prompt?.version_label} — {predictions.length} predictions
                   </summary>
-                  <div className="mt-2 overflow-x-auto max-h-72 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-gray-800">
-                        <tr className="text-gray-500 border-b border-gray-700">
-                      <th className="text-left py-1.5 px-2">Preview</th>
-                      <th className="text-left py-1.5 px-2">Image ID</th>
-                      <th className="text-center py-1.5 px-2">Ground Truth</th>
-                          <th className="text-center py-1.5 px-2">Prediction</th>
-                          <th className="text-center py-1.5 px-2">Correct</th>
-                          <th className="text-right py-1.5 px-2">Confidence</th>
-                          <th className="text-left py-1.5 px-2">Evidence</th>
-                          <th className="text-center py-1.5 px-2">Parse</th>
+                  <div className="mt-2 app-table-wrap max-h-72 overflow-x-auto overflow-y-auto">
+                    <table className="app-table app-table-fixed text-xs">
+                      <colgroup>
+                        <col style={{ width: "8rem" }} />
+                        <col style={{ width: "12rem" }} />
+                        <col style={{ width: "10rem" }} />
+                        <col style={{ width: "10rem" }} />
+                        <col style={{ width: "5.5rem" }} />
+                        <col style={{ width: "6.5rem" }} />
+                        <col />
+                        <col style={{ width: "5.5rem" }} />
+                      </colgroup>
+                      <thead className="sticky top-0">
+                        <tr>
+                          <th className="app-table-col-label">Preview</th>
+                          <th className="app-table-col-label">Image ID</th>
+                          <th className="app-table-col-label">Ground Truth</th>
+                          <th className="app-table-col-label">Prediction</th>
+                          <th className="app-table-col-label">Correct</th>
+                          <th className="app-table-col-label">Confidence</th>
+                          <th className="app-table-col-label">Evidence</th>
+                          <th className="app-table-col-label">Parse</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -537,8 +605,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                             p.parse_ok &&
                             p.predicted_decision === resolvedGroundTruth;
                           return (
-                            <tr key={p.prediction_id} className="border-b border-gray-800/50">
-                              <td className="py-1.5 px-2">
+                            <tr key={p.prediction_id} className={!correct ? "app-table-row-alert" : ""}>
+                              <td>
                                 {p.image_uri ? (
                                   <img
                                     src={p.image_uri}
@@ -550,33 +618,33 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                                   <span className="text-gray-600">—</span>
                                 )}
                               </td>
-                              <td className="py-1.5 px-2 font-mono">{p.image_id}</td>
-                              <td className="text-center py-1.5 px-2">
+                              <td className="font-mono">{p.image_id}</td>
+                              <td className="app-table-col-label">
                                 <DecisionBadge decision={resolvedGroundTruth} />
                               </td>
-                              <td className="text-center py-1.5 px-2">
+                              <td className="app-table-col-label">
                                 <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
                               </td>
-                              <td className="text-center py-1.5 px-2">
+                              <td className="app-table-col-label">
                                 {correct ? (
                                   <span className="text-green-400">✓</span>
                                 ) : (
                                   <span className="text-red-400">✗</span>
                                 )}
                               </td>
-                              <td className="text-right py-1.5 px-2">
+                              <td className="app-table-col-label tabular-nums">
                                 {p.confidence != null ? p.confidence.toFixed(2) : "—"}
                               </td>
-                              <td className="py-1.5 px-2 text-gray-400">
+                              <td className="text-gray-400">
                                 <div className="max-w-[320px] max-h-16 overflow-y-auto whitespace-pre-wrap break-words">
                                   {p.evidence || "—"}
                                 </div>
                               </td>
-                              <td className="text-center py-1.5 px-2">
+                              <td className="app-table-col-label">
                                 {p.parse_ok ? (
-                                  <span className="text-green-400 text-xs">OK</span>
+                                  <span className="app-status-ok">OK</span>
                                 ) : (
-                                  <span className="text-red-400 text-xs">FAIL</span>
+                                  <span className="app-status-fail">FAIL</span>
                                 )}
                               </td>
                             </tr>
@@ -632,7 +700,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                     <span className="text-gray-500">Prediction:</span>
                     <DecisionBadge decision={prediction?.predicted_decision || "PARSE_FAIL"} />
                     <span className="text-gray-500">{prediction?.confidence != null ? Number(prediction.confidence).toFixed(2) : "—"}</span>
-                    <span className={`${prediction?.parse_ok ? "text-green-400" : "text-red-400"}`}>{prediction?.parse_ok ? "OK" : "FAIL"}</span>
+                    <span className={prediction?.parse_ok ? "app-status-ok" : "app-status-fail"}>{prediction?.parse_ok ? "OK" : "FAIL"}</span>
                   </div>
                   <div>
                     <div className="text-gray-500 mb-1">Evidence</div>
@@ -674,17 +742,109 @@ function Delta({ value }: { value: number }) {
   const pct = (value * 100).toFixed(1);
   const color = value > 0 ? "text-green-400" : value < 0 ? "text-red-400" : "text-gray-500";
   return (
-    <span className={`ml-1 text-xs ${color}`}>
+    <span className={`text-xs ${color}`}>
       ({value > 0 ? "+" : ""}{pct})
     </span>
   );
 }
 
-function splitColor(t: string) {
-  switch (t) {
-    case "GOLDEN": return "bg-yellow-900/30 text-yellow-400";
-    case "ITERATION": return "bg-blue-900/30 text-blue-400";
-    case "HELD_OUT_EVAL": return "bg-purple-900/30 text-purple-400";
-    default: return "bg-gray-800 text-gray-400";
-  }
+function CompareResultSheet({
+  metrics,
+  title,
+  subtitle,
+}: {
+  metrics: MetricsSummary;
+  title: string;
+  subtitle: string;
+}) {
+  const attributeEntries = Object.entries(metrics.segment_metrics || {}).sort(([, a], [, b]) => b.total - a.total);
+
+  return (
+    <div className="app-section space-y-4">
+      <div className="space-y-1">
+        <h3 className="text-xl font-semibold text-white">{title}</h3>
+        <p className="text-sm text-[var(--app-text-muted)]">{subtitle}</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 border-t border-white/8 pt-4 sm:grid-cols-5">
+        <SheetMetric label="Accuracy" value={fmtMetric(metrics, "accuracy")} tone="text-white" />
+        <SheetMetric label="Precision" value={fmtMetric(metrics, "precision")} tone="text-white" />
+        <SheetMetric label="Recall" value={fmtMetric(metrics, "recall")} tone="text-white" />
+        <SheetMetric label="F1 Score" value={fmtMetric(metrics, "f1")} tone="text-white" />
+        <SheetMetric label="Prevalence" value={fmtMetric(metrics, "prevalence")} tone="text-white" />
+      </div>
+
+      <div className="space-y-3 border-t border-white/8 pt-4">
+        <ConfusionMatrixPanel metrics={metrics} embedded />
+      </div>
+
+      <div className="space-y-3 border-t border-white/8 pt-4">
+        <div>
+          <div className="app-label mb-1">Attribute Breakdown</div>
+          <p className="text-[11px] text-[var(--app-text-subtle)]">
+            Images with multiple attributes are counted in each attribute.
+          </p>
+        </div>
+
+        {attributeEntries.length > 0 ? (
+          <div className="app-metric-breakdown text-[11px]">
+            <div
+              className="app-metric-breakdown-row app-metric-breakdown-head"
+              style={{ gridTemplateColumns: "minmax(130px, 1.6fr) repeat(5, minmax(0, 1fr)) minmax(92px, 1.05fr)" }}
+            >
+              <div className="app-metric-breakdown-cell app-metric-breakdown-label">Attribute</div>
+              <div className="app-metric-breakdown-cell app-metric-breakdown-value whitespace-nowrap">Total</div>
+              <div className="app-metric-breakdown-cell app-metric-breakdown-value whitespace-nowrap">Accuracy</div>
+              <div className="app-metric-breakdown-cell app-metric-breakdown-value whitespace-nowrap">Precision</div>
+              <div className="app-metric-breakdown-cell app-metric-breakdown-value whitespace-nowrap">Recall</div>
+              <div className="app-metric-breakdown-cell app-metric-breakdown-value whitespace-nowrap">F1</div>
+              <div className="app-metric-breakdown-cell app-metric-breakdown-value whitespace-nowrap">Parse Fail</div>
+            </div>
+            <div className="app-metric-breakdown-body">
+              {attributeEntries.map(([attribute, value]) => (
+                <div
+                  key={attribute}
+                  className="app-metric-breakdown-row"
+                  style={{ gridTemplateColumns: "minmax(130px, 1.6fr) repeat(5, minmax(0, 1fr)) minmax(92px, 1.05fr)" }}
+                >
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-label break-words text-[var(--app-text)]">
+                    {attribute}
+                  </div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text-muted)]">
+                    {value.total}
+                  </div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value text-gray-200">
+                    {fmtMetric(value, "accuracy")}
+                  </div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">
+                    {fmtMetric(value, "precision")}
+                  </div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">
+                    {fmtMetric(value, "recall")}
+                  </div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">
+                    {fmtMetric(value, "f1")}
+                  </div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">
+                    {fmtMetric(value, "parse_failure_rate")}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-[var(--app-text-muted)]">No attribute breakdown available for this run.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SheetMetric({ label, value, tone }: { label: string; value: string; tone: string }) {
+  return (
+    <div className="space-y-1">
+      <div className={`text-[1.5rem] font-semibold tracking-tight ${tone}`}>{value}</div>
+      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-subtle)]">{label}</div>
+    </div>
+  );
 }

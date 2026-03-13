@@ -43,20 +43,17 @@ export function computeMetricsWithSegments(
 function computeMetricsInternal(predictions: Prediction[]): MetricsSummary {
   let tp = 0, fp = 0, fn = 0, tn = 0;
   let parseFailures = 0;
-  const labeledAndScored = predictions.filter(
+  const labeledPredictions = predictions.filter(
     (p) =>
       ((p.corrected_label || p.ground_truth_label) === "DETECTED" ||
         (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED") &&
       !isInferenceCallFailure(p)
   );
-  const total = labeledAndScored.length;
+  const total = labeledPredictions.length;
 
-  for (const p of labeledAndScored) {
+  for (const p of labeledPredictions) {
     if (!p.parse_ok || !p.predicted_decision) {
       parseFailures++;
-      // Treat parse failures as incorrect — if ground truth is DETECTED, it's FN; otherwise FP
-      if (p.ground_truth_label === "DETECTED") fn++;
-      else tn++; // Parse failure on NOT_DETECTED: conservative — count as TN
       continue;
     }
 
@@ -69,12 +66,13 @@ function computeMetricsInternal(predictions: Prediction[]): MetricsSummary {
     else tn++;
   }
 
+  const evaluatedTotal = tp + fp + fn + tn;
   const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
   const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
   const f1 = precision + recall > 0 ? (2 * precision * recall) / (precision + recall) : 0;
-  const accuracy = total > 0 ? (tp + tn) / total : 0;
+  const accuracy = evaluatedTotal > 0 ? (tp + tn) / evaluatedTotal : 0;
 
-  const positives = labeledAndScored.filter(
+  const positives = labeledPredictions.filter(
     (p) => (p.corrected_label || p.ground_truth_label) === "DETECTED"
   ).length;
   const prevalence = total > 0 ? positives / total : 0;

@@ -8,6 +8,7 @@ import {
   DetectionDeleteSchema,
   DetectionUpdateSchema,
 } from "@/lib/schemas";
+import { normalizeDetectionCategory } from "@/lib/detectionPrompts";
 import { detectionRepository, promptRepository, runRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
@@ -68,7 +69,9 @@ export async function POST(req: NextRequest) {
       detectionCode,
       displayName,
       description: body.description || "",
+      detectionCategory: normalizeDetectionCategory(body.detection_category),
       labelPolicy: body.label_policy || "",
+      userPromptAddendum: body.user_prompt_addendum || "",
       decisionRubricJson: JSON.stringify(body.decision_rubric || []),
       segmentTaxonomyJson: JSON.stringify(normalizeStringList(body.segment_taxonomy || [])),
       metricThresholdsJson: JSON.stringify(body.metric_thresholds || { primary_metric: "f1" }),
@@ -142,7 +145,9 @@ export async function PUT(req: NextRequest) {
       detectionId: body.detection_id,
       displayName: body.display_name,
       description: body.description || "",
+      detectionCategory: normalizeDetectionCategory(body.detection_category),
       labelPolicy: body.label_policy || "",
+      userPromptAddendum: body.user_prompt_addendum || "",
       decisionRubricJson: JSON.stringify(body.decision_rubric || []),
       segmentTaxonomyJson: JSON.stringify(normalizeStringList(body.segment_taxonomy || safeParseJson(existing.segment_taxonomy, []))),
       metricThresholdsJson: JSON.stringify(body.metric_thresholds || {}),

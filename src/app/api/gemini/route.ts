@@ -68,11 +68,28 @@ export async function POST(req: NextRequest) {
 
   const stored = settingsRepository.getByKey("prompt_feedback_template");
   const template = stored?.value || DEFAULT_PROMPT_FEEDBACK_TEMPLATE;
+  const promptStructure = (prompt.prompt_structure || {}) as Record<string, unknown>;
+  const currentDecisionPolicy =
+    typeof promptStructure.label_policy === "string" ? promptStructure.label_policy : "";
+  const currentDecisionRubric =
+    typeof promptStructure.decision_rubric === "string"
+      ? promptStructure.decision_rubric
+      : Array.isArray(detection.decision_rubric)
+      ? detection.decision_rubric.join("\n")
+      : "";
+  const currentUserPromptAddendum =
+    typeof promptStructure.user_prompt_addendum === "string"
+      ? promptStructure.user_prompt_addendum
+      : typeof detection.user_prompt_addendum === "string"
+      ? detection.user_prompt_addendum
+      : "";
   const analysisPrompt = renderPromptFeedbackTemplate(template, {
     detectionCode: detection.detection_code,
     detectionDisplayName: detection.display_name,
-    currentSystemPrompt: prompt.system_prompt,
-    currentUserPromptTemplate: prompt.user_prompt_template,
+    detectionCategory: detection.detection_category,
+    currentDecisionPolicy,
+    currentDecisionRubric,
+    currentUserPromptAddendum,
     falsePositivesTotal: falsePositives.length,
     falsePositivesList: falsePositiveList,
     falseNegativesTotal: falseNegatives.length,

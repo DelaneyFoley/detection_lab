@@ -4,7 +4,9 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Detection, Run, Prediction, ErrorTag, Decision } from "@/types";
 import { computeMetricsWithSegments } from "@/lib/metrics";
+import { formatMetricValue } from "@/lib/ui/metrics";
 import { splitTypeLabel } from "@/lib/splitType";
+import { DecisionBadge } from "@/components/shared/DecisionBadge";
 
 const ERROR_TAGS: ErrorTag[] = [
   "MISSED_DETECTION",
@@ -28,8 +30,7 @@ export function HilReview({ detection }: { detection: Detection }) {
   const { selectedRunByDetection, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
   const [runs, setRuns] = useState<Run[]>([]);
   const [promptLabelById, setPromptLabelById] = useState<Record<string, string>>({});
-  const persistedRunId = selectedRunByDetection[detection.detection_id] || "";
-  const [selectedRunId, setSelectedRunId] = useState(persistedRunId);
+  const selectedRunId = selectedRunByDetection[detection.detection_id] || "";
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [filter, setFilter] = useState<FilterType>("all");
   const [viewMode, setViewMode] = useState<"table" | "image">("table");
@@ -75,10 +76,6 @@ export function HilReview({ detection }: { detection: Detection }) {
   useEffect(() => {
     loadRuns();
   }, [loadRuns, refreshCounter]);
-
-  useEffect(() => {
-    setSelectedRunId(persistedRunId);
-  }, [persistedRunId]);
 
   const loadRun = useCallback(async () => {
     if (!selectedRunId) {
@@ -134,12 +131,6 @@ export function HilReview({ detection }: { detection: Detection }) {
   useEffect(() => {
     loadRun();
   }, [loadRun]);
-
-  useEffect(() => {
-    if (selectedRunId) {
-      setSelectedRunForDetection(detection.detection_id, selectedRunId);
-    }
-  }, [selectedRunId, detection.detection_id, setSelectedRunForDetection]);
 
   const filteredPredictions = predictions.filter((p) => {
     const gt = p.corrected_label || p.ground_truth_label;
@@ -245,19 +236,24 @@ export function HilReview({ detection }: { detection: Detection }) {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold">Human-in-the-Loop Review</h2>
+    <div className="mx-auto max-w-7xl space-y-6">
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Human-in-the-Loop Review</h2>
+          <p className="app-page-copy">
+            Review completed run outputs, correct labels, and inspect where prompt behavior is failing or ambiguous.
+          </p>
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => setViewMode("table")}
-            className={`px-3 py-1.5 text-sm rounded ${viewMode === "table" ? "bg-blue-600" : "bg-gray-700 hover:bg-gray-600"}`}
+            className={`app-toggle ${viewMode === "table" ? "app-toggle-active" : ""}`}
           >
             Table View
           </button>
           <button
             onClick={() => setViewMode("image")}
-            className={`px-3 py-1.5 text-sm rounded ${viewMode === "image" ? "bg-blue-600" : "bg-gray-700 hover:bg-gray-600"}`}
+            className={`app-toggle ${viewMode === "image" ? "app-toggle-active" : ""}`}
           >
             Image Review
           </button>
@@ -265,24 +261,21 @@ export function HilReview({ detection }: { detection: Detection }) {
       </div>
 
       {/* Run Selection */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+      <div className="app-section">
         <div className="flex items-center gap-4">
-          <label className="text-xs text-gray-400">Select Run:</label>
+          <label className="app-label">Select Run</label>
           <select
-            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm flex-1"
+            className="app-select flex-1 px-3 py-2 text-sm"
             value={selectedRunId}
             onChange={(e) => {
               const nextRunId = e.target.value;
-              setSelectedRunId(nextRunId);
-              if (nextRunId) {
-                setSelectedRunForDetection(detection.detection_id, nextRunId);
-              }
+              setSelectedRunForDetection(detection.detection_id, nextRunId);
             }}
           >
             <option value="">Choose a run...</option>
             {runs.map((r: any) => (
               <option key={r.run_id} value={r.run_id}>
-                {(promptLabelById[r.prompt_version_id] || r.prompt_version_id?.slice(0, 8) || "Unknown prompt")} — {r.run_id.slice(0, 8)} — {splitTypeLabel(r.split_type)} — F1: {((r.metrics_summary?.f1 || 0) * 100).toFixed(1)}% — {new Date(r.created_at).toLocaleString()}
+                {formatRunOptionLabel(r, promptLabelById[r.prompt_version_id])}
               </option>
             ))}
           </select>
@@ -290,7 +283,7 @@ export function HilReview({ detection }: { detection: Detection }) {
 
         {/* Filters */}
         {predictions.length > 0 && (
-          <div className="flex gap-2 mt-3">
+          <div className="mt-4 flex flex-wrap gap-2">
             {([
               ["all", "All"],
               ["fp", "False Positives"],
@@ -315,11 +308,7 @@ export function HilReview({ detection }: { detection: Detection }) {
                 <button
                   key={key}
                   onClick={() => { setFilter(key); setCurrentIndex(0); }}
-                  className={`px-3 py-1 text-xs rounded-full ${
-                    filter === key
-                      ? "bg-blue-600 text-white"
-                      : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-                  }`}
+                  className={`app-toggle ${filter === key ? "app-toggle-active" : ""}`}
                 >
                   {label} ({count})
                 </button>
@@ -332,89 +321,82 @@ export function HilReview({ detection }: { detection: Detection }) {
       {/* Table View */}
       {viewMode === "table" && predictions.length > 0 && (
         <div className="space-y-3">
-          <div className="p-1">
-            <div className="grid grid-cols-7 gap-3">
-              <div className="text-center">
-                <div className="text-2xl font-semibold text-white">{labeledCount}/{predictions.length}</div>
-                <div className="text-xs text-gray-500">Labeled</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-semibold text-gray-200">{(liveMetrics.accuracy * 100).toFixed(1)}%</div>
-                <div className="text-xs text-gray-500">Accuracy</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-semibold text-blue-400">{(liveMetrics.precision * 100).toFixed(1)}%</div>
-                <div className="text-xs text-gray-500">Precision</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-semibold text-green-400">{(liveMetrics.recall * 100).toFixed(1)}%</div>
-                <div className="text-xs text-gray-500">Recall</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-semibold text-yellow-400">{(liveMetrics.f1 * 100).toFixed(1)}%</div>
-                <div className="text-xs text-gray-500">F1 Score</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-semibold text-purple-300">{(liveMetrics.prevalence * 100).toFixed(1)}%</div>
-                <div className="text-xs text-gray-500">Prevalence</div>
-              </div>
-              <div className="text-center">
-                <div className={`text-2xl font-semibold ${liveMetrics.parse_failure_rate > 0 ? "text-orange-300" : "text-gray-200"}`}>
-                  {(liveMetrics.parse_failure_rate * 100).toFixed(1)}%
-                </div>
-                <div className="text-xs text-gray-500">Parse Fail Rate</div>
-              </div>
-            </div>
-            {Object.keys(liveMetrics.segment_metrics || {}).length > 0 && (
-              <details className="mt-3 bg-gray-900/40 border border-gray-800 rounded p-2">
-                <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-300">
-                  Segment Breakdown
-                </summary>
-                <div className="mt-2 overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="text-gray-500 border-b border-gray-800">
-                      <tr>
-                        <th className="text-left py-1.5 px-2">Segment</th>
-                        <th className="text-right py-1.5 px-2">Total</th>
-                        <th className="text-right py-1.5 px-2">Accuracy</th>
-                        <th className="text-right py-1.5 px-2">Precision</th>
-                        <th className="text-right py-1.5 px-2">Recall</th>
-                        <th className="text-right py-1.5 px-2">F1</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(liveMetrics.segment_metrics || {})
-                        .sort(([, a], [, b]) => b.total - a.total)
-                        .map(([segment, m]) => (
-                          <tr key={segment} className="border-b border-gray-900/60">
-                            <td className="py-1.5 px-2 text-gray-300">{segment}</td>
-                            <td className="py-1.5 px-2 text-right text-gray-400">{m.total}</td>
-                            <td className="py-1.5 px-2 text-right text-gray-300">{(m.accuracy * 100).toFixed(1)}%</td>
-                            <td className="py-1.5 px-2 text-right text-blue-400">{(m.precision * 100).toFixed(1)}%</td>
-                            <td className="py-1.5 px-2 text-right text-green-400">{(m.recall * 100).toFixed(1)}%</td>
-                            <td className="py-1.5 px-2 text-right text-yellow-400">{(m.f1 * 100).toFixed(1)}%</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              </details>
-            )}
+          <div className="grid grid-cols-2 gap-3 px-1 md:grid-cols-4 xl:grid-cols-7">
+            <MetricStat label="Labeled" value={`${labeledCount}/${predictions.length}`} valueClassName="text-white" />
+            <MetricStat label="Accuracy" value={formatMetricValue(liveMetrics, "accuracy")} valueClassName="text-white" />
+            <MetricStat label="Precision" value={formatMetricValue(liveMetrics, "precision")} valueClassName="text-white" />
+            <MetricStat label="Recall" value={formatMetricValue(liveMetrics, "recall")} valueClassName="text-white" />
+            <MetricStat label="F1 Score" value={formatMetricValue(liveMetrics, "f1")} valueClassName="text-white" />
+            <MetricStat label="Prevalence" value={formatMetricValue(liveMetrics, "prevalence")} valueClassName="text-white" />
+            <MetricStat
+              label="Parse Fail Rate"
+              value={formatMetricValue(liveMetrics, "parse_failure_rate")}
+              valueClassName="text-white"
+            />
           </div>
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden">
+          {Object.keys(liveMetrics.segment_metrics || {}).length > 0 && (
+            <details className="px-1 pt-1">
+              <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-300">
+                Attribute Breakdown
+              </summary>
+              <div className="app-metric-breakdown mt-2 text-xs">
+                <div
+                  className="app-metric-breakdown-row app-metric-breakdown-head"
+                  style={{ gridTemplateColumns: "minmax(170px, 1.8fr) repeat(5, minmax(90px, 1fr))" }}
+                >
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-label">Attribute</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Total</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Accuracy</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Precision</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Recall</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">F1</div>
+                </div>
+                <div className="app-metric-breakdown-body">
+                  {Object.entries(liveMetrics.segment_metrics || {})
+                    .sort(([, a], [, b]) => b.total - a.total)
+                    .map(([segment, m]) => (
+                      <div
+                        key={segment}
+                        className="app-metric-breakdown-row"
+                        style={{ gridTemplateColumns: "minmax(170px, 1.8fr) repeat(5, minmax(90px, 1fr))" }}
+                      >
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-label text-gray-300">{segment}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-gray-400">{m.total}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-gray-300">{formatMetricValue(m, "accuracy")}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">{formatMetricValue(m, "precision")}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">{formatMetricValue(m, "recall")}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">{formatMetricValue(m, "f1")}</div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </details>
+          )}
+          <div className="app-card-strong overflow-hidden">
           <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-gray-800 z-10">
-                <tr className="text-xs text-gray-500 border-b border-gray-700">
-                  <th className="text-left py-2.5 px-3">Image</th>
-                  <th className="text-left py-2.5 px-3">Thumbnail</th>
-                  <th className="text-center py-2.5 px-3">Predicted</th>
-                  <th className="text-center py-2.5 px-3">Ground Truth</th>
-                  <th className="text-center py-2.5 px-3">Match</th>
-                  <th className="text-center py-2.5 px-3">Error Tag</th>
-                  <th className="text-right py-2.5 px-3">Confidence</th>
-                  <th className="text-center py-2.5 px-3">Parse</th>
-                  <th className="text-center py-2.5 px-3">Actions</th>
+            <table className="app-table app-table-fixed text-sm">
+              <colgroup>
+                <col style={{ width: "11rem" }} />
+                <col style={{ width: "6rem" }} />
+                <col style={{ width: "9rem" }} />
+                <col style={{ width: "10rem" }} />
+                <col style={{ width: "6rem" }} />
+                <col style={{ width: "13rem" }} />
+                <col style={{ width: "7rem" }} />
+                <col style={{ width: "6rem" }} />
+                <col style={{ width: "7rem" }} />
+              </colgroup>
+              <thead className="sticky top-0 z-10">
+                <tr>
+                  <th className="app-table-col-label">Image</th>
+                  <th className="app-table-col-label">Thumbnail</th>
+                  <th className="app-table-col-label">Predicted</th>
+                  <th className="app-table-col-label">Ground Truth</th>
+                  <th className="app-table-col-label">Match</th>
+                  <th className="app-table-col-label">Error Tag</th>
+                  <th className="app-table-col-label">Confidence</th>
+                  <th className="app-table-col-label">Parse</th>
+                  <th className="app-table-col-label">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -445,15 +427,15 @@ export function HilReview({ detection }: { detection: Detection }) {
       )}
 
       {loadingRun && selectedRunId && (
-        <p className="text-center text-gray-500 py-8">Loading run predictions...</p>
+        <p className="app-card px-4 py-8 text-center text-[var(--app-text-muted)]">Loading run predictions...</p>
       )}
 
       {runError && (
-        <p className="text-center text-red-400 py-8">Unable to load run: {runError}</p>
+        <p className="rounded-2xl border border-[rgba(255,123,136,0.22)] bg-[rgba(85,24,31,0.68)] px-4 py-8 text-center text-[var(--app-danger)]">Unable to load run: {runError}</p>
       )}
 
       {!loadingRun && !runError && selectedRunId && predictions.length === 0 && (
-        <p className="text-center text-gray-500 py-8">No predictions found for the selected run.</p>
+        <p className="app-card px-4 py-8 text-center text-[var(--app-text-muted)]">No predictions found for the selected run.</p>
       )}
 
       {/* Image Review Mode */}
@@ -472,9 +454,35 @@ export function HilReview({ detection }: { detection: Detection }) {
         />
       )}
 
-      {!selectedRunId && (
-        <p className="text-center text-gray-500 py-8">Select a completed run to begin review.</p>
-      )}
+    </div>
+  );
+}
+
+function formatRunOptionLabel(run: Run, promptLabel?: string): string {
+  const prompt = promptLabel || String(run.prompt_version_id || "").slice(0, 8) || "Unknown prompt";
+  const split = splitTypeLabel(run.split_type);
+  const createdAt = run.created_at ? new Date(run.created_at).toLocaleDateString() : "";
+  const imageCount = Number(run.metrics_summary?.total ?? run.total_images ?? 0);
+  const f1 = Number(run.metrics_summary?.f1 ?? 0);
+  const countLabel = imageCount > 0 ? `${imageCount} imgs` : "No count";
+  return `${prompt} · ${split} · ${countLabel} · F1 ${ (f1 * 100).toFixed(1)}% · ${createdAt}`;
+}
+
+function MetricStat({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="px-3 py-4 text-center">
+      <div className={`text-2xl font-semibold ${valueClassName || "text-white"}`}>{value}</div>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--app-text-subtle)]">
+        {label}
+      </div>
     </div>
   );
 }
@@ -495,9 +503,9 @@ function PredictionRow({
   const isMatch = p.parse_ok && !!p.ground_truth_label && p.predicted_decision === p.ground_truth_label;
 
   return (
-    <tr className={`border-b border-gray-800/50 hover:bg-gray-800/30 ${!isCorrect ? "bg-red-900/5" : ""}`}>
-      <td className="py-2 px-3 font-mono text-xs">{p.image_id}</td>
-      <td className="py-2 px-3">
+    <tr className={!isCorrect ? "app-table-row-alert" : ""}>
+      <td className="font-mono text-xs">{p.image_id}</td>
+      <td>
         <img
           src={p.image_uri}
           alt={p.image_id}
@@ -505,83 +513,104 @@ function PredictionRow({
           onClick={onImageReview}
         />
       </td>
-      <td className="text-center py-2 px-3">
-        <span className={`text-xs px-1.5 py-0.5 rounded ${
-          p.predicted_decision === "DETECTED" ? "bg-purple-900/30 text-purple-300" :
-          p.predicted_decision === "NOT_DETECTED" ? "bg-emerald-900/30 text-emerald-300" :
-          "bg-red-900/30 text-red-400"
-        }`}>
-          {p.predicted_decision || "PARSE_FAIL"}
-        </span>
+      <td className="app-table-col-label">
+        <div className="app-table-left-slot">
+          <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
+        </div>
       </td>
-      <td className="text-center py-2 px-3">
-        <select
-          className={`bg-gray-900 border border-gray-700 rounded text-xs px-1 py-0.5 ${
-            p.ground_truth_label === "DETECTED"
-              ? "text-purple-300"
-              : p.ground_truth_label === "NOT_DETECTED"
-                ? "text-emerald-300"
-                : "text-gray-400"
-          }`}
-          value={p.ground_truth_label || ""}
-          onChange={(e) =>
-            onUpdate(p.prediction_id, {
-              ground_truth_label: (e.target.value || null) as Decision | null,
-              corrected_label: null,
-            })
-          }
-        >
-          <option value="">UNSET</option>
-          <option value="DETECTED">DETECTED</option>
-          <option value="NOT_DETECTED">NOT_DETECTED</option>
-        </select>
-      </td>
-      <td className="text-center py-2 px-3">
-        <span className={`text-xs font-medium ${isMatch ? "text-green-400" : "text-red-400"}`}>
-          {isMatch ? "Yes" : "No"}
-        </span>
-      </td>
-      <td className="text-center py-2 px-3">
-        <select
-          className="bg-gray-900 border border-gray-700 rounded text-xs px-1 py-0.5"
-          value={p.error_tag || ""}
-          onChange={(e) => onUpdate(p.prediction_id, { error_tag: e.target.value || null })}
-        >
-          <option value="">—</option>
-          {ERROR_TAGS.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-      </td>
-      <td className="text-right py-2 px-3 text-xs">
-        {p.confidence != null ? p.confidence.toFixed(2) : "—"}
-      </td>
-      <td className="text-center py-2 px-3">
-        {p.parse_ok ? (
-          <span className="text-green-400 text-xs">OK</span>
-        ) : isInferenceCallFailure(p) ? (
-          <span
-            className="text-orange-300 text-xs"
-            title={`${p.parse_error_reason || "Inference/API call failed"}${p.parse_fix_suggestion ? `\nFix: ${p.parse_fix_suggestion}` : ""}`}
+      <td className="app-table-col-label">
+        <div className="app-table-left-slot">
+          <select
+            className="rounded-md border px-2 py-1 text-[11px] font-medium"
+            style={
+              p.ground_truth_label === "DETECTED"
+                ? {
+                    color: "var(--app-purple)",
+                    backgroundColor: "var(--app-purple-soft)",
+                    borderColor: "color-mix(in srgb, var(--app-purple) 36%, transparent)",
+                  }
+                : p.ground_truth_label === "NOT_DETECTED"
+                  ? {
+                      color: "var(--app-not-detected)",
+                      backgroundColor: "var(--app-not-detected-soft)",
+                      borderColor: "color-mix(in srgb, var(--app-not-detected) 36%, transparent)",
+                    }
+                  : {
+                      color: "var(--app-text-subtle)",
+                      backgroundColor: "var(--app-field-bg)",
+                      borderColor: "var(--app-border-strong)",
+                    }
+            }
+            value={p.ground_truth_label || ""}
+            onChange={(e) =>
+              onUpdate(p.prediction_id, {
+                ground_truth_label: (e.target.value || null) as Decision | null,
+                corrected_label: null,
+              })
+            }
           >
-            API_ERR
-          </span>
-        ) : (
-          <span
-            className="text-red-400 text-xs"
-            title={`${p.parse_error_reason || "Parse failed"}${p.parse_fix_suggestion ? `\nFix: ${p.parse_fix_suggestion}` : ""}`}
-          >
-            FAIL
-          </span>
-        )}
+            <option value="">UNSET</option>
+            <option value="DETECTED">DETECTED</option>
+            <option value="NOT_DETECTED">NOT_DETECTED</option>
+          </select>
+        </div>
       </td>
-      <td className="text-center py-2 px-3">
-        <button
-          onClick={onImageReview}
-          className="text-xs text-blue-400 hover:text-blue-300"
-        >
-          Review
-        </button>
+      <td className="app-table-col-label">
+        <div className="app-table-left-slot">
+          <span className={`text-xs font-medium ${isMatch ? "text-green-400" : "text-red-400"}`}>
+            {isMatch ? "Yes" : "No"}
+          </span>
+        </div>
+      </td>
+      <td className="app-table-col-label">
+        <div className="app-table-left-slot">
+          <select
+            className="bg-gray-900 border border-gray-700 rounded text-xs px-1 py-0.5"
+            value={p.error_tag || ""}
+            onChange={(e) => onUpdate(p.prediction_id, { error_tag: e.target.value || null })}
+          >
+            <option value="">—</option>
+            {ERROR_TAGS.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+      </td>
+      <td className="app-table-col-label text-xs">
+        <div className="app-table-left-slot">
+          <span>{p.confidence != null ? p.confidence.toFixed(2) : "—"}</span>
+        </div>
+      </td>
+      <td className="app-table-col-label">
+        <div className="app-table-left-slot">
+          {p.parse_ok ? (
+            <span className="app-status-ok">OK</span>
+          ) : isInferenceCallFailure(p) ? (
+            <span
+              className="app-status-api"
+              title={`${p.parse_error_reason || "Inference/API call failed"}${p.parse_fix_suggestion ? `\nFix: ${p.parse_fix_suggestion}` : ""}`}
+            >
+              API_ERR
+            </span>
+          ) : (
+            <span
+              className="app-status-fail"
+              title={`${p.parse_error_reason || "Parse failed"}${p.parse_fix_suggestion ? `\nFix: ${p.parse_fix_suggestion}` : ""}`}
+            >
+              FAIL
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="app-table-col-label">
+        <div className="app-table-left-slot">
+          <button
+            onClick={onImageReview}
+            className="app-btn app-btn-subtle app-btn-sm text-xs"
+          >
+            Review
+          </button>
+        </div>
       </td>
     </tr>
   );
@@ -754,9 +783,9 @@ function ImageReviewMode({
   };
 
   return (
-    <div className="grid grid-cols-2 gap-6" onKeyDown={handleKeyDown} tabIndex={0}>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2" onKeyDown={handleKeyDown} tabIndex={0}>
       {/* Image */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+      <div className="app-card-strong p-4">
         <div className="flex justify-between items-start gap-3 mb-3">
           <div className="min-w-0 flex items-center gap-2">
             <span className="text-xs text-gray-500 truncate" title={`${index + 1} / ${total} — ${p.image_id}`}>
@@ -764,7 +793,7 @@ function ImageReviewMode({
             </span>
             <button
               onClick={copyImageId}
-              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs shrink-0"
+              className="app-btn app-btn-subtle app-btn-sm shrink-0 text-xs"
               title="Copy image ID"
             >
               {copiedImageId ? "Copied" : "Copy"}
@@ -773,14 +802,14 @@ function ImageReviewMode({
           <div className="flex gap-2 shrink-0 flex-wrap justify-end max-w-[420px]">
             <button
               onClick={() => setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))}
-              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+              className="app-btn app-btn-subtle app-btn-sm text-xs"
               disabled={imageZoom >= 4}
             >
               Zoom +
             </button>
             <button
               onClick={() => setImageZoom((z) => Math.max(1, Number((z - 0.25).toFixed(2))))}
-              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+              className="app-btn app-btn-subtle app-btn-sm text-xs"
               disabled={imageZoom <= 1}
             >
               Zoom -
@@ -790,15 +819,15 @@ function ImageReviewMode({
                 setImageZoom(1);
                 setImagePan({ x: 0, y: 0 });
               }}
-              className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs"
+              className="app-btn app-btn-subtle app-btn-sm text-xs"
               disabled={imageZoom === 1 && imagePan.x === 0 && imagePan.y === 0}
             >
               Reset
             </button>
-            <button onClick={handlePrev} disabled={index === 0} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-30 rounded text-xs">
+            <button onClick={handlePrev} disabled={index === 0} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-30">
               ← Prev
             </button>
-            <button onClick={handleNext} disabled={index === total - 1} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-30 rounded text-xs">
+            <button onClick={handleNext} disabled={index === total - 1} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-30">
               Next →
             </button>
           </div>
@@ -838,29 +867,19 @@ function ImageReviewMode({
       {/* Review Panel */}
       <div className="space-y-4">
         {/* Prediction Summary */}
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+        <div className="app-card p-4">
           <div className="text-xs text-gray-300 space-y-2">
             <p>Confidence: {p.confidence != null ? p.confidence.toFixed(3) : "N/A"} (uncalibrated)</p>
             <p>Evidence: {p.evidence || "—"}</p>
             <p>
               Prediction:{" "}
-              <span
-                className={`px-1.5 py-0.5 rounded ${
-                  p.predicted_decision === "DETECTED"
-                    ? "bg-purple-900/30 text-purple-300"
-                    : p.predicted_decision === "NOT_DETECTED"
-                      ? "bg-emerald-900/30 text-emerald-300"
-                      : "bg-red-900/30 text-red-400"
-                }`}
-              >
-                {p.predicted_decision || "PARSE_FAIL"}
-              </span>
+              <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
             </p>
           </div>
         </div>
 
         {/* Decision Toggle */}
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+        <div className="app-card p-4">
           <h4 className="text-xs text-gray-500 font-medium mb-2">Label Correction</h4>
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xs text-gray-400">Ground truth:</span>
@@ -873,7 +892,7 @@ function ImageReviewMode({
               }
               className={`px-3 py-1.5 rounded text-xs border ${
                 p.ground_truth_label === "DETECTED"
-                  ? "bg-purple-900/30 text-purple-200 border-purple-500"
+                  ? "bg-[var(--app-purple-soft)] text-[var(--app-purple)] border-[color:color-mix(in_srgb,var(--app-purple)_36%,transparent)]"
                   : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"
               }`}
             >
@@ -888,7 +907,7 @@ function ImageReviewMode({
               }
               className={`px-3 py-1.5 rounded text-xs border ${
                 p.ground_truth_label === "NOT_DETECTED"
-                  ? "bg-emerald-900/30 text-emerald-200 border-emerald-600/50"
+                  ? "bg-[var(--app-not-detected-soft)] text-[var(--app-not-detected)] border-[color:color-mix(in_srgb,var(--app-not-detected)_36%,transparent)]"
                   : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"
               }`}
             >
@@ -935,16 +954,16 @@ function ImageReviewMode({
           )}
         </div>
 
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-          <h4 className="text-xs text-gray-500 font-medium mb-2">Segments</h4>
+        <div className="app-card p-4">
+          <h4 className="text-xs text-gray-500 font-medium mb-2">Attributes</h4>
           <SegmentTagsEditor value={segmentTags} options={segmentOptions} onChange={onUpdateSegmentTags} />
         </div>
 
         {/* Error Tag */}
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+        <div className="app-card p-4">
           <h4 className="text-xs text-gray-500 font-medium mb-2">Error Tag</h4>
           <select
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs"
             value={p.error_tag || ""}
             onChange={(e) => onUpdate(p.prediction_id, { error_tag: e.target.value || null })}
           >
@@ -956,10 +975,10 @@ function ImageReviewMode({
         </div>
 
         {/* Reviewer Note */}
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+        <div className="app-card p-4">
           <h4 className="text-xs text-gray-500 font-medium mb-2">Reviewer Note</h4>
           <textarea
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-20"
+            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs h-20"
             value={note}
             onChange={(e) => {
               setNote(e.target.value);
@@ -976,7 +995,7 @@ function ImageReviewMode({
         </div>
 
         {/* Model JSON Response */}
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+        <div className="app-card p-4">
           <h4 className="text-xs text-gray-500 font-medium mb-2">Model Response</h4>
           <pre className="text-xs font-mono bg-gray-900 rounded p-3 overflow-x-auto whitespace-pre-wrap text-gray-300">
             {p.raw_response}
@@ -1033,33 +1052,27 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div className="space-y-2">
-      <select
-        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs"
-        value=""
-        onChange={(e) => {
-          const next = e.target.value;
-          if (!next) return;
-          if (!value.includes(next)) onChange([...value, next]);
-        }}
-      >
-        <option value="">Add tag...</option>
-        {options.filter((option) => !value.includes(option)).map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      <div className="flex flex-wrap gap-1 min-h-5">
-        {value.length === 0 && <span className="text-[11px] text-gray-500">No segments</span>}
-        {value.map((tag) => (
-          <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
-            {tag}
-            <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => onChange(value.filter((v) => v !== tag))}>
-              ×
+    <div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const selected = value.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() =>
+                onChange(selected ? value.filter((v) => v !== option) : [...value, option])
+              }
+              className={`px-2.5 py-1 text-[11px] transition ${
+                selected
+                  ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
+                  : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
+              }`}
+            >
+              {option}
             </button>
-          </span>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

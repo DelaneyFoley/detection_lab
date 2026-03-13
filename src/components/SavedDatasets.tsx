@@ -3,19 +3,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection } from "@/types";
-import { splitTypeLabel } from "@/lib/splitType";
+import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { compareImageIds } from "@/lib/imageIdSort";
+import { DecisionBadge } from "@/components/shared/DecisionBadge";
 
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const { triggerRefresh, refreshCounter } = useAppStore();
+  const { notify, confirm } = useAppFeedback();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [datasetItems, setDatasetItems] = useState<DatasetItem[]>([]);
   const [editingName, setEditingName] = useState("");
+  const [editingDetectionId, setEditingDetectionId] = useState("");
   const [editingSplit, setEditingSplit] = useState("ITERATION");
   const [selectedPreviewIndex, setSelectedPreviewIndex] = useState<number | null>(null);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
@@ -125,7 +129,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   }, [detections]);
 
   const selectedDataset = datasets.find((d) => d.dataset_id === selectedDatasetId) || null;
-  const selectedDetection = detections.find((d) => d.detection_id === selectedDataset?.detection_id) || null;
+  const activeDetectionId = isEditingDetails ? editingDetectionId : (selectedDataset?.detection_id || "");
+  const selectedDetection = detections.find((d) => d.detection_id === activeDetectionId) || null;
   const segmentOptions = useMemo(
     () => (Array.isArray(selectedDetection?.segment_taxonomy) ? selectedDetection.segment_taxonomy : []),
     [selectedDetection?.segment_taxonomy]
@@ -134,6 +139,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   useEffect(() => {
     if (!selectedDataset) return;
     setEditingName(selectedDataset.name);
+    setEditingDetectionId(selectedDataset.detection_id || "");
     setEditingSplit(selectedDataset.split_type);
     setIsEditingDetails(false);
   }, [selectedDataset]);
@@ -142,7 +148,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     if (!selectedDataset) return;
     const imageIdValidation = validateDatasetItemImageIds(datasetItems);
     if (!imageIdValidation.ok) {
-      alert(imageIdValidation.error);
+      notify({ message: imageIdValidation.error, tone: "error" });
       return;
     }
     setIsSavingDetails(true);
@@ -153,6 +159,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
         body: JSON.stringify({
           dataset_id: selectedDataset.dataset_id,
           name: editingName.trim(),
+          detection_id: editingDetectionId || null,
           split_type: editingSplit,
         }),
       });
@@ -188,7 +195,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       setIsEditingDetails(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save changes";
-      alert(message);
+      notify({ message, tone: "error" });
     } finally {
       setIsSavingDetails(false);
     }
@@ -197,6 +204,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const cancelEditingDetails = async () => {
     if (!selectedDataset) return;
     setEditingName(selectedDataset.name);
+    setEditingDetectionId(selectedDataset.detection_id || "");
     setEditingSplit(selectedDataset.split_type);
     if (selectedDatasetId) {
       await loadDatasetItems(selectedDatasetId);
@@ -210,7 +218,16 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const deleteItem = async (item: DatasetItem) => {
     if (!selectedDatasetId) return;
-    if (!confirm(`Remove image "${item.image_id}" from this dataset?`)) return;
+    if (
+      !(await confirm({
+        title: "Remove Image",
+        message: `Remove image "${item.image_id}" from this dataset?`,
+        confirmLabel: "Remove",
+        tone: "danger",
+      }))
+    ) {
+      return;
+    }
     const res = await fetch("/api/datasets", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -218,7 +235,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     });
     if (!res.ok) {
       const text = await res.text();
-      alert(text || "Failed to remove image");
+      notify({ message: text || "Failed to remove image.", tone: "error" });
       return;
     }
     await loadDatasets();
@@ -263,7 +280,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       triggerRefresh();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : "Failed to add images";
-      alert(msg);
+      notify({ message: msg, tone: "error" });
     } finally {
       setAppendingImages(false);
     }
@@ -271,7 +288,16 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const deleteDataset = async () => {
     if (!selectedDataset) return;
-    if (!confirm(`Delete dataset "${selectedDataset.name}"? This cannot be undone.`)) return;
+    if (
+      !(await confirm({
+        title: "Delete Dataset",
+        message: `Delete dataset "${selectedDataset.name}"? This cannot be undone.`,
+        confirmLabel: "Delete Dataset",
+        tone: "danger",
+      }))
+    ) {
+      return;
+    }
     await fetch("/api/datasets", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -315,7 +341,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const exportSelectedDatasetCsv = () => {
     if (!selectedDataset) return;
-    const headers = ["image_id", "image_uri", "image_description", "ground_truth_label", "segment_tags"];
+    const headers = ["image_id", "image_uri", "image_description", "ground_truth_label", "attribute_tags"];
     const rows = sortedDatasetItems.map((item) => [
       item.image_id || "",
       item.image_uri || "",
@@ -336,15 +362,18 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Saved Datasets</h2>
-          <p className="text-sm text-gray-500">All datasets across detections.</p>
+    <div className="space-y-6">
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Saved Datasets</h2>
+          <p className="app-page-copy">
+            Review uploaded datasets, manage detection assignment, edit image-level labels and
+            attributes, and export dataset contents for downstream analysis.
+          </p>
         </div>
         <button
           onClick={() => setShowUpload((v) => !v)}
-          className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded"
+          className="app-btn app-btn-primary app-btn-lg"
         >
           {showUpload ? "Cancel Upload" : "Upload Dataset"}
         </button>
@@ -361,36 +390,49 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
         />
       )}
 
-      <div className="overflow-x-auto border border-gray-800 rounded-lg">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-900/60 text-gray-400">
+      <div className="app-table-wrap">
+        <table className="app-table app-table-fixed">
+          <colgroup>
+            <col style={{ width: "34%" }} />
+            <col style={{ width: "30%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "8%" }} />
+            <col style={{ width: "16%" }} />
+          </colgroup>
+          <thead>
             <tr>
-              <th className="text-left px-3 py-2">Dataset</th>
-              <th className="text-left px-3 py-2">Detection</th>
-              <th className="text-left px-3 py-2">Split</th>
-              <th className="text-right px-3 py-2">Size</th>
-              <th className="text-left px-3 py-2">Updated</th>
+              <th className="app-table-col-label">Dataset</th>
+              <th className="app-table-col-label">Detection</th>
+              <th className="app-table-col-label">Split</th>
+              <th className="app-table-col-center">Size</th>
+              <th className="app-table-col-label">Updated</th>
             </tr>
           </thead>
           <tbody>
             {datasets.map((d) => (
               <tr
                 key={d.dataset_id}
-                className={`border-t border-gray-800 cursor-pointer ${
-                  selectedDatasetId === d.dataset_id ? "bg-blue-900/20" : "hover:bg-gray-900/40"
+                className={`cursor-pointer border-t border-white/5 ${
+                  selectedDatasetId === d.dataset_id
+                    ? "bg-[rgba(118,190,255,0.14)] shadow-[inset_0_0_0_1px_rgba(182,223,255,0.32)]"
+                    : "hover:bg-[rgba(92,184,255,0.06)]"
                 }`}
                 onClick={() => setSelectedDatasetId(d.dataset_id)}
               >
-                <td className="px-3 py-2 text-gray-200">{d.name}</td>
-                <td className="px-3 py-2 text-gray-400">{detectionNameById.get(String(d.detection_id || "")) || "Unassigned"}</td>
-                <td className="px-3 py-2 text-gray-400">{splitTypeLabel(d.split_type)}</td>
-                <td className="px-3 py-2 text-right text-gray-300">{d.size}</td>
-                <td className="px-3 py-2 text-gray-500">{new Date(d.updated_at).toLocaleDateString()}</td>
+                <td className="text-[var(--app-text)]">{d.name}</td>
+                <td className="app-table-muted">{detectionNameById.get(String(d.detection_id || "")) || "Unassigned"}</td>
+                <td>
+                  <div className="app-table-left-slot">
+                    <span className={splitTypeBadgeClass(d.split_type)}>{splitTypeLabel(d.split_type)}</span>
+                  </div>
+                </td>
+                <td className="app-table-col-center text-[var(--app-text)]">{d.size}</td>
+                <td className="app-table-subtle">{new Date(d.updated_at).toLocaleDateString()}</td>
               </tr>
             ))}
             {datasets.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
+                <td colSpan={5} className="app-table-subtle px-3 py-6 text-center">
                   No datasets saved yet.
                 </td>
               </tr>
@@ -400,9 +442,12 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       </div>
 
       {selectedDataset && (
-        <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
+        <div className="app-card-strong p-5 space-y-5">
           <div className="flex flex-wrap justify-between items-center gap-2">
-            <h3 className="text-sm font-medium text-gray-200">Dataset Details</h3>
+            <div className="space-y-1">
+              <div className="app-kicker">Dataset Details</div>
+              <h3 className="text-lg font-semibold text-gray-100">{selectedDataset.name}</h3>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => {
@@ -413,7 +458,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                   }
                 }}
                 disabled={isSavingDetails}
-                className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+                className={`app-btn ${isEditingDetails ? "app-btn-success" : "app-btn-subtle"} app-btn-md disabled:opacity-50`}
               >
                 {isSavingDetails ? "Saving..." : isEditingDetails ? "Save" : "Edit"}
               </button>
@@ -421,7 +466,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 <button
                   onClick={() => void cancelEditingDetails()}
                   disabled={isSavingDetails}
-                  className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+                  className="app-btn app-btn-subtle app-btn-md disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -429,32 +474,32 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               <button
                 onClick={exportSelectedDatasetCsv}
                 disabled={datasetItems.length === 0}
-                className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+                className="app-btn app-btn-subtle app-btn-md disabled:opacity-50"
               >
                 Export CSV
               </button>
               <button
                 onClick={exportSelectedDatasetJson}
                 disabled={datasetItems.length === 0}
-                className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded"
+                className="app-btn app-btn-subtle app-btn-md disabled:opacity-50"
               >
                 Export JSON
               </button>
               <button
                 onClick={deleteDataset}
-                className="text-xs px-3 py-1.5 bg-red-900/40 hover:bg-red-900/60 text-red-300 rounded"
+                className="app-btn app-btn-danger"
               >
                 Delete Dataset
               </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <div>
-              <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
+              <label className="app-label block mb-1">Dataset Name</label>
               {isEditingDetails ? (
                 <input
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+                  className="app-input"
                   value={editingName}
                   onChange={(e) => setEditingName(e.target.value)}
                 />
@@ -463,10 +508,31 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               )}
             </div>
             <div>
-              <label className="text-xs text-gray-400 block mb-1">Split Type</label>
+              <label className="app-label block mb-1">Detection</label>
               {isEditingDetails ? (
                 <select
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+                  className="app-select"
+                  value={editingDetectionId}
+                  onChange={(e) => setEditingDetectionId(e.target.value)}
+                >
+                  <option value="">Unassigned</option>
+                  {detections.map((d) => (
+                    <option key={d.detection_id} value={d.detection_id}>
+                      {d.display_name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="w-full px-0 py-2 text-sm text-gray-300">
+                  {detectionNameById.get(editingDetectionId) || "Unassigned"}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="app-label block mb-1">Split Type</label>
+              {isEditingDetails ? (
+                <select
+                  className="app-select"
                   value={editingSplit}
                   onChange={(e) => setEditingSplit(e.target.value)}
                 >
@@ -481,7 +547,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
             </div>
           </div>
           <div>
-            <h4 className="text-xs text-gray-400 font-medium mb-2">Preview ({datasetItems.length} images)</h4>
+            <h4 className="app-label mb-2">Preview ({datasetItems.length} images)</h4>
             {isEditingDetails && (
               <div className="mb-2 flex items-center gap-2">
                 <input
@@ -500,8 +566,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 />
                 <label
                   htmlFor="saved-datasets-append-files-input"
-                  className={`px-3 py-1.5 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 ${
-                    appendingImages ? "opacity-50 pointer-events-none" : "cursor-pointer hover:bg-gray-800"
+                  className={`app-btn app-btn-secondary ${
+                    appendingImages ? "pointer-events-none opacity-50" : "cursor-pointer"
                   }`}
                 >
                   Choose Files
@@ -511,18 +577,26 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 </span>
               </div>
             )}
-            <div className="max-h-[360px] overflow-auto border border-gray-800 rounded">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-gray-900/90">
-                  <tr className="text-gray-500 border-b border-gray-800">
-                    <th className="text-left px-2 py-2 w-44">Preview</th>
-                    <th className="text-left px-2 py-2">
+            <div className="app-table-wrap max-h-[360px] overflow-auto">
+              <table className="app-table app-table-fixed text-xs">
+                <colgroup>
+                  <col style={{ width: "11rem" }} />
+                  <col style={{ width: "12rem" }} />
+                  <col />
+                  <col style={{ width: "10rem" }} />
+                  <col style={{ width: "16rem" }} />
+                  {isEditingDetails && <col style={{ width: "5rem" }} />}
+                </colgroup>
+                <thead className="sticky top-0">
+                  <tr>
+                    <th className="app-table-col-label">Preview</th>
+                    <th className="app-table-col-label">
                       <button type="button" onClick={() => toggleItemSort("image_id")} className="hover:text-gray-300">
                         Image ID {itemSortBy === "image_id" ? (itemSortDir === "asc" ? "↑" : "↓") : ""}
                       </button>
                     </th>
-                    <th className="text-left px-2 py-2">Image Description</th>
-                    <th className="text-left px-2 py-2">
+                    <th className="app-table-col-label">Image Description</th>
+                    <th className="app-table-col-center">
                       <button
                         type="button"
                         onClick={() => toggleItemSort("ground_truth_label")}
@@ -531,14 +605,14 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         Ground Truth Label {itemSortBy === "ground_truth_label" ? (itemSortDir === "asc" ? "↑" : "↓") : ""}
                       </button>
                     </th>
-                    <th className="text-left px-2 py-2">Segments</th>
-                    {isEditingDetails && <th className="text-right px-2 py-2">Action</th>}
+                    <th className="app-table-col-label">Attributes</th>
+                    {isEditingDetails && <th className="app-table-col-right">Action</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {sortedDatasetItems.map((item, index) => (
-                    <tr key={item.item_id} className="border-b border-gray-900/70">
-                      <td className="px-2 py-2 w-44 align-middle">
+                    <tr key={item.item_id}>
+                      <td className="w-44">
                         <img
                           src={item.image_uri}
                           alt={item.image_id}
@@ -546,7 +620,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           onClick={() => setSelectedPreviewIndex(index)}
                         />
                       </td>
-                      <td className="px-2 py-2 align-middle">
+                      <td>
                         {isEditingDetails ? (
                           <input
                             className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300"
@@ -557,7 +631,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="w-full py-1 text-xs font-mono text-gray-300">{item.image_id}</div>
                         )}
                       </td>
-                      <td className="px-2 py-2 align-middle">
+                      <td>
                         {isEditingDetails ? (
                           <input
                             className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
@@ -568,7 +642,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                           <div className="w-full py-1 text-xs text-gray-300">{item.image_description || ""}</div>
                         )}
                       </td>
-                      <td className="px-2 py-2 align-middle">
+                      <td className="app-table-col-center">
                         {isEditingDetails ? (
                           <select
                             className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
@@ -584,12 +658,12 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                             <option value="NOT_DETECTED">NOT_DETECTED</option>
                           </select>
                         ) : (
-                          <div className="py-1 text-xs">
+                          <div className="app-table-center-slot py-1 text-xs">
                             <GroundTruthBadge value={item.ground_truth_label || null} />
                           </div>
                         )}
                       </td>
-                      <td className="px-2 py-2 min-w-[260px] align-middle">
+                      <td className="min-w-[260px]">
                         {isEditingDetails ? (
                           <SegmentTagsEditor
                             value={normalizeSegmentTags(item.segment_tags)}
@@ -601,7 +675,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         )}
                       </td>
                       {isEditingDetails && (
-                        <td className="px-2 py-2 text-right align-middle">
+                        <td className="app-table-col-right">
                           <button
                             onClick={() => void deleteItem(item)}
                             className="text-red-400 hover:text-red-300"
@@ -703,7 +777,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 )}
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Segments</label>
+                <label className="text-xs text-gray-400 block mb-1">Attributes</label>
                 {isEditingDetails ? (
                   <SegmentTagsEditor
                     value={normalizeSegmentTags(sortedDatasetItems[selectedPreviewIndex].segment_tags)}
@@ -731,7 +805,7 @@ function GlobalDatasetUploadForm({
   detections: Detection[];
   onUploaded: () => void;
 }) {
-  const [detectionId, setDetectionId] = useState<string>(detections[0]?.detection_id || "");
+  const [detectionId, setDetectionId] = useState<string>("");
   const [name, setName] = useState("");
   const [splitType, setSplitType] = useState<"" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT">("");
   const [mode, setMode] = useState<"json" | "excel" | "files">("files");
@@ -768,12 +842,6 @@ function GlobalDatasetUploadForm({
   const [uploading, setUploading] = useState(false);
   const selectedDetection = detections.find((d) => d.detection_id === detectionId) || null;
   const segmentOptions = Array.isArray(selectedDetection?.segment_taxonomy) ? selectedDetection.segment_taxonomy : [];
-
-  useEffect(() => {
-    if (!detectionId && detections[0]?.detection_id) {
-      setDetectionId(detections[0].detection_id);
-    }
-  }, [detections, detectionId]);
 
   useEffect(() => {
     return () => {
@@ -1019,13 +1087,13 @@ function GlobalDatasetUploadForm({
   };
 
   return (
-    <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
+      <div className="app-section space-y-4">
       <h3 className="text-sm font-medium text-gray-200">Upload New Dataset</h3>
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
           <input
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+            className="app-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
@@ -1033,7 +1101,7 @@ function GlobalDatasetUploadForm({
         <div>
           <label className="text-xs text-gray-400 block mb-1">Detection</label>
           <select
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+            className="app-select"
             value={detectionId}
             onChange={(e) => setDetectionId(e.target.value)}
           >
@@ -1048,7 +1116,7 @@ function GlobalDatasetUploadForm({
         <div>
           <label className="text-xs text-gray-400 block mb-1">Split</label>
           <select
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+            className="app-select"
             value={splitType}
             onChange={(e) => setSplitType(e.target.value as "" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT")}
           >
@@ -1088,7 +1156,7 @@ function GlobalDatasetUploadForm({
       {mode === "json" ? (
         <div className="space-y-2">
           <textarea
-            className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
+            className="app-textarea h-36 text-xs font-mono"
             value={jsonInput}
             onChange={(e) => setJsonInput(e.target.value)}
             placeholder={`[
@@ -1160,21 +1228,28 @@ function GlobalDatasetUploadForm({
             {fileRows.length > 0 ? `${fileRows.length} Files Selected` : "Choose Files"}
           </span>
           {fileRows.length > 0 && (
-            <div className="max-h-72 overflow-y-auto border border-gray-800 rounded">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-gray-900/90">
-                  <tr className="text-gray-500 border-b border-gray-800">
-                    <th className="text-left py-2 px-2">Preview</th>
-                    <th className="text-left py-2 px-2">image_id</th>
-                    <th className="text-left py-2 px-2">Label</th>
-                    <th className="text-left py-2 px-2">Segments</th>
-                    <th className="text-right py-2 px-2">Action</th>
+            <div className="app-table-wrap max-h-72 overflow-y-auto">
+              <table className="app-table app-table-fixed text-xs">
+                <colgroup>
+                  <col style={{ width: "8rem" }} />
+                  <col />
+                  <col style={{ width: "9rem" }} />
+                  <col style={{ width: "14rem" }} />
+                  <col style={{ width: "5.5rem" }} />
+                </colgroup>
+                <thead className="sticky top-0">
+                  <tr>
+                    <th className="app-table-col-label">Preview</th>
+                    <th className="app-table-col-label">image_id</th>
+                    <th className="app-table-col-center">Label</th>
+                    <th className="app-table-col-label">Attributes</th>
+                    <th className="app-table-col-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fileRows.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-900/70">
-                      <td className="py-2 px-2">
+                    <tr key={row.id}>
+                      <td>
                         <img
                           src={row.preview}
                           alt={row.file.name}
@@ -1182,7 +1257,7 @@ function GlobalDatasetUploadForm({
                           onClick={() => setExpandedIndex(fileRows.findIndex((f) => f.id === row.id))}
                         />
                       </td>
-                      <td className="py-2 px-2">
+                      <td>
                         <input
                           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
                           value={row.imageId}
@@ -1193,7 +1268,7 @@ function GlobalDatasetUploadForm({
                           }
                         />
                       </td>
-                      <td className="py-2 px-2">
+                      <td className="app-table-col-center">
                         <select
                           className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
                           value={row.label}
@@ -1210,7 +1285,7 @@ function GlobalDatasetUploadForm({
                           <option value="NOT_DETECTED">NOT_DETECTED</option>
                         </select>
                       </td>
-                      <td className="py-2 px-2 min-w-[220px]">
+                      <td className="min-w-[220px]">
                         <SegmentTagsEditor
                           value={normalizeSegmentTags(row.segment_tags)}
                           options={segmentOptions}
@@ -1219,7 +1294,7 @@ function GlobalDatasetUploadForm({
                           }
                         />
                       </td>
-                      <td className="py-2 px-2 text-right">
+                      <td className="app-table-col-right">
                         <button onClick={() => removeFileRow(row.id)} className="text-red-400 hover:text-red-300">
                           Remove
                         </button>
@@ -1234,24 +1309,30 @@ function GlobalDatasetUploadForm({
       )}
 
       {(mode === "excel" ? excelRows.length > 0 : mode === "json" ? jsonRows.length > 0 : false) && (
-        <div className="max-h-72 overflow-auto border border-gray-800 rounded">
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 bg-gray-900/90">
-              <tr className="text-gray-500 border-b border-gray-800">
-                <th className="text-left py-2 px-2">Image ID</th>
-                <th className="text-left py-2 px-2">Image URL</th>
-                <th className="text-left py-2 px-2">Ground Truth</th>
-                <th className="text-left py-2 px-2">Segments</th>
+        <div className="app-table-wrap max-h-72 overflow-auto">
+          <table className="app-table app-table-fixed text-xs">
+            <colgroup>
+              <col style={{ width: "12rem" }} />
+              <col />
+              <col style={{ width: "9rem" }} />
+              <col style={{ width: "14rem" }} />
+            </colgroup>
+            <thead className="sticky top-0">
+              <tr>
+                <th className="app-table-col-label">Image ID</th>
+                <th className="app-table-col-label">Image URL</th>
+                <th className="app-table-col-center">Ground Truth</th>
+                <th className="app-table-col-label">Attributes</th>
               </tr>
             </thead>
             <tbody>
               {(mode === "excel" ? excelRows : jsonRows).map((row, idx) => (
-                <tr key={`${row.image_id}_${idx}`} className="border-b border-gray-900/70 align-top">
-                  <td className="py-2 px-2 font-mono text-gray-300">{row.image_id}</td>
-                  <td className="py-2 px-2 text-gray-400 max-w-[320px] truncate" title={row.image_url}>
+                <tr key={`${row.image_id}_${idx}`} className="align-top">
+                  <td className="font-mono text-gray-300">{row.image_id}</td>
+                  <td className="text-gray-400 max-w-[320px] truncate" title={row.image_url}>
                     {row.image_url}
                   </td>
-                  <td className="py-2 px-2">
+                  <td className="app-table-col-center">
                     <select
                       className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
                       value={row.ground_truth_label || ""}
@@ -1273,7 +1354,7 @@ function GlobalDatasetUploadForm({
                       <option value="NOT_DETECTED">NOT_DETECTED</option>
                     </select>
                   </td>
-                  <td className="py-2 px-2 min-w-[220px]">
+                  <td className="min-w-[220px]">
                     <SegmentTagsEditor
                       value={normalizeSegmentTags(row.segment_tags)}
                       options={segmentOptions}
@@ -1297,7 +1378,7 @@ function GlobalDatasetUploadForm({
 
       {splitType === "AUTO_SPLIT" && (
         <p className="text-xs text-gray-400">
-          Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split with label stratification and segment balancing.
+          Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split with label stratification and attribute balancing.
           All rows must have `ground_truth_label` set.
         </p>
       )}
@@ -1305,7 +1386,7 @@ function GlobalDatasetUploadForm({
       <button
         onClick={handleUpload}
         disabled={uploading}
-        className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+        className="app-btn app-btn-primary disabled:opacity-50"
       >
         {uploading ? "Uploading..." : "Upload Dataset"}
       </button>
@@ -1398,7 +1479,7 @@ function normalizeManifestRows(
     const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
     const imageUrl = String(row.image_url || row.image_uri || row.imageUri || "").trim();
     const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || "").trim().toUpperCase();
-    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.segments ?? "") as string[] | string;
+    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.attribute_tags ?? row.attributeTags ?? row.attributes ?? row.segments ?? "") as string[] | string;
     if (!imageId) {
       throw new Error(`${sourceLabel} row ${i + 1} has blank image_id.`);
     }
@@ -1444,7 +1525,7 @@ function normalizeSegmentTags(value: unknown): string[] {
 }
 
 function SegmentTagList({ value }: { value: string[] }) {
-  if (!value.length) return <span className="text-gray-500 text-[11px]">No segments</span>;
+  if (!value.length) return <span className="text-gray-500 text-[11px]">No attributes</span>;
   return (
     <div className="flex flex-wrap gap-1">
       {value.map((tag) => (
@@ -1466,39 +1547,28 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div className="space-y-1.5">
-      <select
-        className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
-        value=""
-        onChange={(e) => {
-          const next = e.target.value;
-          if (!next) return;
-          if (!value.includes(next)) onChange([...value, next]);
-        }}
-      >
-        <option value="">Add tag...</option>
-        {options.filter((option) => !value.includes(option)).map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      {value.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {value.map((tag) => (
-            <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
-              {tag}
-              <button
-                type="button"
-                className="text-gray-400 hover:text-red-300"
-                onClick={() => onChange(value.filter((v) => v !== tag))}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
+    <div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const selected = value.includes(option);
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() =>
+                onChange(selected ? value.filter((v) => v !== option) : [...value, option])
+              }
+              className={`px-2.5 py-1 text-[11px] transition ${
+                selected
+                  ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
+                  : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
+              }`}
+            >
+              {option}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1584,9 +1654,6 @@ function splitRowsForAutoSplit<T extends { ground_truth_label: "DETECTED" | "NOT
 }
 
 function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {
-  if (!value) return <span className="text-gray-400">UNSET</span>;
-  if (value === "DETECTED") {
-    return <span className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300">DETECTED</span>;
-  }
-  return <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300">NOT_DETECTED</span>;
+  if (!value) return <span className="app-badge app-badge-muted">Unset</span>;
+  return <DecisionBadge decision={value} />;
 }

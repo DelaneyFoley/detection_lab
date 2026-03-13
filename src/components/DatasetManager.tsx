@@ -3,10 +3,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Detection, Dataset, DatasetItem } from "@/types";
-import { splitTypeLabel } from "@/lib/splitType";
+import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 
 export function DatasetManager({ detection }: { detection: Detection }) {
   const { refreshCounter, triggerRefresh, apiKey, selectedModel } = useAppStore();
+  const { notify, confirm } = useAppFeedback();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [datasetItems, setDatasetItems] = useState<DatasetItem[]>([]);
@@ -45,7 +47,16 @@ export function DatasetManager({ detection }: { detection: Detection }) {
   }, [loadDatasetItems]);
 
   const deleteDataset = async (datasetId: string) => {
-    if (!confirm("Delete this dataset and all its items? This cannot be undone.")) return;
+    if (
+      !(await confirm({
+        title: "Delete Dataset",
+        message: "Delete this dataset and all its items? This cannot be undone.",
+        confirmLabel: "Delete Dataset",
+        tone: "danger",
+      }))
+    ) {
+      return;
+    }
     const res = await fetch("/api/datasets", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -53,7 +64,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
     });
     if (!res.ok) {
       const text = await res.text();
-      alert(`Failed to delete dataset: ${text}`);
+      notify({ message: `Failed to delete dataset: ${text}`, tone: "error" });
       return;
     }
     if (selectedDatasetId === datasetId) {
@@ -145,10 +156,10 @@ export function DatasetManager({ detection }: { detection: Detection }) {
       await loadDatasetItems();
       await loadDatasets();
       triggerRefresh();
-      alert(`Generated ${payload.updated || 0} descriptions.`);
+      notify({ message: `Generated ${payload.updated || 0} descriptions.`, tone: "success" });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Failed to generate descriptions";
-      alert(msg);
+      notify({ message: msg, tone: "error" });
     } finally {
       setDescribingImages(false);
     }
@@ -159,17 +170,17 @@ export function DatasetManager({ detection }: { detection: Detection }) {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-xl font-semibold">Dataset Manager</h2>
-          <p className="text-sm text-gray-500 mt-1">
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1">
+          <h2 className="app-page-title">Dataset Manager</h2>
+          <p className="app-page-copy mt-1">
             Upload, inspect, and manage datasets for{" "}
-            <span className="text-gray-300">{detection.display_name}</span>
+            <span className="text-[var(--app-text)]">{detection.display_name}</span>
           </p>
         </div>
         <button
           onClick={() => setShowUpload(!showUpload)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium"
+          className="app-btn app-btn-primary app-btn-lg"
         >
           {showUpload ? "Cancel" : "Upload New Dataset"}
         </button>
@@ -193,15 +204,15 @@ export function DatasetManager({ detection }: { detection: Detection }) {
           <div
             key={d.dataset_id}
             onClick={() => setSelectedDatasetId(d.dataset_id)}
-            className={`border rounded-lg p-4 cursor-pointer transition-all ${
+            className={`cursor-pointer rounded-2xl border p-4 transition-all ${
               selectedDatasetId === d.dataset_id
-                ? "border-blue-500 bg-blue-900/10 ring-1 ring-blue-500/30"
-                : "border-gray-700 bg-gray-800/40 hover:border-gray-600 hover:bg-gray-800/60"
+                ? "border-sky-400/40 bg-sky-500/10 ring-1 ring-sky-400/20"
+                : "border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/[0.07]"
             }`}
           >
             <div className="flex justify-between items-start mb-2">
               <h3 className="font-medium text-sm text-gray-200 truncate flex-1">{d.name}</h3>
-              <span className={`text-xs px-2 py-0.5 rounded ml-2 shrink-0 ${splitTypeStyle(d.split_type)}`}>
+              <span className={`ml-2 shrink-0 ${splitTypeBadgeClass(d.split_type)}`}>
                 {splitTypeLabel(d.split_type)}
               </span>
             </div>
@@ -226,7 +237,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                   e.stopPropagation();
                   deleteDataset(d.dataset_id);
                 }}
-                className="text-xs text-gray-600 hover:text-red-400 transition-colors"
+                className="app-btn app-btn-danger px-2.5 py-1 text-xs"
               >
                 Delete
               </button>
@@ -249,14 +260,14 @@ export function DatasetManager({ detection }: { detection: Detection }) {
 
       {/* Dataset Detail View */}
       {selectedDataset && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden">
+        <div className="app-card-strong overflow-hidden">
           {/* Detail Header */}
-          <div className="px-5 py-4 border-b border-gray-700 bg-gray-800/30">
+          <div className="border-b border-white/10 bg-black/10 px-5 py-4">
             <div className="flex justify-between items-start">
               <div>
                 <h3 className="font-medium text-gray-200">Dataset Details</h3>
                 <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
-                  <span className={`px-2 py-0.5 rounded ${splitTypeStyle(selectedDataset.split_type)}`}>
+                  <span className={splitTypeBadgeClass(selectedDataset.split_type)}>
                     {splitTypeLabel(selectedDataset.split_type)}
                   </span>
                   <span>{selectedDataset.size} images</span>
@@ -287,7 +298,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
               <div className="col-span-2">
                 <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
                 <input
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-sm"
+                  className="app-input px-2.5 py-1.5 text-sm"
                   value={editingDatasetName}
                   onChange={(e) => setEditingDatasetName(e.target.value)}
                 />
@@ -295,7 +306,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Split Type</label>
                 <select
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-sm"
+                  className="app-select px-2.5 py-1.5 text-sm"
                   value={editingDatasetSplit}
                   onChange={(e) => setEditingDatasetSplit(e.target.value)}
                 >
@@ -311,14 +322,14 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                 <button
                   onClick={saveDatasetMeta}
                   disabled={savingDatasetMeta}
-                  className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded"
+                  className="app-btn app-btn-success app-btn-md disabled:opacity-50"
                 >
                   {savingDatasetMeta ? "Saving..." : "Save Dataset Meta"}
                 </button>
                 <button
                   onClick={populateDescriptionsWithAi}
                   disabled={describingImages || datasetItems.length === 0}
-                  className="text-xs px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 rounded"
+                  className="app-btn app-btn-subtle app-btn-md disabled:opacity-50"
                 >
                   {describingImages ? "Generating descriptions..." : "Populate Descriptions with AI"}
                 </button>
@@ -326,12 +337,12 @@ export function DatasetManager({ detection }: { detection: Detection }) {
             </div>
 
             {selectedDataset.split_type === "HELD_OUT_EVAL" && (
-              <div className="mt-3 bg-purple-900/15 border border-purple-800/40 rounded px-3 py-2 text-xs text-purple-400">
+              <div className="mt-3 rounded-2xl border border-purple-400/20 bg-purple-500/10 px-3 py-2 text-xs text-purple-300">
                 This is a protected held-out dataset. Items cannot be edited.
               </div>
             )}
             {selectedDataset.split_type === "GOLDEN" && (
-              <div className="mt-3 bg-yellow-900/15 border border-yellow-800/40 rounded px-3 py-2 text-xs text-yellow-400">
+              <div className="mt-3 rounded-2xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                 Test set — used for regression gating. Changes will affect regression results.
               </div>
             )}
@@ -342,26 +353,32 @@ export function DatasetManager({ detection }: { detection: Detection }) {
             {loadingItems ? (
               <div className="text-center py-8 text-gray-500 text-sm">Loading items...</div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-800 z-10">
-                  <tr className="text-xs text-gray-500 border-b border-gray-700">
-                    <th className="text-left py-2.5 px-4 w-12">#</th>
-                    <th className="text-left py-2.5 px-4">Preview</th>
-                    <th className="text-left py-2.5 px-4">Image ID</th>
-                    <th className="text-left py-2.5 px-4">Image URI</th>
-                    <th className="text-left py-2.5 px-4">Image Description</th>
-                    <th className="text-center py-2.5 px-4">Ground Truth</th>
-                    <th className="text-right py-2.5 px-4">Save</th>
+              <table className="app-table app-table-fixed text-sm">
+                <colgroup>
+                  <col style={{ width: "3rem" }} />
+                  <col style={{ width: "7rem" }} />
+                  <col style={{ width: "12rem" }} />
+                  <col style={{ width: "16rem" }} />
+                  <col />
+                  <col style={{ width: "10rem" }} />
+                  <col style={{ width: "6rem" }} />
+                </colgroup>
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    <th className="app-table-col-label">#</th>
+                    <th className="app-table-col-label">Preview</th>
+                    <th className="app-table-col-label">Image ID</th>
+                    <th className="app-table-col-label">Image URI</th>
+                    <th className="app-table-col-label">Image Description</th>
+                    <th className="app-table-col-center">Ground Truth</th>
+                    <th className="app-table-col-right">Save</th>
                   </tr>
                 </thead>
                 <tbody>
                   {datasetItems.map((item, i) => (
-                    <tr
-                      key={item.item_id}
-                      className="border-b border-gray-800/50 hover:bg-gray-800/30"
-                    >
-                      <td className="py-2 px-4 text-xs text-gray-600">{i + 1}</td>
-                      <td className="py-2 px-4">
+                    <tr key={item.item_id}>
+                      <td className="text-xs text-gray-600">{i + 1}</td>
+                      <td>
                         <img
                           src={item.image_uri}
                           alt={item.image_id}
@@ -371,7 +388,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                           }}
                         />
                       </td>
-                      <td className="py-2 px-4">
+                      <td>
                         <input
                           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-300"
                           value={item.image_id}
@@ -385,14 +402,14 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                           onChange={(e) => updateItemField(item.item_id, { image_uri: e.target.value })}
                         />
                       </td>
-                      <td className="py-2 px-4">
+                      <td>
                         <textarea
                           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300 min-h-12"
                           value={item.image_description || ""}
                           onChange={(e) => updateItemField(item.item_id, { image_description: e.target.value })}
                         />
                       </td>
-                      <td className="text-center py-2 px-4">
+                      <td className="app-table-col-center">
                         <select
                           className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
                           value={item.ground_truth_label || ""}
@@ -407,7 +424,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                           <option value="NOT_DETECTED">NOT_DETECTED</option>
                         </select>
                       </td>
-                      <td className="text-right py-2 px-4">
+                      <td className="app-table-col-right">
                         <button
                           onClick={() => saveItem(item)}
                           disabled={savingItemId === item.item_id}
@@ -614,14 +631,14 @@ function DatasetUploadForm({
   };
 
   return (
-    <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5 space-y-4">
+    <div className="app-section space-y-4">
       <h3 className="text-sm font-medium text-gray-300">Upload New Dataset</h3>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
           <input
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+            className="app-input"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Smoke Test Set v2"
@@ -630,7 +647,7 @@ function DatasetUploadForm({
         <div>
           <label className="text-xs text-gray-400 block mb-1">Split Type</label>
           <select
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+            className="app-select"
             value={splitType}
             onChange={(e) => setSplitType(e.target.value)}
           >
@@ -646,21 +663,21 @@ function DatasetUploadForm({
         <button
           type="button"
           onClick={() => setMode("files")}
-          className={`px-3 py-1.5 text-xs rounded ${mode === "files" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+          className={`app-toggle ${mode === "files" ? "app-toggle-active" : ""}`}
         >
           Upload Image Files
         </button>
         <button
           type="button"
           onClick={() => setMode("csv")}
-          className={`px-3 py-1.5 text-xs rounded ${mode === "csv" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+          className={`app-toggle ${mode === "csv" ? "app-toggle-active" : ""}`}
         >
           CSV Manifest
         </button>
         <button
           type="button"
           onClick={() => setMode("json")}
-          className={`px-3 py-1.5 text-xs rounded ${mode === "json" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+          className={`app-toggle ${mode === "json" ? "app-toggle-active" : ""}`}
         >
           JSON Manifest
         </button>
@@ -672,7 +689,7 @@ function DatasetUploadForm({
             Dataset Manifest (JSON array)
           </label>
           <textarea
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-xs font-mono h-40 focus:outline-none focus:border-blue-500"
+            className="app-textarea h-40 text-xs font-mono"
             value={jsonInput}
             onChange={(e) => setJsonInput(e.target.value)}
             placeholder={`[
@@ -702,7 +719,7 @@ function DatasetUploadForm({
           />
           <label
             htmlFor="dataset-manager-csv-input"
-            className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+            className="app-btn app-btn-secondary cursor-pointer"
           >
             Choose Files
           </label>
@@ -710,7 +727,7 @@ function DatasetUploadForm({
             {csvFileName ? "1 Files Selected" : "Choose Files"}
           </span>
           <textarea
-            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-xs font-mono h-40 focus:outline-none focus:border-blue-500"
+            className="app-textarea h-40 text-xs font-mono"
             value={csvInput}
             onChange={(e) => setCsvInput(e.target.value)}
             placeholder={`image_id,image_url,ground_truth_label
@@ -732,10 +749,10 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
             />
             <label
               htmlFor="dataset-manager-files-input"
-              className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
-            >
-              Choose Files
-            </label>
+            className="app-btn app-btn-secondary cursor-pointer"
+          >
+            Choose Files
+          </label>
             <span className="ml-3 text-xs text-gray-500">
               {fileRows.length > 0 ? `${fileRows.length} Files Selected` : "Choose Files"}
             </span>
@@ -745,21 +762,28 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
           </div>
 
           {fileRows.length > 0 && (
-            <div className="max-h-72 overflow-y-auto border border-gray-700 rounded">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-gray-800">
-                  <tr className="text-gray-500 border-b border-gray-700">
-                    <th className="text-left py-2 px-2">Preview</th>
-                    <th className="text-left py-2 px-2">File</th>
-                    <th className="text-left py-2 px-2">image_id</th>
-                    <th className="text-left py-2 px-2">Label</th>
-                    <th className="text-right py-2 px-2">Action</th>
+            <div className="app-table-wrap max-h-72 overflow-y-auto">
+              <table className="app-table app-table-fixed text-xs">
+                <colgroup>
+                  <col style={{ width: "8rem" }} />
+                  <col style={{ width: "14rem" }} />
+                  <col />
+                  <col style={{ width: "9rem" }} />
+                  <col style={{ width: "6rem" }} />
+                </colgroup>
+                <thead className="sticky top-0">
+                  <tr>
+                    <th className="app-table-col-label">Preview</th>
+                    <th className="app-table-col-label">File</th>
+                    <th className="app-table-col-label">image_id</th>
+                    <th className="app-table-col-center">Label</th>
+                    <th className="app-table-col-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {fileRows.map((row) => (
-                    <tr key={row.id} className="border-b border-gray-800/60">
-                      <td className="py-2 px-2">
+                    <tr key={row.id}>
+                      <td>
                         <img
                           src={row.preview}
                           alt={row.file.name}
@@ -767,8 +791,8 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
                           onClick={() => setExpandedIndex(fileRows.findIndex((f) => f.id === row.id))}
                         />
                       </td>
-                      <td className="py-2 px-2 text-gray-300">{row.file.name}</td>
-                      <td className="py-2 px-2">
+                      <td className="text-gray-300">{row.file.name}</td>
+                      <td>
                         <input
                           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
                           value={row.imageId}
@@ -779,7 +803,7 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
                           }
                         />
                       </td>
-                      <td className="py-2 px-2">
+                      <td className="app-table-col-center">
                         <select
                           className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
                           value={row.label}
@@ -797,7 +821,7 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
                           <option value="NOT_DETECTED">NOT_DETECTED</option>
                         </select>
                       </td>
-                      <td className="py-2 px-2 text-right">
+                      <td className="app-table-col-right">
                         <button onClick={() => removeFileRow(row.id)} className="text-red-400 hover:text-red-300">
                           Remove
                         </button>
@@ -820,7 +844,7 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
       <button
         onClick={handleUpload}
         disabled={uploading}
-        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm font-medium"
+        className="app-btn app-btn-primary disabled:opacity-50"
       >
         {uploading ? "Uploading..." : "Upload Dataset"}
       </button>
@@ -846,7 +870,7 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
               <button
                 onClick={() => setExpandedIndex((i) => (i == null ? null : Math.max(0, i - 1)))}
                 disabled={expandedIndex <= 0}
-                className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 rounded"
+                className="app-btn app-btn-secondary disabled:opacity-40"
               >
                 Previous
               </button>
@@ -857,7 +881,7 @@ img_002,gs://my-bucket/folder/img2.jpg,NOT_DETECTED`}
                   )
                 }
                 disabled={expandedIndex >= fileRows.length - 1}
-                className="px-3 py-1.5 text-xs bg-gray-800 hover:bg-gray-700 disabled:opacity-40 rounded"
+                className="app-btn app-btn-secondary disabled:opacity-40"
               >
                 Next
               </button>
@@ -953,17 +977,4 @@ function parseCsvLine(line: string): string[] {
   }
   out.push(cur.trim());
   return out;
-}
-
-function splitTypeStyle(t: string) {
-  switch (t) {
-    case "GOLDEN":
-      return "bg-yellow-900/30 text-yellow-400 border border-yellow-800/50";
-    case "ITERATION":
-      return "bg-blue-900/30 text-blue-400 border border-blue-800/50";
-    case "HELD_OUT_EVAL":
-      return "bg-purple-900/30 text-purple-400 border border-purple-800/50";
-    default:
-      return "bg-gray-800 text-gray-400 border border-gray-700";
-  }
 }

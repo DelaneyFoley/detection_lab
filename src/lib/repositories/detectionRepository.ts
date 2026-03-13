@@ -34,7 +34,9 @@ export class DetectionRepository {
     detectionCode: string;
     displayName: string;
     description: string;
+    detectionCategory: string;
     labelPolicy: string;
+    userPromptAddendum: string;
     decisionRubricJson: string;
     segmentTaxonomyJson: string;
     metricThresholdsJson: string;
@@ -42,13 +44,15 @@ export class DetectionRepository {
     updatedAt: string;
   }) {
     dataStore.run(
-      `INSERT INTO detections (detection_id, detection_code, display_name, description, label_policy, decision_rubric, segment_taxonomy, metric_thresholds, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO detections (detection_id, detection_code, display_name, description, detection_category, label_policy, user_prompt_addendum, decision_rubric, segment_taxonomy, metric_thresholds, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.detectionId,
       input.detectionCode,
       input.displayName,
       input.description,
+      input.detectionCategory,
       input.labelPolicy,
+      input.userPromptAddendum,
       input.decisionRubricJson,
       input.segmentTaxonomyJson,
       input.metricThresholdsJson,
@@ -61,7 +65,9 @@ export class DetectionRepository {
     detectionId: string;
     displayName: string;
     description: string;
+    detectionCategory: string;
     labelPolicy: string;
+    userPromptAddendum: string;
     decisionRubricJson: string;
     segmentTaxonomyJson: string;
     metricThresholdsJson: string;
@@ -72,7 +78,9 @@ export class DetectionRepository {
       `UPDATE detections SET
          display_name = ?,
          description = ?,
+         detection_category = ?,
          label_policy = ?,
+         user_prompt_addendum = ?,
          decision_rubric = ?,
          segment_taxonomy = ?,
          metric_thresholds = ?,
@@ -81,7 +89,9 @@ export class DetectionRepository {
        WHERE detection_id = ?`,
       input.displayName,
       input.description,
+      input.detectionCategory,
       input.labelPolicy,
+      input.userPromptAddendum,
       input.decisionRubricJson,
       input.segmentTaxonomyJson,
       input.metricThresholdsJson,

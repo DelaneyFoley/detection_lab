@@ -554,6 +554,9 @@ export async function PUT(req: NextRequest) {
   datasetRepository.updateDatasetMeta(
     body.dataset_id,
     body.name ?? dataset.name,
+    Object.prototype.hasOwnProperty.call(body, "detection_id")
+      ? (String(body.detection_id || "").trim() || null)
+      : (dataset.detection_id ?? null),
     body.split_type ?? dataset.split_type,
     now
   );

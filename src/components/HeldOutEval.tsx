@@ -3,10 +3,12 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
+import { formatMetricValue } from "@/lib/ui/metrics";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import type { Detection, PromptVersion, Dataset, Run } from "@/types";
-import { splitTypeLabel } from "@/lib/splitType";
+import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
 import {
   formatModelOutput,
   getResolvedGroundTruth,
@@ -16,6 +18,7 @@ import {
 
 export function HeldOutEval({ detection }: { detection: Detection }) {
   const { apiKey, selectedModel, refreshCounter } = useAppStore();
+  const { notify } = useAppFeedback();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
@@ -51,14 +54,14 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
 
   const runEval = async () => {
     if (!selectedPromptId || !selectedDatasetId) {
-      alert("Select a prompt version and dataset");
+      notify({ message: "Select a prompt version and dataset.", tone: "warning" });
       return;
     }
 
     // Prevent iteration on held-out
     const dataset = datasets.find((d) => d.dataset_id === selectedDatasetId);
     if (dataset && dataset.split_type !== "HELD_OUT_EVAL") {
-      alert("Only EVALUATE datasets can be used here");
+      notify({ message: "Only EVALUATE datasets can be used here.", tone: "warning" });
       return;
     }
 
@@ -105,7 +108,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
       }
     } catch (err) {
       console.error(err);
-      alert("Evaluation failed");
+      notify({ message: "Evaluation failed.", tone: "error" });
       setProgress("");
     }
     setRunning(false);
@@ -223,7 +226,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     } catch (err) {
       console.error(err);
       setProgress("");
-      alert("Failed to load held-out run details.");
+      notify({ message: "Failed to load held-out run details.", tone: "error" });
     } finally {
       setLoadingRunId(null);
     }
@@ -241,9 +244,14 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
     });
   }, [predictions]);
 
+  const previewPredictions = useMemo(
+    () => predictions.filter((p: any) => !!p?.image_uri),
+    [predictions]
+  );
+
   const previewImageIds: string[] = useMemo(
-    () => disagreementCases.filter((p: any) => !!p?.image_uri).map((p: any) => String(p.image_id || "")),
-    [disagreementCases]
+    () => previewPredictions.map((p: any) => String(p.image_id || "")),
+    [previewPredictions]
   );
 
   const previewIndex = useMemo(
@@ -254,8 +262,8 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
   const activePreviewPrediction = useMemo(() => {
     if (previewIndex < 0) return null;
     const imageId = previewImageIds[previewIndex];
-    return disagreementCases.find((p: any) => String(p.image_id || "") === imageId) || null;
-  }, [previewIndex, previewImageIds, disagreementCases]);
+    return previewPredictions.find((p: any) => String(p.image_id || "") === imageId) || null;
+  }, [previewIndex, previewImageIds, previewPredictions]);
 
   useEffect(() => {
     if (!previewImageId) return;
@@ -289,26 +297,37 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <h2 className="text-xl font-semibold">Held-Out Evaluation</h2>
-
-      <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-lg p-4 text-sm text-yellow-400">
-        This tab is for final evaluation only. EVALUATE datasets cannot be used for prompt iteration.
-        Results are stored permanently as run artifacts.
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Held-Out Evaluation</h2>
+          <p className="app-page-copy">
+            Run final validation against held-out datasets, confirm threshold performance,
+            and inspect disagreements before approving a prompt version.
+          </p>
+        </div>
       </div>
 
       {/* Config */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-        <div className="grid grid-cols-2 gap-6">
+      <div className="app-section space-y-5">
+        <div className="space-y-1">
+          <div className="app-section-title">Evaluation Inputs</div>
+          <p className="app-section-copy">
+            Choose the prompt version and held-out dataset to validate. This tab is
+            for final benchmarking, not iteration.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <div>
-            <h3 className="text-xs text-gray-400 font-medium mb-2">Prompt Version</h3>
-            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+            <h3 className="app-label mb-2">Prompt Version</h3>
+            <div className="max-h-48 overflow-y-auto border-y border-[var(--app-border)]">
               {prompts.map((p) => (
                 <label
                   key={p.prompt_version_id}
-                  className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
+                  className={`flex items-center gap-2 border-b border-[var(--app-border)] px-2 py-3 text-sm transition last:border-b-0 ${
                     selectedPromptId === p.prompt_version_id
-                      ? "border-blue-600 bg-blue-900/20"
-                      : "border-gray-700 bg-gray-900/30 hover:border-gray-600"
+                      ? "bg-[rgba(18,42,68,0.62)]"
+                      : "hover:bg-[rgba(255,255,255,0.02)]"
                   }`}
                 >
                   <input
@@ -318,14 +337,18 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                     onChange={() => setSelectedPromptId(p.prompt_version_id)}
                   />
                   <span>{p.version_label}</span>
-                  <span className="text-xs text-gray-500">{p.model}</span>
-                  {p.prompt_version_id === detection.approved_prompt_version && (
-                    <span className="text-xs text-green-400 ml-auto">APPROVED</span>
-                  )}
-                  {p.golden_set_regression_result && (
-                    <span className={`text-xs ml-1 ${p.golden_set_regression_result.passed ? "text-green-400" : "text-red-400"}`}>
-                      Reg: {p.golden_set_regression_result.passed ? "PASS" : "FAIL"}
-                    </span>
+                  <span className="text-xs text-[var(--app-text-subtle)]">{p.model}</span>
+                  {(p.prompt_version_id === detection.approved_prompt_version || p.golden_set_regression_result) && (
+                    <div className="ml-auto flex items-center gap-3 text-xs">
+                      {p.prompt_version_id === detection.approved_prompt_version && (
+                        <span className="text-[var(--app-success)]">APPROVED</span>
+                      )}
+                      {p.golden_set_regression_result && (
+                        <span className={p.golden_set_regression_result.passed ? "text-[var(--app-success)]" : "text-[var(--app-danger)]"}>
+                          Reg: {p.golden_set_regression_result.passed ? "PASS" : "FAIL"}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </label>
               ))}
@@ -333,15 +356,15 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           </div>
 
           <div>
-            <h3 className="text-xs text-gray-400 font-medium mb-2">EVALUATE Dataset</h3>
-            <div className="space-y-1.5">
+            <h3 className="app-label mb-2">EVALUATE Dataset</h3>
+            <div className="border-y border-[var(--app-border)]">
               {datasets.map((d) => (
                 <label
                   key={d.dataset_id}
-                  className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
+                  className={`flex items-center gap-2 border-b border-[var(--app-border)] px-2 py-3 text-sm transition last:border-b-0 ${
                     selectedDatasetId === d.dataset_id
-                      ? "border-purple-600 bg-purple-900/20"
-                      : "border-gray-700 bg-gray-900/30 hover:border-gray-600"
+                      ? "bg-[rgba(18,42,68,0.62)]"
+                      : "hover:bg-[rgba(255,255,255,0.02)]"
                   }`}
                 >
                   <input
@@ -351,14 +374,14 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                     onChange={() => setSelectedDatasetId(d.dataset_id)}
                   />
                   <span>{d.name}</span>
-                  <span className="text-xs text-gray-500">{d.size} images</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-400 ml-auto">
-                    HELD_OUT
+                  <span className="text-xs text-[var(--app-text-subtle)]">{d.size} images</span>
+                  <span className={`ml-auto ${splitTypeBadgeClass(d.split_type)}`}>
+                    {splitTypeLabel(d.split_type)}
                   </span>
                 </label>
               ))}
               {datasets.length === 0 && (
-                <p className="text-xs text-gray-500 py-3">
+                <p className="px-2 py-4 text-sm text-[var(--app-text-muted)]">
                   No EVALUATE datasets. Upload one in the Detection Setup tab.
                 </p>
               )}
@@ -366,11 +389,11 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center gap-4">
+        <div className="flex flex-col gap-3 pt-1 lg:flex-row lg:items-center">
           <button
             onClick={runEval}
             disabled={running || !selectedPromptId || !selectedDatasetId}
-            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium"
+            className="app-btn app-btn-success app-btn-md disabled:cursor-not-allowed disabled:opacity-50"
           >
             {running ? "Running..." : "Run Held-Out Evaluation"}
           </button>
@@ -378,12 +401,12 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
             <button
               onClick={cancelRun}
               disabled={cancelingRun}
-              className="px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium"
+              className="app-btn app-btn-danger disabled:cursor-not-allowed disabled:opacity-50"
             >
               {cancelingRun ? "Cancelling..." : "Cancel Run"}
             </button>
           )}
-          {progress && <span className="text-sm text-gray-400">{progress}</span>}
+          {progress && <span className="text-sm text-[var(--app-text-muted)]">{progress}</span>}
         </div>
       </div>
 
@@ -393,170 +416,189 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
           <MetricsDisplay
             metrics={latestResult.metrics_summary}
             label="Held-Out Evaluation Results"
+            showConfusionMatrix={false}
           />
 
-          {/* Threshold check */}
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-            <h3 className="text-sm font-medium mb-3">Threshold Check</h3>
-            <div className="space-y-2 text-sm">
-              {detection.metric_thresholds.min_precision != null && (
-                <ThresholdRow
-                  label="Precision"
-                  value={latestResult.metrics_summary.precision}
-                  threshold={detection.metric_thresholds.min_precision}
-                />
-              )}
-              {detection.metric_thresholds.min_recall != null && (
-                <ThresholdRow
-                  label="Recall"
-                  value={latestResult.metrics_summary.recall}
-                  threshold={detection.metric_thresholds.min_recall}
-                />
-              )}
-              {detection.metric_thresholds.min_f1 != null && (
-                <ThresholdRow
-                  label="F1"
-                  value={latestResult.metrics_summary.f1}
-                  threshold={detection.metric_thresholds.min_f1}
-                />
-              )}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-3 items-center">
-            <div className="text-xs text-gray-400 px-2">
-              Approval is managed manually in the Detection Setup tab after thresholds are met.
-            </div>
-            <button onClick={exportCSV} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">
-              Export CSV
-            </button>
-            <button onClick={exportJSON} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">
-              Export JSON
-            </button>
-          </div>
-
-          {/* Predictions table */}
-          {disagreementCases.length > 0 && (
-            <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-              <h3 className="text-sm font-medium mb-3">
-                Disagreement Cases ({disagreementCases.length})
-              </h3>
-              <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-gray-800">
-                    <tr className="text-gray-500 border-b border-gray-700">
-                      <th className="text-left py-2 px-3">Preview</th>
-                      <th className="text-left py-2 px-3">Image ID</th>
-                      <th className="text-center py-2 px-3">Ground Truth</th>
-                      <th className="text-center py-2 px-3">Prediction</th>
-                      <th className="text-right py-2 px-3">Confidence</th>
-                      <th className="text-center py-2 px-3">Parse</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {disagreementCases.map((p: any) => (
-                      <tr key={p.prediction_id} className="border-b border-gray-800">
-                        <td className="py-2 px-3">
-                          <img
-                            src={p.image_uri}
-                            alt={p.image_id}
-                            className="w-14 h-10 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
-                            onClick={() => setPreviewImageId(String(p.image_id || ""))}
-                          />
-                        </td>
-                        <td className="py-2 px-3 font-mono max-w-[260px] truncate" title={String(p.image_id || "")}>
-                          {p.image_id}
-                        </td>
-                        <td className="text-center py-2 px-3">
-                          <DecisionBadge decision={getResolvedGroundTruth(p)} />
-                        </td>
-                        <td className="text-center py-2 px-3">
-                          <DecisionBadge decision={p.parse_ok ? p.predicted_decision : "PARSE_FAIL"} />
-                        </td>
-                        <td className="text-right py-2 px-3">{p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}</td>
-                        <td className="text-center py-2 px-3">
-                          {p.parse_ok ? <span className="text-green-400">OK</span> : <span className="text-red-400">FAIL</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          <div className="app-card-strong p-5">
+            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex-1">
+                <h3 className="mb-3 text-sm font-medium">Threshold Check</h3>
+                <p className="mb-4 text-xs leading-5 text-[var(--app-text-muted)]">
+                  Approval is managed manually in the Detection Setup tab after thresholds are met.
+                </p>
+                <div className="space-y-2 text-sm">
+                  {detection.metric_thresholds.min_precision != null && (
+                    <ThresholdRow
+                      label="Precision"
+                      value={latestResult.metrics_summary.precision}
+                      threshold={detection.metric_thresholds.min_precision}
+                    />
+                  )}
+                  {detection.metric_thresholds.min_recall != null && (
+                    <ThresholdRow
+                      label="Recall"
+                      value={latestResult.metrics_summary.recall}
+                      threshold={detection.metric_thresholds.min_recall}
+                    />
+                  )}
+                  {detection.metric_thresholds.min_f1 != null && (
+                    <ThresholdRow
+                      label="F1"
+                      value={latestResult.metrics_summary.f1}
+                      threshold={detection.metric_thresholds.min_f1}
+                    />
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-3">
+                <button onClick={exportCSV} className="app-btn app-btn-subtle app-btn-md">
+                  Export CSV
+                </button>
+                <button onClick={exportJSON} className="app-btn app-btn-subtle app-btn-md">
+                  Export JSON
+                </button>
               </div>
             </div>
-          )}
 
-          <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-            <h3 className="text-sm font-medium mb-3">Image-Level Results ({latestResult.predictions?.length || 0})</h3>
-            <div className="overflow-x-auto max-h-96 overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-gray-800">
-                  <tr className="text-gray-500 border-b border-gray-700">
-                    <th className="text-left py-2 px-3">Preview</th>
-                    <th className="text-left py-2 px-3">Image ID</th>
-                    <th className="text-center py-2 px-3">Ground Truth</th>
-                    <th className="text-center py-2 px-3">Prediction</th>
-                    <th className="text-center py-2 px-3">Correct</th>
-                    <th className="text-right py-2 px-3">Confidence</th>
-                    <th className="text-left py-2 px-3">Evidence</th>
-                    <th className="text-center py-2 px-3">Parse</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(latestResult.predictions || []).map((p: any) => {
-                    const correct = p.parse_ok && p.predicted_decision === p.ground_truth_label;
-                    return (
-                      <tr key={p.prediction_id} className={`border-b border-gray-800/50 ${!correct ? "bg-red-900/5" : ""}`}>
-                        <td className="py-1.5 px-3">
-                          {p.image_uri ? (
+            {disagreementCases.length > 0 && (
+              <div className="mt-6 border-t border-white/8 pt-6">
+                <h3 className="mb-3 text-sm font-medium">
+                  Disagreement Cases ({disagreementCases.length})
+                </h3>
+                <div className="app-table-wrap max-h-96 overflow-x-auto overflow-y-auto">
+                  <table className="app-table app-table-fixed text-xs">
+                    <colgroup>
+                      <col style={{ width: "9rem" }} />
+                      <col style={{ width: "15rem" }} />
+                      <col style={{ width: "11rem" }} />
+                      <col style={{ width: "11rem" }} />
+                      <col style={{ width: "7rem" }} />
+                      <col style={{ width: "5.5rem" }} />
+                    </colgroup>
+                    <thead className="sticky top-0">
+                      <tr>
+                        <th className="app-table-col-label">Preview</th>
+                        <th className="app-table-col-label">Image ID</th>
+                        <th className="app-table-col-label">Ground Truth</th>
+                        <th className="app-table-col-label">Prediction</th>
+                        <th className="app-table-col-center">Confidence</th>
+                        <th className="app-table-col-center">Parse</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {disagreementCases.map((p: any) => (
+                        <tr key={p.prediction_id}>
+                          <td>
                             <img
                               src={p.image_uri}
                               alt={p.image_id}
-                              className="w-10 h-8 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                              className="w-14 h-10 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
                               onClick={() => setPreviewImageId(String(p.image_id || ""))}
                             />
-                          ) : (
-                            <span className="text-gray-600">—</span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-3">
-                          <span className="font-mono truncate max-w-[220px]" title={String(p.image_id || "")}>
+                          </td>
+                          <td className="font-mono max-w-[260px] truncate" title={String(p.image_id || "")}>
                             {p.image_id}
-                          </span>
-                        </td>
-                        <td className="text-center py-1.5 px-3">
-                          {p.ground_truth_label ? (
-                            <span className={`px-1.5 py-0.5 rounded ${
-                              p.ground_truth_label === "DETECTED" ? "bg-purple-900/30 text-purple-300" : "bg-emerald-900/30 text-emerald-300"
-                            }`}>
-                              {p.ground_truth_label}
+                          </td>
+                          <td className="app-table-col-label">
+                            <DecisionBadge decision={getResolvedGroundTruth(p)} />
+                          </td>
+                          <td className="app-table-col-label">
+                            <DecisionBadge decision={p.parse_ok ? p.predicted_decision : "PARSE_FAIL"} />
+                          </td>
+                          <td className="app-table-col-center">
+                            <div className="app-table-center-slot">
+                              <span>{p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}</span>
+                            </div>
+                          </td>
+                          <td className="app-table-col-center">
+                            <div className="app-table-center-slot">
+                              {p.parse_ok ? <span className="app-status-ok">OK</span> : <span className="app-status-fail">FAIL</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 border-t border-white/8 pt-6">
+              <h3 className="mb-3 text-sm font-medium">Full Image-Level Results ({latestResult.predictions?.length || 0})</h3>
+              <div className="app-table-wrap max-h-96 overflow-x-auto overflow-y-auto">
+                <table className="app-table app-table-fixed text-xs">
+                  <colgroup>
+                    <col style={{ width: "8rem" }} />
+                    <col style={{ width: "14rem" }} />
+                    <col style={{ width: "10rem" }} />
+                    <col style={{ width: "10rem" }} />
+                    <col style={{ width: "5.5rem" }} />
+                    <col style={{ width: "7rem" }} />
+                    <col />
+                    <col style={{ width: "5.5rem" }} />
+                  </colgroup>
+                  <thead className="sticky top-0">
+                    <tr>
+                      <th className="app-table-col-label">Preview</th>
+                      <th className="app-table-col-label">Image ID</th>
+                      <th className="app-table-col-label">Ground Truth</th>
+                      <th className="app-table-col-label">Prediction</th>
+                      <th className="app-table-col-center">Correct</th>
+                      <th className="app-table-col-center">Confidence</th>
+                      <th className="app-table-col-label">Evidence</th>
+                      <th className="app-table-col-center">Parse</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(latestResult.predictions || []).map((p: any) => {
+                      const correct = p.parse_ok && p.predicted_decision === p.ground_truth_label;
+                      return (
+                        <tr key={p.prediction_id} className={!correct ? "app-table-row-alert" : ""}>
+                          <td>
+                            {p.image_uri ? (
+                              <img
+                                src={p.image_uri}
+                                alt={p.image_id}
+                                className="w-10 h-8 object-cover rounded border border-gray-700 cursor-pointer hover:opacity-80"
+                                onClick={() => setPreviewImageId(String(p.image_id || ""))}
+                              />
+                            ) : (
+                              <span className="text-gray-600">—</span>
+                            )}
+                          </td>
+                          <td>
+                            <span className="font-mono truncate max-w-[220px]" title={String(p.image_id || "")}>
+                              {p.image_id}
                             </span>
-                          ) : (
-                            <span className="text-gray-500">UNSET</span>
-                          )}
-                        </td>
-                        <td className="text-center py-1.5 px-3">
-                          <span className={`px-1.5 py-0.5 rounded ${
-                            p.predicted_decision === "DETECTED" ? "bg-purple-900/30 text-purple-300" :
-                            p.predicted_decision === "NOT_DETECTED" ? "bg-emerald-900/30 text-emerald-300" :
-                            "bg-red-900/30 text-red-400"
-                          }`}>
-                            {p.predicted_decision || "FAIL"}
-                          </span>
-                        </td>
-                        <td className="text-center py-1.5 px-3">
-                          {correct ? <span className="text-green-400">✓</span> : <span className="text-red-400">✗</span>}
-                        </td>
-                        <td className="text-right py-1.5 px-3">{p.confidence != null ? p.confidence.toFixed(2) : "—"}</td>
-                        <td className="py-1.5 px-3 text-gray-400 max-w-[200px] truncate">{p.evidence || "—"}</td>
-                        <td className="text-center py-1.5 px-3">
-                          {p.parse_ok ? <span className="text-green-400">OK</span> : <span className="text-red-400">FAIL</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          </td>
+                          <td className="app-table-col-label">
+                            {p.ground_truth_label ? <DecisionBadge decision={p.ground_truth_label} /> : <span className="text-gray-500">UNSET</span>}
+                          </td>
+                          <td className="app-table-col-label">
+                            <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
+                          </td>
+                          <td className="app-table-col-center">
+                            <div className="app-table-center-slot">
+                              {correct ? <span className="text-green-400">✓</span> : <span className="text-red-400">✗</span>}
+                            </div>
+                          </td>
+                          <td className="app-table-col-center">
+                            <div className="app-table-center-slot">
+                              <span>{p.confidence != null ? p.confidence.toFixed(2) : "—"}</span>
+                            </div>
+                          </td>
+                          <td className="text-gray-400 max-w-[200px] truncate">{p.evidence || "—"}</td>
+                          <td className="app-table-col-center">
+                            <div className="app-table-center-slot">
+                              {p.parse_ok ? <span className="app-status-ok">OK</span> : <span className="app-status-fail">FAIL</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -566,7 +608,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
         isOpen={!!previewImageId && previewImageIds.length > 0 && !!activePreviewPrediction}
         imageUrl={activePreviewPrediction?.image_uri || ""}
         imageAlt={activePreviewPrediction?.image_id || "Preview"}
-        title="Disagreement Cases"
+        title="Held-Out Evaluation"
         subtitle={activePreviewPrediction?.image_id || ""}
         index={Math.max(previewIndex, 0)}
         total={previewImageIds.length}
@@ -597,7 +639,7 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                     <span className="text-gray-500">
                       {activePreviewPrediction.confidence != null ? Number(activePreviewPrediction.confidence).toFixed(2) : "—"}
                     </span>
-                    <span className={`${activePreviewPrediction.parse_ok ? "text-green-400" : "text-red-400"}`}>
+                    <span className={activePreviewPrediction.parse_ok ? "app-status-ok" : "app-status-fail"}>
                       {activePreviewPrediction.parse_ok ? "OK" : "FAIL"}
                     </span>
                   </div>
@@ -636,13 +678,13 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
 
       {/* Historical runs */}
       {runs.length > 0 && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
+        <div className="app-card-strong p-5">
           <h3 className="text-sm font-medium mb-3">Held-Out Run History</h3>
           <div className="space-y-2">
             {runs.map((r: any) => {
               const prompt = prompts.find((p) => p.prompt_version_id === r.prompt_version_id);
               return (
-                <div key={r.run_id} className="border border-gray-700 bg-gray-900/30 rounded p-3 text-sm">
+                <div key={r.run_id} className="rounded-2xl border border-white/10 bg-white/5 p-3 text-sm">
                   <div className="flex justify-between">
                     <div className="flex gap-3 items-center">
                       <span className="font-mono text-xs text-gray-400">{r.run_id.slice(0, 8)}</span>
@@ -654,18 +696,18 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
                       <button
                         onClick={() => loadHistoricalRun(String(r.run_id))}
                         disabled={loadingRunId === r.run_id}
-                        className="px-2 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
+                        className="app-btn app-btn-secondary px-2.5 py-1 text-xs disabled:opacity-50"
                       >
                         {loadingRunId === r.run_id ? "Loading..." : "Load"}
                       </button>
                     </div>
                   </div>
-                  <div className="flex gap-4 mt-1 text-xs text-gray-400">
-                    <span>Accuracy: <b className="text-gray-300">{((r.metrics_summary?.accuracy || 0) * 100).toFixed(1)}%</b></span>
-                    <span>Precision: <b className="text-blue-400">{((r.metrics_summary?.precision || 0) * 100).toFixed(1)}%</b></span>
-                    <span>Recall: <b className="text-green-400">{((r.metrics_summary?.recall || 0) * 100).toFixed(1)}%</b></span>
-                    <span>F1: <b className="text-yellow-400">{((r.metrics_summary?.f1 || 0) * 100).toFixed(1)}%</b></span>
-                    <span>Prevalence: <b className="text-purple-300">{((r.metrics_summary?.prevalence || 0) * 100).toFixed(1)}%</b></span>
+                  <div className="mt-1 flex gap-4 text-xs text-gray-400">
+                    <span>Accuracy: <b className="text-white">{formatMetricValue(r.metrics_summary, "accuracy")}</b></span>
+                    <span>Precision: <b className="text-white">{formatMetricValue(r.metrics_summary, "precision")}</b></span>
+                    <span>Recall: <b className="text-white">{formatMetricValue(r.metrics_summary, "recall")}</b></span>
+                    <span>F1: <b className="text-white">{formatMetricValue(r.metrics_summary, "f1")}</b></span>
+                    <span>Prevalence: <b className="text-white">{formatMetricValue(r.metrics_summary, "prevalence")}</b></span>
                   </div>
                 </div>
               );

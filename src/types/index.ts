@@ -3,6 +3,7 @@
 export type Decision = "DETECTED" | "NOT_DETECTED";
 export type SplitType = "GOLDEN" | "ITERATION" | "HELD_OUT_EVAL" | "CUSTOM";
 export type PrimaryMetric = "precision" | "recall" | "f1";
+export type DetectionCategory = "INCORRECT_CAPTURE" | "HAZARD_IDENTIFICATION";
 export type ErrorTag =
   | "MISSED_DETECTION"
   | "FALSE_POSITIVE"
@@ -26,7 +27,9 @@ export interface Detection {
   detection_code: string;
   display_name: string;
   description: string;
+  detection_category: DetectionCategory;
   label_policy: string;
+  user_prompt_addendum: string;
   decision_rubric: string[];
   segment_taxonomy: string[];
   metric_thresholds: MetricThresholds;
@@ -41,6 +44,7 @@ export interface PromptStructure {
   detection_identity: string;
   label_policy: string;
   decision_rubric: string;
+  user_prompt_addendum?: string;
   output_schema: string;
   examples: string;
 }

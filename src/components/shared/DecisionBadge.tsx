@@ -1,17 +1,24 @@
 export function DecisionBadge({ decision }: { decision: string | null }) {
-  if (!decision) return <span className="text-gray-600 text-xs">—</span>;
+  if (!decision) return <span className="text-[11px] text-[var(--app-text-subtle)]">—</span>;
+  if (decision === "UNSET") {
+    return <span className="app-badge app-badge-muted">Unset</span>;
+  }
   if (decision !== "DETECTED" && decision !== "NOT_DETECTED") {
-    return <span className="text-xs px-1.5 py-0.5 rounded bg-red-900/30 text-red-400">{decision}</span>;
+    return (
+      <span className="app-badge app-badge-danger">
+        {decision}
+      </span>
+    );
   }
   return (
     <span
-      className={`text-xs px-1.5 py-0.5 rounded ${
+      className={`app-badge ${
         decision === "DETECTED"
-          ? "bg-purple-900/30 text-purple-300"
-          : "bg-emerald-900/30 text-emerald-300"
+          ? "app-badge-purple"
+          : "app-badge-accent"
       }`}
     >
-      {decision}
+      {decision === "DETECTED" ? "DETECTED" : "NOT DETECTED"}
     </span>
   );
 }

@@ -7,10 +7,14 @@ export async function GET() {
   const started = Date.now();
   try {
     systemRepository.ping();
+    const storage = systemRepository.getStorageStatus();
     return NextResponse.json({
       status: "ok",
       uptime_ms: Date.now() - bootedAt,
-      db: "ok",
+      checks: {
+        db: "ok",
+        storage: storage.ok ? "ok" : "error",
+      },
       latency_ms: Date.now() - started,
       timestamp: new Date().toISOString(),
     });
@@ -19,7 +23,10 @@ export async function GET() {
     return NextResponse.json(
       {
         status: "error",
-        db: "down",
+        checks: {
+          db: "down",
+          storage: "unknown",
+        },
         error: errMsg,
         latency_ms: Date.now() - started,
         timestamp: new Date().toISOString(),

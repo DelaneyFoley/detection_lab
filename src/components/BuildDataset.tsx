@@ -5,6 +5,8 @@ import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection, PromptVersion } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { InfoTip } from "@/components/shared/InfoTip";
+import { DecisionBadge } from "@/components/shared/DecisionBadge";
 
 type BuildRow = {
   id: string;
@@ -262,7 +264,9 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           detection_id: detection.detection_id,
           display_name: detection.display_name,
           description: detection.description,
+          detection_category: detection.detection_category,
           label_policy: detection.label_policy,
+          user_prompt_addendum: detection.user_prompt_addendum,
           decision_rubric: Array.isArray(detection.decision_rubric) ? detection.decision_rubric : [],
           segment_taxonomy: segmentOptionsDraft,
           metric_thresholds: detection.metric_thresholds,
@@ -271,12 +275,12 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
       });
       const payload = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(payload?.error || "Failed to update segment categories");
+        throw new Error(payload?.error || "Failed to update image attributes");
       }
       triggerRefresh();
-      setStatus("Segment categories updated for this detection.");
+      setStatus("Image attributes updated for this detection.");
     } catch (error: unknown) {
-      setStatus(`Error: ${error instanceof Error ? error.message : "Failed to update segment categories"}`);
+      setStatus(`Error: ${error instanceof Error ? error.message : "Failed to update image attributes"}`);
     } finally {
       setSavingSegments(false);
     }
@@ -584,18 +588,22 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   const previewRow = previewIndex != null ? rows[previewIndex] : null;
 
   return (
-    <div className="max-w-6xl mx-auto space-y-4">
-      <h2 className="text-xl font-semibold">Build Dataset</h2>
-      <p className="text-sm text-gray-500">
-        Option 1: load an existing labeled dataset. Option 2: build from images, Excel, or JSON.
-      </p>
+    <div className="mx-auto max-w-6xl space-y-5">
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Build & Run Datasets</h2>
+          <p className="app-page-copy">
+            Load an existing labeled dataset or build a new one from images, Excel, or JSON before running prompt inference.
+          </p>
+        </div>
+      </div>
       {!detection && (
-        <p className="text-xs text-amber-300">
+        <p className="rounded-2xl border border-[rgba(240,180,100,0.2)] bg-[rgba(86,60,27,0.45)] px-4 py-3 text-xs text-[var(--app-warning)]">
           No detection selected: you can build/save unassigned datasets, but running prompt inference is disabled.
         </p>
       )}
 
-      <div className="bg-gray-900/40 border border-gray-800 rounded-lg p-4 space-y-4">
+      <div className="app-section space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap gap-2">
             <button
@@ -607,7 +615,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 setValidationError("");
                 setPreviewIndex(null);
               }}
-              className={`px-3 py-1.5 text-xs rounded ${mode === "load" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+              className={`app-toggle ${mode === "load" ? "app-toggle-active" : ""}`}
             >
               Load Dataset
             </button>
@@ -625,7 +633,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 setValidationError("");
                 setPreviewIndex(null);
               }}
-              className={`px-3 py-1.5 text-xs rounded ${mode === "build" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
+              className={`app-toggle ${mode === "build" ? "app-toggle-active" : ""}`}
             >
               Build Dataset
             </button>
@@ -633,17 +641,17 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           <button
             onClick={resetBuilder}
             disabled={building}
-            className="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded"
+            className="app-btn app-btn-secondary px-3 py-2 text-xs"
           >
             Reset
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <div>
             <label className="text-xs text-gray-400 block mb-1">Prompt Version</label>
             <select
-              className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+              className="app-select w-full px-3 py-2 text-sm"
               value={selectedPromptId}
               onChange={(e) => setSelectedPromptId(e.target.value)}
             >
@@ -660,7 +668,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
             <div>
               <label className="text-xs text-gray-400 block mb-1">Saved Dataset</label>
               <select
-                className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm"
+                className="app-select w-full px-3 py-2 text-sm"
                 value={selectedExistingDatasetId}
                 onChange={(e) => setSelectedExistingDatasetId(e.target.value)}
               >
@@ -677,8 +685,8 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
                 <input
-                  className={`w-full bg-gray-900 rounded px-3 py-2 text-sm ${
-                    datasetName.trim() ? "border border-gray-700" : "border border-red-500/70"
+                  className={`app-input w-full px-3 py-2 text-sm ${
+                    datasetName.trim() ? "" : "border-red-500/70"
                   }`}
                   value={datasetName}
                   onChange={(e) => setDatasetName(e.target.value)}
@@ -688,8 +696,8 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Split Type</label>
                 <select
-                  className={`w-full bg-gray-900 rounded px-3 py-2 text-sm ${
-                    splitType ? "border border-gray-700" : "border border-red-500/70"
+                  className={`app-select w-full px-3 py-2 text-sm ${
+                    splitType ? "" : "border-red-500/70"
                   }`}
                   value={splitType}
                   onChange={(e) =>
@@ -709,171 +717,209 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         </div>
 
         {mode === "build" && (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setBuildInputMode("files")}
-                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "files" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
-              >
-                Upload Images
-              </button>
-              <button
-                type="button"
-                onClick={() => setBuildInputMode("excel")}
-                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "excel" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
-              >
-                Upload Excel
-              </button>
-              <button
-                type="button"
-                onClick={() => setBuildInputMode("json")}
-                className={`px-3 py-1.5 text-xs rounded ${buildInputMode === "json" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-300"}`}
-              >
-                Paste JSON
-              </button>
-            </div>
-
-            {buildInputMode === "files" ? (
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Image Files</label>
-                <div className="flex flex-wrap items-center gap-3">
-                  <input
-                    id="build-dataset-files-input"
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={onPickFiles}
-                    className="hidden"
-                  />
-                  <label
-                    htmlFor="build-dataset-files-input"
-                    className="px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
-                  >
-                    Choose Files
-                  </label>
-                  <span className="text-xs text-gray-500">
-                    {selectedBuildFileCount > 0 ? `${selectedBuildFileCount} Files Selected` : "Choose Files"}
-                  </span>
+          <div className="space-y-6 border-t border-white/8 pt-5">
+            <div className="grid gap-6 xl:grid-cols-2">
+              <div className="space-y-4">
+                <div>
+                  <div className="app-label mb-1">Dataset Source</div>
+                  <p className="app-subsection-copy">
+                    Choose how you want to assemble this dataset, then load files or metadata for the build.
+                  </p>
                 </div>
-              </div>
-            ) : buildInputMode === "excel" ? (
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">
-                  Excel File (`image_id,image_url,ground_truth_label`) {excelFileName ? `• ${excelFileName}` : ""}
-                </label>
-                <div className="flex flex-wrap items-center gap-3">
-                  <input
-                    id="build-dataset-excel-input"
-                    type="file"
-                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    onChange={onPickExcelFile}
-                    className="hidden"
-                  />
-                  <label
-                    htmlFor="build-dataset-excel-input"
-                    className="px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
-                  >
-                    Choose Files
-                  </label>
-                  <span className="text-xs text-gray-500">{excelFileName ? "1 Files Selected" : "Choose Files"}</span>
-                </div>
-                <p className="text-[11px] text-gray-500 mt-1">
-                  Optional metadata column: `segments` (comma-separated values).
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <label className="text-xs text-gray-400 block">
-                  JSON Array (`image_id`, `image_url` or `image_uri`, optional `ground_truth_label`, optional `segment_tags`)
-                </label>
-                <textarea
-                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-xs font-mono h-36"
-                  value={jsonInput}
-                  onChange={(e) => setJsonInput(e.target.value)}
-                  placeholder={`[\n  {"image_id":"img_001","image_url":"https://...","ground_truth_label":"DETECTED","segment_tags":["daytime"]}\n]`}
-                />
-                <button
-                  type="button"
-                  onClick={loadFromJsonInput}
-                  className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700"
-                >
-                  Load JSON
-                </button>
-              </div>
-            )}
 
-            {autoSplit && (
-              <p className="text-xs text-gray-400">
-                Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split. It stratifies by ground truth label
-                and balances segment tags where available. All rows must have `ground_truth_label` set before saving.
-              </p>
-            )}
-            {detection && (
-              <div className="border border-gray-800 bg-gray-950/30 rounded-lg p-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs text-gray-400">Segment Categories</div>
-                <div className="text-[11px] text-gray-500">{segmentOptionsDraft.length} total</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBuildInputMode("files")}
+                    className={`app-toggle ${buildInputMode === "files" ? "app-toggle-active" : ""}`}
+                  >
+                    Upload Images
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBuildInputMode("excel")}
+                    className={`app-toggle ${buildInputMode === "excel" ? "app-toggle-active" : ""}`}
+                  >
+                    Upload Excel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBuildInputMode("json")}
+                    className={`app-toggle ${buildInputMode === "json" ? "app-toggle-active" : ""}`}
+                  >
+                    Paste JSON
+                  </button>
+                </div>
+
+                <div className="space-y-2 border-t border-white/8 pt-4">
+                  {buildInputMode === "files" ? (
+                    <>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <input
+                          id="build-dataset-files-input"
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={onPickFiles}
+                          className="hidden"
+                        />
+                        <label
+                          htmlFor="build-dataset-files-input"
+                          className="app-btn app-btn-secondary app-btn-sm cursor-pointer"
+                        >
+                          Choose Files
+                        </label>
+                        {selectedBuildFileCount > 0 && (
+                          <span className="text-xs text-gray-500">{selectedBuildFileCount} Files Selected</span>
+                        )}
+                      </div>
+                    </>
+                  ) : buildInputMode === "excel" ? (
+                    <>
+                      <div className="space-y-1">
+                        <label className="block text-xs text-gray-400">
+                          Excel Manifest {excelFileName ? `• ${excelFileName}` : ""}
+                        </label>
+                        <p className="text-[11px] text-gray-500">
+                          Required columns: `image_id`, `image_url`, `ground_truth_label`
+                        </p>
+                        <p className="text-[11px] text-gray-500">
+                          Optional column: `attributes` with comma-separated values
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <input
+                          id="build-dataset-excel-input"
+                          type="file"
+                          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                          onChange={onPickExcelFile}
+                          className="hidden"
+                        />
+                        <label
+                          htmlFor="build-dataset-excel-input"
+                          className="app-btn app-btn-secondary app-btn-sm cursor-pointer"
+                        >
+                          Choose Files
+                        </label>
+                        {excelFileName && <span className="text-xs text-gray-500">1 File Selected</span>}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <label className="block text-xs text-gray-400">
+                        JSON Array (`image_id`, `image_url` or `image_uri`, optional `ground_truth_label`, optional `attribute_tags`)
+                      </label>
+                      <textarea
+                        className="app-textarea h-36 w-full px-3 py-2 text-xs font-mono"
+                        value={jsonInput}
+                        onChange={(e) => setJsonInput(e.target.value)}
+                        placeholder={`[\n  {"image_id":"img_001","image_url":"https://...","ground_truth_label":"DETECTED","attribute_tags":["daytime"]}\n]`}
+                      />
+                      <button
+                        type="button"
+                        onClick={loadFromJsonInput}
+                        className="app-btn app-btn-secondary app-btn-sm"
+                      >
+                        Load JSON
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {autoSplit && (
+                  <p className="border-t border-white/8 pt-4 text-xs text-gray-400">
+                    Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split. It stratifies by ground truth label
+                    and balances attributes where available. All rows must have `ground_truth_label` set before saving.
+                  </p>
+                )}
               </div>
-              <div className="max-h-24 overflow-auto rounded border border-gray-800 bg-gray-900/50 p-2">
-                <div className="flex flex-wrap gap-1.5">
-                {segmentOptionsDraft.map((segment) => (
-                  <span key={segment} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-gray-800 text-gray-200 text-xs">
-                    {segment}
-                    <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => removeSegmentOption(segment)}>
-                      ×
+
+              {detection && (
+                <div className="space-y-4 border-t border-white/8 pt-4 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="app-label">Image Attributes</div>
+                      <InfoTip label="What are image attributes?">
+                        Use attributes to tag conditions that can change model performance or hide the target, such as
+                        `snow_on_ground`, `dark_image`, `blurry_image`, `glare`, or `partial_view`. Pick reusable tags that
+                        help you balance datasets and compare results by slice later.
+                      </InfoTip>
+                    </div>
+                    <div className="text-[11px] text-gray-500">{segmentOptionsDraft.length} total</div>
+                  </div>
+
+                  <p className="app-subsection-copy">
+                    Saving here updates the detection image attributes and does not create a new prompt version.
+                  </p>
+
+                  <div className="min-h-12 px-0 py-1">
+                    <div className="flex flex-wrap gap-1.5">
+                      {segmentOptionsDraft.map((segment) => (
+                        <span key={segment} className="inline-flex items-center gap-1 rounded-lg bg-white/6 px-2 py-0.5 text-xs text-gray-200">
+                          {segment}
+                          <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => removeSegmentOption(segment)}>
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {segmentOptionsDraft.length === 0 && <span className="text-xs text-gray-500">No image attributes yet.</span>}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                    <input
+                      className="app-input min-w-0 px-3 py-2 text-sm"
+                      placeholder="Add image attribute"
+                      value={newSegmentOption}
+                      onChange={(e) => setNewSegmentOption(e.target.value)}
+                    />
+                    <button type="button" onClick={addSegmentOption} className="app-btn app-btn-secondary app-btn-md">
+                      Add
                     </button>
-                  </span>
-                ))}
-                {segmentOptionsDraft.length === 0 && <span className="text-xs text-gray-500">No segment categories yet.</span>}
+                    <button
+                      type="button"
+                      onClick={saveSegmentOptions}
+                      disabled={savingSegments}
+                      className="app-btn app-btn-secondary app-btn-md disabled:opacity-50"
+                    >
+                      {savingSegments ? "Saving..." : "Save Attributes"}
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <input
-                  className="flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs"
-                  placeholder="Add segment category"
-                  value={newSegmentOption}
-                  onChange={(e) => setNewSegmentOption(e.target.value)}
-                />
-                <button type="button" onClick={addSegmentOption} className="px-3 py-1.5 text-xs rounded bg-gray-800 hover:bg-gray-700">
-                  Add
-                </button>
-                <button
-                  type="button"
-                  onClick={saveSegmentOptions}
-                  disabled={savingSegments}
-                  className="px-3 py-1.5 text-xs rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50"
-                >
-                  {savingSegments ? "Saving..." : "Save Categories"}
-                </button>
-              </div>
-              <p className="text-[11px] text-gray-500">
-                Saving here updates the detection segment taxonomy and does not create a new prompt version.
-              </p>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
 
         {rows.length > 0 && (
-          <div className="max-h-72 overflow-auto border border-gray-800 rounded">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-gray-900/90">
-                <tr className="text-gray-500 border-b border-gray-800">
-                  <th className="text-left px-2 py-2">Preview</th>
-                  <th className="text-left px-2 py-2">Image ID</th>
-                  <th className="text-left px-2 py-2">Ground Truth</th>
-                  <th className="text-left px-2 py-2">Segments</th>
-                  <th className="text-left px-2 py-2">AI Label</th>
-                  <th className="text-left px-2 py-2">Confidence (0-1)</th>
-                  <th className="text-left px-2 py-2">AI Description</th>
-                  {mode === "build" && <th className="text-right px-2 py-2">Action</th>}
+          <div className="app-table-wrap max-h-72 overflow-auto">
+            <table className="app-table app-table-fixed text-xs">
+              <colgroup>
+                <col style={{ width: "7.5rem" }} />
+                <col style={{ width: "12rem" }} />
+                <col style={{ width: "9rem" }} />
+                <col style={{ width: "16rem" }} />
+                <col style={{ width: "8.5rem" }} />
+                <col style={{ width: "7.5rem" }} />
+                <col />
+                {mode === "build" && <col style={{ width: "5.75rem" }} />}
+              </colgroup>
+              <thead className="sticky top-0">
+                <tr>
+                  <th className="app-table-col-label">Preview</th>
+                  <th className="app-table-col-label">Image ID</th>
+                  <th className="app-table-col-label">Ground Truth</th>
+                  <th className="app-table-col-label">Attributes</th>
+                  <th className="app-table-col-label">AI Label</th>
+                  <th className="app-table-col-label">Confidence</th>
+                  <th className="app-table-col-label">AI Description</th>
+                  {mode === "build" && <th className="app-table-col-right">Action</th>}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r, index) => (
-                  <tr key={r.id} className="border-b border-gray-900/70">
-                    <td className="px-2 py-2 align-middle">
+                  <tr key={r.id}>
+                    <td>
                       <img
                         src={r.preview}
                         alt={r.imageId}
@@ -881,7 +927,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                         onClick={() => setPreviewIndex(index)}
                       />
                     </td>
-                    <td className="px-2 py-2 align-middle">
+                    <td>
                       {mode === "build" ? (
                         <input
                           className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
@@ -892,24 +938,26 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                         <div className="w-full py-1 text-xs font-mono text-gray-300">{r.imageId}</div>
                       )}
                     </td>
-                    <td className="px-2 py-2 whitespace-nowrap align-middle">
-                      {mode === "build" ? (
-                        <select
-                          className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
-                          value={r.groundTruthLabel || ""}
-                          onChange={(e) =>
-                            updateRow(r.id, { groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null })
-                          }
-                        >
-                          <option value="">UNSET</option>
-                          <option value="DETECTED">DETECTED</option>
-                          <option value="NOT_DETECTED">NOT_DETECTED</option>
-                        </select>
-                      ) : (
-                        <GroundTruthBadge value={r.groundTruthLabel || null} />
-                      )}
+                    <td className="app-table-col-label">
+                      <div className="app-table-left-slot">
+                        {mode === "build" ? (
+                          <select
+                            className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                            value={r.groundTruthLabel || ""}
+                            onChange={(e) =>
+                              updateRow(r.id, { groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null })
+                            }
+                          >
+                            <option value="">UNSET</option>
+                            <option value="DETECTED">DETECTED</option>
+                            <option value="NOT_DETECTED">NOT_DETECTED</option>
+                          </select>
+                        ) : (
+                          <GroundTruthBadge value={r.groundTruthLabel || null} />
+                        )}
+                      </div>
                     </td>
-                    <td className="px-2 py-2 min-w-[260px] align-middle">
+                    <td>
                       {mode === "build" ? (
                         <SegmentTagsEditor
                           value={r.segmentTags}
@@ -920,17 +968,21 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                         <SegmentTagList value={r.segmentTags} />
                       )}
                     </td>
-                    <td className="px-2 py-2 whitespace-nowrap align-middle">
-                      <LabelBadge label={r.aiAssignedLabel || "—"} />
+                    <td className="app-table-col-label">
+                      <div className="app-table-left-slot">
+                        <LabelBadge label={r.aiAssignedLabel || "—"} />
+                      </div>
                     </td>
-                    <td className="px-2 py-2 text-gray-300 whitespace-nowrap align-middle">
-                      {typeof r.aiConfidence === "number" ? r.aiConfidence.toFixed(2) : "—"}
+                    <td className="app-table-col-label text-gray-300 whitespace-nowrap">
+                      <div className="app-table-left-slot">
+                        <span>{typeof r.aiConfidence === "number" ? r.aiConfidence.toFixed(2) : "—"}</span>
+                      </div>
                     </td>
-                    <td className="px-2 py-2 text-gray-400 max-w-xs truncate align-middle" title={r.aiDescription || ""}>
+                    <td className="text-gray-400 max-w-xs truncate" title={r.aiDescription || ""}>
                       {r.aiDescription || "—"}
                     </td>
                     {mode === "build" && (
-                      <td className="px-2 py-2 text-right align-middle">
+                      <td className="app-table-col-right">
                         <button className="text-red-400 hover:text-red-300" onClick={() => removeRow(r.id)}>
                           Remove
                         </button>
@@ -948,11 +1000,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
             <button
               onClick={saveDataset}
               disabled={!canSave || building}
-              className={`text-xs px-3 py-1.5 rounded transition-colors ${
-                !canSave || building
-                  ? "bg-emerald-900/50 text-emerald-300/60 cursor-not-allowed"
-                  : "bg-emerald-500 hover:bg-emerald-400 text-white"
-              }`}
+              className="app-btn app-btn-subtle app-btn-md text-xs"
             >
               {building && buildMode === "save" ? "Saving..." : "Save"}
             </button>
@@ -960,13 +1008,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           <button
             onClick={runDataset}
             disabled={!canRun || building}
-            className={`text-xs px-3 py-1.5 rounded transition-colors ${
-              !canRun || building
-                ? "bg-blue-900/40 text-blue-300/60 cursor-not-allowed"
-                : mode === "load" || !!builtDatasetId
-                  ? "bg-blue-500 hover:bg-blue-400 text-white"
-                  : "bg-blue-800 text-blue-200"
-            }`}
+            className="app-btn app-btn-success app-btn-md text-xs"
           >
             {building && buildMode === "run" ? "Running..." : "Run"}
           </button>
@@ -974,19 +1016,19 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
             <button
               onClick={cancelRun}
               disabled={cancelingRun}
-              className="text-xs px-3 py-1.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 rounded"
+              className="app-btn app-btn-danger px-3 py-2 text-xs"
             >
               {cancelingRun ? "Cancelling..." : "Cancel Run"}
             </button>
           )}
           {builtDatasetId && (
-            <button onClick={() => setActiveTab(2)} className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded">
+            <button onClick={() => setActiveTab(2)} className="app-btn app-btn-subtle app-btn-md text-xs">
               Go to HIL Review
             </button>
           )}
         </div>
-        {status && <div className="text-xs text-gray-400">{status}</div>}
-        {validationError && <div className="text-xs text-red-400">{validationError}</div>}
+        {status && <div className="text-xs text-[var(--app-text-muted)]">{status}</div>}
+        {validationError && <div className="text-xs text-[var(--app-danger)]">{validationError}</div>}
       </div>
 
       <ImagePreviewModal
@@ -1038,7 +1080,14 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 )}
               </div>
               <div>
-                <label className="text-xs text-gray-500 block mb-1">Segments</label>
+                <div className="flex items-center gap-2 mb-1">
+                  <label className="text-xs text-gray-500 block">Attributes</label>
+                  <InfoTip label="What are image attributes?">
+                    Use attributes to tag conditions that can change model performance or hide the target, such as
+                    `snow_on_ground`, `dark_image`, `blurry_image`, `glare`, or `partial_view`. Pick reusable tags that
+                    help you balance datasets and compare results by slice later.
+                  </InfoTip>
+                </div>
                 {mode === "build" ? (
                   <SegmentTagsEditor
                     value={previewRow.segmentTags}
@@ -1149,7 +1198,7 @@ function normalizeManifestRows(
     const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
     const imageUrl = String(row.image_url || row.image_uri || row.imageUri || "").trim();
     const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || "").trim().toUpperCase();
-    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.segments ?? "") as string[] | string;
+    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.attribute_tags ?? row.attributeTags ?? row.attributes ?? row.segments ?? "") as string[] | string;
     if (!imageId) {
       throw new Error(`${sourceLabel} row ${i + 1} has blank image_id.`);
     }
@@ -1214,13 +1263,12 @@ function normalizeSegmentTags(value: unknown): string[] {
 }
 
 function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {
-  if (value === "DETECTED") return <span className="px-2 py-0.5 rounded bg-purple-900/40 text-purple-300">DETECTED</span>;
-  if (value === "NOT_DETECTED") return <span className="px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300">NOT_DETECTED</span>;
-  return <span className="px-2 py-0.5 rounded bg-gray-800 text-gray-400">UNSET</span>;
+  if (value) return <DecisionBadge decision={value} />;
+  return <span className="app-badge app-badge-muted">Unset</span>;
 }
 
 function SegmentTagList({ value }: { value: string[] }) {
-  if (!value.length) return <span className="text-gray-500 text-[11px]">No segments</span>;
+  if (!value.length) return <span className="text-gray-500 text-[11px]">No attributes</span>;
   return (
     <div className="flex flex-wrap gap-1">
       {value.map((tag) => (
@@ -1330,7 +1378,7 @@ function SegmentTagsEditor({
           if (!value.includes(next)) onChange([...value, next]);
         }}
       >
-        <option value="">Add tag...</option>
+        <option value="">Add attribute...</option>
         {options.filter((option) => !value.includes(option)).map((option) => (
           <option key={option} value={option}>
             {option}
@@ -1358,17 +1406,11 @@ function SegmentTagsEditor({
 }
 
 function LabelBadge({ label }: { label: string }) {
-  if (label === "DETECTED") {
-    return <span className="px-1.5 py-0.5 rounded bg-purple-900/30 text-purple-300">{label}</span>;
-  }
-  if (label === "NOT_DETECTED") {
-    return <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-300">{label}</span>;
-  }
-  if (label === "PARSE_FAIL") {
-    return <span className="px-1.5 py-0.5 rounded bg-red-900/30 text-red-400">{label}</span>;
+  if (label === "DETECTED" || label === "NOT_DETECTED" || label === "PARSE_FAIL") {
+    return <DecisionBadge decision={label} />;
   }
   if (label === "UNSET") {
-    return <span className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">{label}</span>;
+    return <span className="app-badge app-badge-muted">Unset</span>;
   }
   return <span className="text-gray-300">{label}</span>;
 }

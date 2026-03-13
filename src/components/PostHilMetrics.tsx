@@ -2,17 +2,18 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
-import { MetricsDisplay, ConfusionMatrixPanel } from "@/components/MetricsDisplay";
+import { MetricsDisplay } from "@/components/MetricsDisplay";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import type { Detection, Run, Prediction, PromptVersion, PromptEditSuggestion } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
+import { formatMetricValue } from "@/lib/ui/metrics";
 
 export function PostHilMetrics({ detection }: { detection: Detection }) {
   const { apiKey, selectedModel, selectedRunByDetection, setSelectedRunForDetection, refreshCounter, triggerRefresh } = useAppStore();
+  const { notify } = useAppFeedback();
   const [runs, setRuns] = useState<Run[]>([]);
-  const persistedRunId = selectedRunByDetection[detection.detection_id] || "";
-  const [selectedRunId, setSelectedRunId] = useState(persistedRunId);
+  const selectedRunId = selectedRunByDetection[detection.detection_id] || "";
   const [runData, setRunData] = useState<any>(null);
-  const [recomputedMetrics, setRecomputedMetrics] = useState<any>(null);
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [suggestions, setSuggestions] = useState<PromptEditSuggestion[]>([]);
   const [editableSuggestions, setEditableSuggestions] = useState<PromptEditSuggestion[]>([]);
@@ -40,16 +41,11 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     loadRuns();
   }, [loadRuns, refreshCounter]);
 
-  useEffect(() => {
-    setSelectedRunId(persistedRunId);
-  }, [persistedRunId]);
-
   const loadRun = useCallback(async () => {
     if (!selectedRunId) return;
     const res = await fetch(`/api/runs?run_id=${selectedRunId}`);
     const data = await res.json();
     setRunData(data);
-    setRecomputedMetrics(null);
     const feedback = data?.prompt_feedback_log || {};
     const accepted = Array.isArray(feedback.accepted) ? (feedback.accepted as PromptEditSuggestion[]) : [];
     const rejected = Array.isArray(feedback.rejected) ? (feedback.rejected as PromptEditSuggestion[]) : [];
@@ -79,23 +75,6 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     loadRun();
   }, [loadRun, refreshCounter]);
 
-  useEffect(() => {
-    if (selectedRunId) {
-      setSelectedRunForDetection(detection.detection_id, selectedRunId);
-    }
-  }, [selectedRunId, detection.detection_id, setSelectedRunForDetection]);
-
-  const recomputeMetrics = async () => {
-    if (!selectedRunId) return;
-    const res = await fetch("/api/hil", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ run_id: selectedRunId }),
-    });
-    const data = await res.json();
-    setRecomputedMetrics(data.metrics);
-  };
-
   const getPromptSuggestions = async () => {
     if (!runData) return;
 
@@ -120,13 +99,15 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       });
       const data = await res.json();
       if (data.suggestions) {
-        const next = data.suggestions as PromptEditSuggestion[];
+        const next = (data.suggestions as PromptEditSuggestion[]).filter((suggestion) =>
+          ["label_policy", "decision_policy", "decision_rubric", "user_prompt_addendum"].includes(String(suggestion.section || ""))
+        );
         setSuggestions(next);
         setEditableSuggestions(next);
         setSelectedSuggestions(new Set());
         setLoadedFromRunLog(false);
       } else {
-        alert(data.error || "Failed to get suggestions");
+        notify({ message: data.error || "Failed to get suggestions.", tone: "error" });
       }
     } catch (err) {
       console.error(err);
@@ -152,21 +133,18 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
 
     setSaving(true);
 
-    let newSystemPrompt = prompt.system_prompt;
-    let newUserPrompt = prompt.user_prompt_template;
     let newLabelPolicy = (prompt.prompt_structure as any)?.label_policy || "";
     let newDecisionRubric = (prompt.prompt_structure as any)?.decision_rubric || "";
+    let newUserPromptAddendum = (prompt.prompt_structure as any)?.user_prompt_addendum || detection.user_prompt_addendum || "";
 
     for (const i of selectedSuggestions) {
       const s = editableSuggestions[i];
-      if (s.section === "system_prompt") {
-        newSystemPrompt = newSystemPrompt.replace(s.old_text, s.new_text);
-      } else if (s.section === "user_prompt_template") {
-        newUserPrompt = newUserPrompt.replace(s.old_text, s.new_text);
-      } else if (s.section === "label_policy" || s.section === "decision_policy") {
+      if (s.section === "label_policy" || s.section === "decision_policy") {
         newLabelPolicy = newLabelPolicy.replace(s.old_text, s.new_text);
       } else if (s.section === "decision_rubric") {
         newDecisionRubric = newDecisionRubric.replace(s.old_text, s.new_text);
+      } else if (s.section === "user_prompt_addendum") {
+        newUserPromptAddendum = newUserPromptAddendum.replace(s.old_text, s.new_text);
       }
     }
 
@@ -175,18 +153,40 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     const suggestedCount = editableSuggestions.length;
 
     try {
+      if (newUserPromptAddendum !== (detection.user_prompt_addendum || "")) {
+        const detectionRes = await fetch("/api/detections", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            detection_id: detection.detection_id,
+            display_name: detection.display_name,
+            description: detection.description,
+            detection_category: detection.detection_category,
+            label_policy: detection.label_policy,
+            user_prompt_addendum: newUserPromptAddendum,
+            decision_rubric: detection.decision_rubric,
+            segment_taxonomy: detection.segment_taxonomy,
+            metric_thresholds: detection.metric_thresholds,
+            approved_prompt_version: detection.approved_prompt_version,
+          }),
+        });
+        const detectionPayload = await detectionRes.json().catch(() => null);
+        if (!detectionRes.ok) {
+          throw new Error(detectionPayload?.error || "Failed to update detection addendum");
+        }
+      }
+
       const res = await fetch("/api/prompts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           detection_id: detection.detection_id,
           version_label: `v${versionNum}.0`,
-          system_prompt: newSystemPrompt,
-          user_prompt_template: newUserPrompt,
           prompt_structure: {
             ...(prompt.prompt_structure || {}),
             label_policy: newLabelPolicy,
             decision_rubric: newDecisionRubric,
+            user_prompt_addendum: newUserPromptAddendum,
           },
           model: prompt.model,
           temperature: prompt.temperature,
@@ -276,11 +276,12 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
         }),
       });
 
-      alert(
-        regressionResult
+      notify({
+        message: regressionResult
           ? `New prompt version saved. TEST regression: ${regressionResult.passed ? "PASSED" : "FAILED"}`
-          : "New prompt version saved. No TEST dataset found for regression."
-      );
+          : "New prompt version saved. No TEST dataset found for regression.",
+        tone: "success",
+      });
 
       loadRuns();
       triggerRefresh();
@@ -290,87 +291,85 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
     setSaving(false);
   };
 
-  const metrics = recomputedMetrics || runData?.metrics_summary;
+  const metrics = runData?.metrics_summary;
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <h2 className="text-xl font-semibold">Post-HIL Metrics & Prompt Improvement</h2>
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">
+            Prompt Feedback & Improvement
+          </h2>
+          <p className="app-page-copy">
+            Review corrected run performance, analyze clustered failures, and turn accepted edits into a new prompt version.
+          </p>
+        </div>
+      </div>
 
       {/* Run Selection */}
-      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-        <div className="flex items-center gap-4">
-          <label className="text-xs text-gray-400">Select Run:</label>
+      <div className="app-section space-y-4">
+        <div className="space-y-1">
+          <div className="app-section-title">Run Analysis</div>
+          <p className="app-section-copy">
+            Load a completed run with HIL corrections applied and inspect AI-suggested prompt edits.
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
+          <label className="app-label lg:w-28">Select Run</label>
           <select
-            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm flex-1"
+            className="app-select flex-1 px-3 py-2 text-sm"
             value={selectedRunId}
             onChange={(e) => {
               const nextRunId = e.target.value;
-              setSelectedRunId(nextRunId);
-              if (nextRunId) {
-                setSelectedRunForDetection(detection.detection_id, nextRunId);
-              }
+              setSelectedRunForDetection(detection.detection_id, nextRunId);
             }}
           >
             <option value="">Choose a run...</option>
             {runs.map((r: any) => (
               <option key={r.run_id} value={r.run_id}>
-                {(prompts.find((p) => p.prompt_version_id === r.prompt_version_id)?.version_label || r.prompt_version_id?.slice(0, 8) || "Unknown prompt")} — {r.run_id.slice(0, 8)} — {splitTypeLabel(r.split_type)} — {new Date(r.created_at).toLocaleString()}
+                {formatRunOptionLabel(r, prompts.find((p) => p.prompt_version_id === r.prompt_version_id)?.version_label)}
               </option>
             ))}
           </select>
-          <button
-            onClick={recomputeMetrics}
-            disabled={!selectedRunId}
-            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded text-sm"
-          >
-            Recompute Metrics
-          </button>
         </div>
-
-        {recomputedMetrics && (
-          <p className="text-xs text-green-400 mt-2">Metrics recomputed with HIL corrections applied.</p>
-        )}
       </div>
 
       {/* Metrics Display */}
       {metrics && (
-        <div className="space-y-3">
-          <MetricsDisplay
-            metrics={metrics}
-            label={recomputedMetrics ? "Recomputed Metrics (Post-HIL)" : "Original Run Metrics"}
-            showConfusionMatrix={false}
-          />
-          <details className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
-            <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
-              View Confusion Matrix
-            </summary>
-            <div className="mt-3">
-              <ConfusionMatrixPanel metrics={metrics} />
-            </div>
-          </details>
-        </div>
+        <MetricsDisplay
+          metrics={metrics}
+          label="Run Metrics"
+          showConfusionMatrix={false}
+          variant="flat"
+        />
       )}
 
       {/* Prompt Improvement Assistant */}
       {runData && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-sm font-medium">Prompt Improvement Assistant</h3>
+        <div className="app-section space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-1">
+              <div className="app-section-title">Prompt Improvement Assistant</div>
+              <p className="app-section-copy max-w-3xl">
+                Review clustered failures, adjust the suggested edits, and promote the best changes into a new prompt version.
+              </p>
+            </div>
             <button
               onClick={getPromptSuggestions}
               disabled={loadingSuggestions}
-              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-sm"
+              className="app-btn app-btn-subtle app-btn-md disabled:opacity-50 lg:self-start"
             >
               {loadingSuggestions ? "Analyzing..." : "Analyze Errors & Suggest Edits"}
             </button>
           </div>
 
-          <p className="text-xs text-gray-400 mb-4">
+          <p className="text-sm text-[var(--app-text-muted)]">
             The assistant prioritizes parse-failure fixes first, then FP/FN reduction. It analyzes clustered errors,
             reviewer notes/tags, and sampled images to propose up to 5 targeted prompt edits.
           </p>
           {loadedFromRunLog && (
-            <p className="text-xs text-blue-300 mb-3">
+            <p className="text-xs text-blue-300">
               Loaded prior accepted/rejected suggestions for this run. You can adjust selections and save a new version.
             </p>
           )}
@@ -383,10 +382,10 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                 return (
                 <div
                   key={i}
-                  className={`border rounded-lg p-4 cursor-pointer transition-colors ${
+                  className={`cursor-pointer rounded-2xl p-4 transition ${
                     selectedSuggestions.has(i)
-                      ? "border-purple-600 bg-purple-900/10"
-                      : "border-gray-700 bg-gray-900/30 hover:border-gray-600"
+                      ? "bg-[rgba(18,44,61,0.72)] ring-1 ring-cyan-400/35"
+                      : "bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.05)]"
                   }`}
                   onClick={() => toggleSuggestion(i)}
                 >
@@ -394,32 +393,33 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                     <input
                       type="checkbox"
                       checked={selectedSuggestions.has(i)}
+                      onClick={(e) => e.stopPropagation()}
                       onChange={() => toggleSuggestion(i)}
                       className="mt-1"
                     />
                     <div className="flex-1">
-                      <div className="flex gap-2 items-center mb-2">
-                        <span className="text-xs bg-gray-800 px-2 py-0.5 rounded text-gray-400">
-                          {s.section}
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <span className="rounded-lg bg-[rgba(255,255,255,0.05)] px-2.5 py-1 text-[11px] text-gray-200">
+                          {formatSectionLabel(s.section)}
                         </span>
                         <span className="text-xs text-gray-500">→ {s.failure_cluster}</span>
                         {typeof s.priority === "number" && (
-                          <span className="text-xs bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded">
+                          <span className="rounded-lg bg-sky-500/10 px-2.5 py-1 text-[11px] text-sky-300">
                             Priority {s.priority}
                           </span>
                         )}
                         {s.risk && (
-                          <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded">
+                          <span className="rounded-lg bg-[rgba(255,255,255,0.05)] px-2.5 py-1 text-[11px] text-gray-300">
                             Risk: {s.risk}
                           </span>
                         )}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                      <div className="grid grid-cols-1 gap-3 text-xs lg:grid-cols-2">
                         <div>
-                          <span className="text-red-400 text-xs font-sans">OLD:</span>
+                          <span className="app-label">Current Text</span>
                           <textarea
-                            className="w-full bg-red-900/10 border border-red-900/30 rounded p-2 mt-1 whitespace-pre-wrap text-red-300 min-h-24"
+                            className="app-textarea mt-1 min-h-24 rounded-xl bg-[rgba(9,17,26,0.82)] p-3 font-mono text-xs text-gray-200"
                             value={draft.old_text}
                             onClick={(e) => e.stopPropagation()}
                             onChange={(e) =>
@@ -430,9 +430,9 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                           />
                         </div>
                         <div>
-                          <span className="text-green-400 text-xs font-sans">NEW:</span>
+                          <span className="app-label">Suggested Text</span>
                           <textarea
-                            className="w-full bg-green-900/10 border border-green-900/30 rounded p-2 mt-1 whitespace-pre-wrap text-green-300 min-h-24"
+                            className="app-textarea mt-1 min-h-24 rounded-xl bg-[rgba(13,28,24,0.7)] p-3 font-mono text-xs text-emerald-100"
                             value={draft.new_text}
                             onClick={(e) => e.stopPropagation()}
                             onChange={(e) =>
@@ -445,7 +445,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                       </div>
 
                       <textarea
-                        className="w-full bg-gray-900 border border-gray-700 rounded p-2 mt-2 text-xs text-gray-300 min-h-16"
+                        className="app-textarea mt-3 min-h-16 rounded-xl bg-[rgba(9,17,26,0.82)] px-3 py-2 text-xs text-gray-300"
                         value={draft.rationale}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) =>
@@ -453,9 +453,9 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                             prev.map((item, idx) => (idx === i ? { ...item, rationale: e.target.value } : item))
                           )
                         }
-                      />
+                        />
                       {(s.expected_metric_impact || s.expected_parse_fail_impact) && (
-                        <div className="mt-2 text-[11px] text-gray-500 space-y-1">
+                        <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-gray-400">
                           {s.expected_metric_impact && (
                             <div>Expected metric impact: {s.expected_metric_impact}</div>
                           )}
@@ -473,11 +473,11 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
                 <button
                   onClick={saveAsNewVersion}
                   disabled={selectedSuggestions.size === 0 || saving}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 rounded text-sm font-medium"
+                  className="app-btn app-btn-primary app-btn-md disabled:opacity-50"
                 >
-                  {saving ? "Saving..." : `Accept ${selectedSuggestions.size} Edit(s) & Save as New Version`}
+                  {saving ? "Saving..." : `Save ${selectedSuggestions.size} Accepted Edit${selectedSuggestions.size === 1 ? "" : "s"} as New Version`}
                 </button>
-                <p className="text-xs text-gray-500 mt-2">
+                <p className="mt-2 text-xs text-gray-500">
                   Previous and new prompt versions will run automatically on the TEST split after saving.
                 </p>
               </div>
@@ -487,17 +487,21 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       )}
 
       {testRegressionResult && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-5 space-y-3">
-          <h3 className="text-sm font-medium">Latest TEST Regression Outcome</h3>
-          <div className="text-xs text-gray-400">
-            Evaluated: {new Date(testRegressionResult.evaluated_at).toLocaleString()}
+        <div className="app-section space-y-3">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-1">
+              <div className="app-section-title">Latest TEST Regression Outcome</div>
+              <div className="text-xs text-gray-400">
+                Evaluated: {new Date(testRegressionResult.evaluated_at).toLocaleString()}
+              </div>
+            </div>
+            <div className={`text-sm font-medium ${testRegressionResult.passed ? "text-green-400" : "text-red-400"}`}>
+              Result: {testRegressionResult.passed ? "PASSED" : "FAILED"}
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-xs">
+          <div className="grid grid-cols-1 gap-3 text-xs xl:grid-cols-2">
             <RegressionMetricsCard title="Previous Prompt (TEST)" run={testRegressionResult.previous} />
             <RegressionMetricsCard title="Accepted Prompt (TEST)" run={testRegressionResult.candidate} />
-          </div>
-          <div className={`text-sm font-medium ${testRegressionResult.passed ? "text-green-400" : "text-red-400"}`}>
-            Result: {testRegressionResult.passed ? "PASSED" : "FAILED"}
           </div>
         </div>
       )}
@@ -514,6 +518,29 @@ function checkThresholds(metrics: any, thresholds: any): boolean {
 
 function suggestionKey(s: PromptEditSuggestion): string {
   return [s.section, s.old_text, s.new_text, s.rationale, s.failure_cluster].join("|");
+}
+
+function formatRunOptionLabel(run: Run, promptLabel?: string): string {
+  const prompt = promptLabel || String(run.prompt_version_id || "").slice(0, 8) || "Unknown prompt";
+  const split = splitTypeLabel(run.split_type);
+  const total = typeof run.metrics_summary?.total === "number" ? `${run.metrics_summary.total} images` : null;
+  const f1 = typeof run.metrics_summary?.f1 === "number" ? `F1 ${(run.metrics_summary.f1 * 100).toFixed(1)}%` : null;
+  const createdAt = run.created_at ? new Date(run.created_at).toLocaleString() : null;
+  return [prompt, split, total, f1, createdAt].filter(Boolean).join(" · ");
+}
+
+function formatSectionLabel(section?: string): string {
+  switch (section) {
+    case "label_policy":
+    case "decision_policy":
+      return "Decision Policy";
+    case "decision_rubric":
+      return "Decision Rubric";
+    case "user_prompt_addendum":
+      return "User Prompt Addendum";
+    default:
+      return section ? section.replace(/_/g, " ") : "Prompt Section";
+  }
 }
 
 async function runPromptOnDataset(input: {
@@ -564,7 +591,7 @@ function RegressionMetricsCard({
 }) {
   if (!run?.metrics_summary) {
     return (
-      <div className="bg-gray-900/40 border border-gray-700 rounded p-3">
+      <div className="app-card p-3">
         <div className="text-gray-400 mb-1">{title}</div>
         <div className="text-gray-500">No metrics available.</div>
       </div>
@@ -572,14 +599,14 @@ function RegressionMetricsCard({
   }
   const metrics = run.metrics_summary || {};
   return (
-    <div className="bg-gray-900/40 border border-gray-700 rounded p-3">
+    <div className="app-card p-3">
       <div className="text-gray-400 mb-1">{title}</div>
       <div className="text-gray-500 mb-2 font-mono">Run: {String(run.run_id || "").slice(0, 8)}</div>
-      <div className="grid grid-cols-2 gap-1">
-        <span>Accuracy: <b className="text-gray-300">{((metrics.accuracy || 0) * 100).toFixed(1)}%</b></span>
-        <span>Precision: <b className="text-blue-400">{((metrics.precision || 0) * 100).toFixed(1)}%</b></span>
-        <span>Recall: <b className="text-green-400">{((metrics.recall || 0) * 100).toFixed(1)}%</b></span>
-        <span>F1: <b className="text-yellow-400">{((metrics.f1 || 0) * 100).toFixed(1)}%</b></span>
+      <div className="grid grid-cols-2 gap-2">
+        <span>Accuracy: <b className="text-white">{formatMetricValue(metrics, "accuracy")}</b></span>
+        <span>Precision: <b className="text-white">{formatMetricValue(metrics, "precision")}</b></span>
+        <span>Recall: <b className="text-white">{formatMetricValue(metrics, "recall")}</b></span>
+        <span>F1: <b className="text-white">{formatMetricValue(metrics, "f1")}</b></span>
       </div>
     </div>
   );

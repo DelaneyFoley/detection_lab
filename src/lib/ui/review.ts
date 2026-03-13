@@ -1,4 +1,5 @@
-import type { Prediction } from "@/types";
+import type { MetricsSummary, Prediction } from "@/types";
+import { formatMetricValue } from "@/lib/ui/metrics";
 
 export function getResolvedGroundTruth(prediction: Pick<Prediction, "corrected_label" | "ground_truth_label">): string | null {
   return prediction.corrected_label || prediction.ground_truth_label || null;
@@ -21,6 +22,10 @@ export function formatModelOutput(raw: string): string {
 
 export function fmtPercent(value: number): string {
   return `${(Number(value || 0) * 100).toFixed(1)}%`;
+}
+
+export function fmtMetric(metrics: MetricsSummary, key: "accuracy" | "precision" | "recall" | "f1" | "prevalence" | "parse_failure_rate"): string {
+  return formatMetricValue(metrics, key);
 }
 
 export async function safeJsonArray<T>(res: Response, label: string): Promise<T[]> {

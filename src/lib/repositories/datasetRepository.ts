@@ -228,10 +228,11 @@ export class DatasetRepository {
     dataStore.run("DELETE FROM dataset_items WHERE item_id = ?", itemId);
   }
 
-  updateDatasetMeta(datasetId: string, name: string, splitType: string, updatedAt: string) {
+  updateDatasetMeta(datasetId: string, name: string, detectionId: string | null, splitType: string, updatedAt: string) {
     dataStore.run(
-      "UPDATE datasets SET name = ?, split_type = ?, updated_at = ? WHERE dataset_id = ?",
+      "UPDATE datasets SET name = ?, detection_id = ?, split_type = ?, updated_at = ? WHERE dataset_id = ?",
       name,
+      detectionId,
       splitType,
       updatedAt,
       datasetId

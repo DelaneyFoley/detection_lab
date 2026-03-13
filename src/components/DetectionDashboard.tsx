@@ -2,11 +2,14 @@
 
 import { Fragment, useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
+import { DecisionBadge } from "@/components/shared/DecisionBadge";
 import type { Detection, Run, PromptVersion, Dataset, MetricsSummary } from "@/types";
-import { splitTypeLabel } from "@/lib/splitType";
+import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
 
 export function DetectionDashboard({ detections: initialDetections }: { detections: Detection[] }) {
   const { refreshCounter } = useAppStore();
+  const { notify, confirm } = useAppFeedback();
   const [detections, setDetections] = useState<Detection[]>(initialDetections);
   const [detectionData, setDetectionData] = useState<
     Map<string, { prompts: PromptVersion[]; datasets: Dataset[]; runs: Run[] }>
@@ -108,7 +111,14 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
   }, [previewState]);
 
   const deleteDetection = async (detectionId: string, displayName: string) => {
-    if (!confirm(`Delete detection "${displayName}" and all related prompts/runs/datasets? This cannot be undone.`)) {
+    if (
+      !(await confirm({
+        title: "Delete Detection",
+        message: `Delete detection "${displayName}" and all related prompts, runs, and datasets? This cannot be undone.`,
+        confirmLabel: "Delete Detection",
+        tone: "danger",
+      }))
+    ) {
       return;
     }
     const res = await fetch("/api/detections", {
@@ -118,7 +128,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
     });
     if (!res.ok) {
       const text = await res.text();
-      alert(`Failed to delete detection: ${text}`);
+      notify({ message: `Failed to delete detection: ${text}`, tone: "error" });
       return;
     }
 
@@ -268,15 +278,18 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold">Detection Dashboard</h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Overview of all saved detections with latest run outcomes
-        </p>
+      <div className="app-page-header">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h2 className="app-page-title">Detection Dashboard</h2>
+          <p className="app-page-copy">
+            Review saved detections, latest approved performance, and detailed run history across prompts,
+            datasets, and reviewer feedback.
+          </p>
+        </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           label="Total Detections"
           value={detections.length.toString()}
@@ -326,11 +339,11 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
           return (
             <div
               key={d.detection_id}
-              className="bg-gray-800/50 border border-gray-700 rounded-lg overflow-hidden"
+              className="app-card-strong overflow-hidden"
             >
               {/* Detection Header Row */}
               <div
-                className="px-5 py-4 cursor-pointer hover:bg-gray-800/70 transition-colors"
+                className="cursor-pointer px-5 py-4 transition-colors hover:bg-white/5"
                 onClick={() => setExpandedId(isExpanded ? null : d.detection_id)}
               >
                 <div className="flex items-center justify-between">
@@ -348,7 +361,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <h3 className="font-medium text-gray-200 truncate">{d.display_name}</h3>
-                        <code className="text-xs text-gray-500 bg-gray-900 px-1.5 py-0.5 rounded shrink-0">
+                        <code className="shrink-0 rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-xs text-gray-400">
                           {d.detection_code}
                         </code>
                       </div>
@@ -362,11 +375,11 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                   <div className="flex items-center gap-4 shrink-0 ml-4">
                     {/* Approved status */}
                     {d.approved_prompt_version ? (
-                      <span className="text-xs bg-green-900/25 text-green-400 border border-green-800/40 px-2.5 py-1 rounded-full">
+                      <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300">
                         Approved: {approvedPrompt?.version_label || "?"}
                       </span>
                     ) : (
-                      <span className="text-xs bg-gray-800 text-gray-500 border border-gray-700 px-2.5 py-1 rounded-full">
+                      <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-xs text-gray-400">
                         No approved prompt
                       </span>
                     )}
@@ -376,19 +389,19 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                       <div className="flex items-center gap-3 text-xs">
                         <span>
                           P:{" "}
-                          <b className="text-blue-400">
+                          <b className="text-[var(--app-text)]">
                             {(bestMetrics.precision * 100).toFixed(1)}%
                           </b>
                         </span>
                         <span>
                           R:{" "}
-                          <b className="text-green-400">
+                          <b className="text-[var(--app-text)]">
                             {(bestMetrics.recall * 100).toFixed(1)}%
                           </b>
                         </span>
                         <span>
                           F1:{" "}
-                          <b className="text-yellow-400">
+                          <b className="text-[var(--app-text)]">
                             {(bestMetrics.f1 * 100).toFixed(1)}%
                           </b>
                         </span>
@@ -411,7 +424,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                         e.stopPropagation();
                         deleteDetection(d.detection_id, d.display_name);
                       }}
-                      className="text-xs px-2 py-1 bg-red-900/40 hover:bg-red-900/60 text-red-300 rounded"
+                      className="app-btn app-btn-danger px-3 py-1.5 text-xs"
                     >
                       Delete
                     </button>
@@ -421,11 +434,11 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
 
               {/* Expanded Detail */}
               {isExpanded && data && (
-                <div className="border-t border-gray-700 px-5 py-5 space-y-5 bg-gray-900/20">
+                <div className="space-y-5 border-t border-white/10 bg-black/10 px-5 py-5">
                   {/* Thresholds */}
-                  <div className="bg-gray-800/40 rounded-lg p-4">
-                    <h4 className="text-xs text-gray-500 font-medium mb-2">Metric Thresholds</h4>
-                    <div className="flex gap-6 text-sm">
+                  <div className="app-card p-4">
+                    <h4 className="app-label mb-2">Metric Thresholds</h4>
+                    <div className="flex flex-wrap gap-4 text-sm">
                       <span className="text-gray-400">
                         Primary: <b className="text-gray-200">{d.metric_thresholds.primary_metric}</b>
                       </span>
@@ -455,25 +468,39 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
 
                   {/* Run Log */}
                   <div>
-                    <h4 className="text-xs text-gray-500 font-medium mb-2">
+                    <h4 className="app-label mb-2">
                       Run Log ({data.runs.length})
                     </h4>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-xs">
+                    <div className="app-table-wrap overflow-x-auto">
+                      <table className="app-table app-table-fixed text-xs">
+                        <colgroup>
+                          <col style={{ width: "7rem" }} />
+                          <col style={{ width: "10rem" }} />
+                          <col style={{ width: "9rem" }} />
+                          <col style={{ width: "7rem" }} />
+                          <col style={{ width: "6.5rem" }} />
+                          <col style={{ width: "6.5rem" }} />
+                          <col style={{ width: "6.5rem" }} />
+                          <col style={{ width: "6rem" }} />
+                          <col style={{ width: "7rem" }} />
+                          <col style={{ width: "7rem" }} />
+                          <col style={{ width: "5.5rem" }} />
+                          <col style={{ width: "11rem" }} />
+                        </colgroup>
                         <thead>
-                          <tr className="text-gray-500 border-b border-gray-700">
-                            <th className="text-left py-2 px-3">Run</th>
-                            <th className="text-left py-2 px-3">Prompt</th>
-                            <th className="text-left py-2 px-3">Model Used</th>
-                            <th className="text-center py-2 px-3">Split</th>
-                            <th className="text-right py-2 px-3">Accuracy</th>
-                            <th className="text-right py-2 px-3">Precision</th>
-                            <th className="text-right py-2 px-3">Recall</th>
-                            <th className="text-right py-2 px-3">F1</th>
-                            <th className="text-right py-2 px-3">Prevalence</th>
-                            <th className="text-right py-2 px-3">Parse Fail</th>
-                            <th className="text-right py-2 px-3">Images</th>
-                            <th className="text-left py-2 px-3">Date</th>
+                          <tr>
+                            <th className="app-table-col-label">Run</th>
+                            <th className="app-table-col-label">Prompt</th>
+                            <th className="app-table-col-label">Model Used</th>
+                            <th className="app-table-col-center">Split</th>
+                            <th className="app-table-col-label">Accuracy</th>
+                            <th className="app-table-col-label">Precision</th>
+                            <th className="app-table-col-label">Recall</th>
+                            <th className="app-table-col-label">F1</th>
+                            <th className="app-table-col-label">Prevalence</th>
+                            <th className="app-table-col-label">Parse Fail</th>
+                            <th className="app-table-col-label">Images</th>
+                            <th className="app-table-col-label">Date</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -489,8 +516,8 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                             const rejected = Array.isArray(feedback.rejected) ? feedback.rejected : [];
                             return (
                               <Fragment key={r.run_id}>
-                                <tr className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                                  <td className="py-2 px-3 font-mono text-gray-400">
+                                <tr>
+                                  <td className="font-mono text-gray-400">
                                     <button
                                       onClick={() => toggleRunDetails(r.run_id)}
                                       className="text-left hover:text-blue-300"
@@ -499,39 +526,57 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                       {r.run_id.slice(0, 8)}
                                     </button>
                                   </td>
-                                  <td className="py-2 px-3">
+                                  <td>
                                     <span className="text-gray-300">{prompt?.version_label || "?"}</span>
                                   </td>
-                                  <td className="py-2 px-3 text-gray-400">
+                                  <td className="text-gray-400">
                                     {r.model_used || "—"}
                                   </td>
-                                  <td className="text-center py-2 px-3">
-                                    <span className={`px-1.5 py-0.5 rounded ${splitColor(r.split_type)}`}>
-                                      {splitTypeLabel(r.split_type)}
-                                    </span>
+                                  <td className="app-table-col-center">
+                                    <div className="app-table-center-slot">
+                                      <span className={splitTypeBadgeClass(r.split_type)}>
+                                        {splitTypeLabel(r.split_type)}
+                                      </span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3 text-gray-300">
-                                    {(m.accuracy * 100).toFixed(1)}%
+                                  <td className="app-table-col-label tabular-nums text-gray-300">
+                                    <div className="app-table-left-slot">
+                                      <span>{(m.accuracy * 100).toFixed(1)}%</span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3 text-blue-400">
-                                    {(m.precision * 100).toFixed(1)}%
+                                  <td className="app-table-col-label tabular-nums text-white">
+                                    <div className="app-table-left-slot">
+                                      <span>{(m.precision * 100).toFixed(1)}%</span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3 text-green-400">
-                                    {(m.recall * 100).toFixed(1)}%
+                                  <td className="app-table-col-label tabular-nums text-white">
+                                    <div className="app-table-left-slot">
+                                      <span>{(m.recall * 100).toFixed(1)}%</span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3 text-yellow-400 font-medium">
-                                    {(m.f1 * 100).toFixed(1)}%
+                                  <td className="app-table-col-label tabular-nums font-medium text-white">
+                                    <div className="app-table-left-slot">
+                                      <span>{(m.f1 * 100).toFixed(1)}%</span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3 text-purple-300">
-                                    {(m.prevalence * 100).toFixed(1)}%
+                                  <td className="app-table-col-label tabular-nums text-white">
+                                    <div className="app-table-left-slot">
+                                      <span>{(m.prevalence * 100).toFixed(1)}%</span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3">
-                                    <span className={m.parse_failure_rate > 0 ? "text-yellow-400" : "text-gray-500"}>
-                                      {(m.parse_failure_rate * 100).toFixed(1)}%
-                                    </span>
+                                  <td className="app-table-col-label tabular-nums">
+                                    <div className="app-table-left-slot">
+                                      <span className={m.parse_failure_rate > 0 ? "text-[var(--app-danger)]" : "text-gray-500"}>
+                                        {(m.parse_failure_rate * 100).toFixed(1)}%
+                                      </span>
+                                    </div>
                                   </td>
-                                  <td className="text-right py-2 px-3 text-gray-400">{m.total}</td>
-                                  <td className="py-2 px-3 text-gray-500">
+                                  <td className="app-table-col-label tabular-nums text-gray-400">
+                                    <div className="app-table-left-slot">
+                                      <span>{m.total}</span>
+                                    </div>
+                                  </td>
+                                  <td className="text-gray-500">
                                     {new Date(r.created_at).toLocaleString()}
                                   </td>
                                 </tr>
@@ -552,19 +597,19 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                           <div className="flex items-center gap-2">
                                             <button
                                               onClick={() => exportRunLogCsv(d, r, details?.predictions || [])}
-                                              className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                              className="app-btn app-btn-secondary px-2.5 py-1 text-[11px]"
                                             >
                                               Export Run Log CSV
                                             </button>
                                             <button
                                               onClick={() => exportRunLogJson(d, r, details?.predictions || [])}
-                                              className="text-[11px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-200"
+                                              className="app-btn app-btn-secondary px-2.5 py-1 text-[11px]"
                                             >
                                               Export Run Log JSON
                                             </button>
                                           </div>
                                           {(accepted.length > 0 || rejected.length > 0) && (
-                                            <div className="bg-gray-950/40 border border-gray-800 rounded p-2">
+                                            <div className="app-card p-2">
                                               <div className="text-[11px] text-gray-500 mb-1">
                                                 Prompt feedback log
                                               </div>
@@ -588,7 +633,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                     <div className="text-[11px] text-green-400 mb-1">Accepted ({accepted.length})</div>
                                                     <div className="space-y-1 max-h-36 overflow-auto">
                                                       {accepted.map((s: any, idx: number) => (
-                                                        <div key={`a_${idx}`} className="text-[11px] text-gray-300 bg-gray-900/60 rounded px-2 py-1">
+                                                        <div key={`a_${idx}`} className="rounded-xl bg-black/20 px-2 py-1 text-[11px] text-gray-300">
                                                           <div className="text-gray-500">{s.section}</div>
                                                           <div className="truncate" title={s.rationale || ""}>{s.rationale || "—"}</div>
                                                         </div>
@@ -602,7 +647,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                     <div className="text-[11px] text-gray-400 mb-1">Rejected ({rejected.length})</div>
                                                     <div className="space-y-1 max-h-36 overflow-auto">
                                                       {rejected.map((s: any, idx: number) => (
-                                                        <div key={`r_${idx}`} className="text-[11px] text-gray-300 bg-gray-900/60 rounded px-2 py-1">
+                                                        <div key={`r_${idx}`} className="rounded-xl bg-black/20 px-2 py-1 text-[11px] text-gray-300">
                                                           <div className="text-gray-500">{s.section}</div>
                                                           <div className="truncate" title={s.rationale || ""}>{s.rationale || "—"}</div>
                                                         </div>
@@ -617,33 +662,41 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                             </div>
                                           )}
                                         {Object.keys((m.segment_metrics || {}) as Record<string, any>).length > 0 && (
-                                          <details className="bg-gray-950/40 border border-gray-800 rounded p-2">
+                                          <details className="app-card p-2">
                                             <summary className="cursor-pointer text-[11px] text-blue-300 hover:text-blue-200">
-                                              Segment Breakdown
+                                              Attribute Breakdown
                                             </summary>
-                                            <div className="mt-2 overflow-x-auto">
-                                              <table className="w-full text-[11px]">
-                                                <thead className="text-gray-500 border-b border-gray-800">
+                                            <div className="mt-2 app-table-wrap overflow-x-auto">
+                                              <table className="app-table app-table-fixed text-[11px]">
+                                                <colgroup>
+                                                  <col style={{ width: "10rem" }} />
+                                                  <col style={{ width: "5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                </colgroup>
+                                                <thead>
                                                   <tr>
-                                                    <th className="text-left px-2 py-1">Segment</th>
-                                                    <th className="text-right px-2 py-1">Total</th>
-                                                    <th className="text-right px-2 py-1">Accuracy</th>
-                                                    <th className="text-right px-2 py-1">Precision</th>
-                                                    <th className="text-right px-2 py-1">Recall</th>
-                                                    <th className="text-right px-2 py-1">F1</th>
+                                                    <th className="app-table-col-label">Attribute</th>
+                                                    <th className="app-table-col-center">Total</th>
+                                                    <th className="app-table-col-center">Accuracy</th>
+                                                    <th className="app-table-col-center">Precision</th>
+                                                    <th className="app-table-col-center">Recall</th>
+                                                    <th className="app-table-col-center">F1</th>
                                                   </tr>
                                                 </thead>
                                                 <tbody>
                                                   {Object.entries((m.segment_metrics || {}) as Record<string, any>)
                                                     .sort(([, a], [, b]) => Number(b?.total || 0) - Number(a?.total || 0))
                                                     .map(([segment, metric]) => (
-                                                      <tr key={segment} className="border-b border-gray-900/60">
-                                                        <td className="px-2 py-1 text-gray-300">{segment}</td>
-                                                        <td className="px-2 py-1 text-right text-gray-400">{metric.total ?? 0}</td>
-                                                        <td className="px-2 py-1 text-right text-gray-300">{((metric.accuracy || 0) * 100).toFixed(1)}%</td>
-                                                        <td className="px-2 py-1 text-right text-blue-400">{((metric.precision || 0) * 100).toFixed(1)}%</td>
-                                                        <td className="px-2 py-1 text-right text-green-400">{((metric.recall || 0) * 100).toFixed(1)}%</td>
-                                                        <td className="px-2 py-1 text-right text-yellow-400">{((metric.f1 || 0) * 100).toFixed(1)}%</td>
+                                                      <tr key={segment}>
+                                                        <td className="text-gray-300">{segment}</td>
+                                                        <td className="app-table-col-center text-gray-400">{metric.total ?? 0}</td>
+                                                        <td className="app-table-col-center text-gray-300">{((metric.accuracy || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="app-table-col-center text-white">{((metric.precision || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="app-table-col-center text-white">{((metric.recall || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="app-table-col-center text-white">{((metric.f1 || 0) * 100).toFixed(1)}%</td>
                                                       </tr>
                                                     ))}
                                                 </tbody>
@@ -651,36 +704,49 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                             </div>
                                           </details>
                                         )}
-                                        <div className="max-h-72 overflow-auto border border-gray-800 rounded">
-                                          <table className="w-full text-xs">
-                                            <thead className="sticky top-0 bg-gray-900/90">
-                                              <tr className="text-gray-500 border-b border-gray-800">
-                                                <th className="text-left px-2 py-1.5">Preview</th>
-                                                <th className="text-left px-2 py-1.5">Image</th>
-                                                <th className="text-center px-2 py-1.5">AI Label</th>
-                                                <th className="text-right px-2 py-1.5">Confidence</th>
-                                                <th className="text-right px-2 py-1.5">Runtime (ms)</th>
-                                                <th className="text-left px-2 py-1.5">AI Description</th>
-                                                <th className="text-center px-2 py-1.5">Ground Truth (run snapshot)</th>
-                                                <th className="text-left px-2 py-1.5">Parse Reason</th>
-                                                <th className="text-left px-2 py-1.5">Fix Suggestion</th>
-                                                <th className="text-left px-2 py-1.5">Error Tag</th>
-                                                <th className="text-left px-2 py-1.5">Reviewer Note</th>
+                                        <div className="app-table-wrap max-h-72 overflow-auto">
+                                          <table className="app-table app-table-fixed text-xs">
+                                            <colgroup>
+                                              <col style={{ width: "7rem" }} />
+                                              <col style={{ width: "10rem" }} />
+                                              <col style={{ width: "9rem" }} />
+                                              <col style={{ width: "6.5rem" }} />
+                                              <col style={{ width: "7rem" }} />
+                                              <col style={{ width: "18rem" }} />
+                                              <col style={{ width: "10rem" }} />
+                                              <col style={{ width: "14rem" }} />
+                                              <col style={{ width: "14rem" }} />
+                                              <col style={{ width: "10rem" }} />
+                                              <col style={{ width: "14rem" }} />
+                                            </colgroup>
+                                            <thead className="sticky top-0">
+                                              <tr>
+                                                <th className="app-table-col-label">Preview</th>
+                                                <th className="app-table-col-label">Image</th>
+                                                <th className="app-table-col-center">AI Label</th>
+                                                <th className="app-table-col-center">Confidence</th>
+                                                <th className="app-table-col-center">Runtime (ms)</th>
+                                                <th className="app-table-col-label">AI Description</th>
+                                                <th className="app-table-col-center">Ground Truth (run snapshot)</th>
+                                                <th className="app-table-col-label">Parse Reason</th>
+                                                <th className="app-table-col-label">Fix Suggestion</th>
+                                                <th className="app-table-col-label">Error Tag</th>
+                                                <th className="app-table-col-label">Reviewer Note</th>
                                               </tr>
                                             </thead>
                                             <tbody>
                                               {(details?.predictions || []).map((p: any) => (
                                                 <tr
                                                   key={p.prediction_id}
-                                                  className={`border-b border-gray-900/70 ${
+                                                  className={`${
                                                     p.ground_truth_label &&
                                                     p.predicted_decision &&
                                                     p.predicted_decision !== p.ground_truth_label
-                                                      ? "bg-red-900/15"
+                                                      ? "app-table-row-alert"
                                                       : ""
                                                   }`}
                                                 >
-                                                  <td className="px-2 py-1.5">
+                                                  <td>
                                                     <img
                                                       src={p.image_uri}
                                                       alt={p.image_id}
@@ -699,54 +765,44 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                       }}
                                                     />
                                                   </td>
-                                                  <td className="px-2 py-1.5 font-mono text-gray-300">{p.image_id}</td>
-                                                  <td className="px-2 py-1.5 text-center text-gray-300">
-                                                    <span
-                                                      className={`px-1.5 py-0.5 rounded ${
-                                                        p.predicted_decision === "DETECTED"
-                                                          ? "bg-purple-900/30 text-purple-300"
-                                                          : p.predicted_decision === "NOT_DETECTED"
-                                                          ? "bg-emerald-900/30 text-emerald-300"
-                                                          : "bg-red-900/30 text-red-400"
-                                                      }`}
-                                                    >
-                                                      {p.predicted_decision || "PARSE_FAIL"}
-                                                    </span>
+                                                  <td className="font-mono text-gray-300">{p.image_id}</td>
+                                                  <td className="app-table-col-center text-gray-300">
+                                                    <div className="app-table-center-slot">
+                                                      <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
+                                                    </div>
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-right text-gray-300">
-                                                    {p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}
+                                                  <td className="app-table-col-center text-gray-300">
+                                                    <div className="app-table-center-slot">
+                                                      <span>{p.confidence != null ? Number(p.confidence).toFixed(2) : "—"}</span>
+                                                    </div>
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-right text-gray-300">
-                                                    {p.inference_runtime_ms != null ? Number(p.inference_runtime_ms) : "—"}
+                                                  <td className="app-table-col-center text-gray-300">
+                                                    <div className="app-table-center-slot">
+                                                      <span>{p.inference_runtime_ms != null ? Number(p.inference_runtime_ms) : "—"}</span>
+                                                    </div>
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-gray-400 max-w-[420px] truncate" title={p.evidence || ""}>
+                                                  <td className="text-gray-400 max-w-[420px] truncate" title={p.evidence || ""}>
                                                     {p.evidence || "—"}
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-center text-gray-300">
-                                                    {p.ground_truth_label ? (
-                                                      <span
-                                                        className={`px-1.5 py-0.5 rounded ${
-                                                          p.ground_truth_label === "DETECTED"
-                                                            ? "bg-purple-900/30 text-purple-300"
-                                                            : "bg-emerald-900/30 text-emerald-300"
-                                                        }`}
-                                                      >
-                                                        {p.ground_truth_label}
-                                                      </span>
-                                                    ) : (
-                                                      "UNSET"
-                                                    )}
+                                                  <td className="app-table-col-center text-gray-300">
+                                                    <div className="app-table-center-slot">
+                                                      {p.ground_truth_label ? (
+                                                        <DecisionBadge decision={p.ground_truth_label} />
+                                                      ) : (
+                                                        <span>UNSET</span>
+                                                      )}
+                                                    </div>
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-gray-300 max-w-[280px] truncate" title={p.parse_error_reason || ""}>
+                                                  <td className="text-gray-300 max-w-[280px] truncate" title={p.parse_error_reason || ""}>
                                                     {!p.parse_ok ? p.parse_error_reason || "Parse failed" : "—"}
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-gray-400 max-w-[320px] truncate" title={p.parse_fix_suggestion || ""}>
+                                                  <td className="text-gray-400 max-w-[320px] truncate" title={p.parse_fix_suggestion || ""}>
                                                     {!p.parse_ok ? p.parse_fix_suggestion || "Return strict JSON only." : "—"}
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-gray-300">
+                                                  <td className="text-gray-300">
                                                     {p.error_tag || "—"}
                                                   </td>
-                                                  <td className="px-2 py-1.5 text-gray-400 max-w-[300px] truncate" title={p.reviewer_note || ""}>
+                                                  <td className="text-gray-400 max-w-[300px] truncate" title={p.reviewer_note || ""}>
                                                     {p.reviewer_note || "—"}
                                                   </td>
                                                 </tr>
@@ -875,21 +931,11 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
               <div>
                 <label className="text-xs text-gray-400 block mb-1">AI Label</label>
                 <div>
-                  <span
-                    className={`text-sm px-1.5 py-0.5 rounded ${
-                      activePreviewPrediction.predicted_decision === "DETECTED"
-                        ? "bg-purple-900/30 text-purple-300"
-                        : activePreviewPrediction.predicted_decision === "NOT_DETECTED"
-                        ? "bg-emerald-900/30 text-emerald-300"
-                        : "bg-red-900/30 text-red-400"
-                    }`}
-                  >
-                    {activePreviewPrediction.predicted_decision || "PARSE_FAIL"}
-                  </span>
+                  <DecisionBadge decision={activePreviewPrediction.predicted_decision || "PARSE_FAIL"} />
                 </div>
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Confidence (0-1)</label>
+                <label className="text-xs text-gray-400 block mb-1">Confidence</label>
                 <div className="text-sm text-gray-300">
                   {activePreviewPrediction.confidence != null ? Number(activePreviewPrediction.confidence).toFixed(2) : "—"}
                 </div>
@@ -913,15 +959,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                 <label className="text-xs text-gray-400 block mb-1">Ground Truth (run snapshot)</label>
                 <div>
                   {activePreviewPrediction.ground_truth_label ? (
-                    <span
-                      className={`text-sm px-1.5 py-0.5 rounded ${
-                        activePreviewPrediction.ground_truth_label === "DETECTED"
-                          ? "bg-purple-900/30 text-purple-300"
-                          : "bg-emerald-900/30 text-emerald-300"
-                      }`}
-                    >
-                      {activePreviewPrediction.ground_truth_label}
-                    </span>
+                    <DecisionBadge decision={activePreviewPrediction.ground_truth_label} />
                   ) : (
                     <span className="text-sm text-gray-300">UNSET</span>
                   )}
@@ -988,15 +1026,6 @@ function ThresholdPill({
       )}
     </span>
   );
-}
-
-function splitColor(t: string) {
-  switch (t) {
-    case "GOLDEN": return "bg-yellow-900/30 text-yellow-400";
-    case "ITERATION": return "bg-blue-900/30 text-blue-400";
-    case "HELD_OUT_EVAL": return "bg-purple-900/30 text-purple-400";
-    default: return "bg-gray-800 text-gray-400";
-  }
 }
 
 function csvEscape(value: unknown): string {
