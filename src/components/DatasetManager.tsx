@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
-import type { Detection, Dataset, DatasetItem } from "@/types";
+import type { Detection, Dataset, DatasetItem, SplitType } from "@/types";
 import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 
@@ -16,7 +16,7 @@ export function DatasetManager({ detection }: { detection: Detection }) {
   const [loadingItems, setLoadingItems] = useState(false);
   const [savingDatasetMeta, setSavingDatasetMeta] = useState(false);
   const [editingDatasetName, setEditingDatasetName] = useState("");
-  const [editingDatasetSplit, setEditingDatasetSplit] = useState("ITERATION");
+  const [editingDatasetSplit, setEditingDatasetSplit] = useState<SplitType>("MASTER");
   const [savingItemId, setSavingItemId] = useState<string | null>(null);
   const [describingImages, setDescribingImages] = useState(false);
 
@@ -308,8 +308,9 @@ export function DatasetManager({ detection }: { detection: Detection }) {
                 <select
                   className="app-select px-2.5 py-1.5 text-sm"
                   value={editingDatasetSplit}
-                  onChange={(e) => setEditingDatasetSplit(e.target.value)}
+                  onChange={(e) => setEditingDatasetSplit(e.target.value as SplitType)}
                 >
+                  <option value="MASTER">MASTER</option>
                   <option value="ITERATION">TRAIN</option>
                   <option value="GOLDEN">TEST</option>
                   <option value="HELD_OUT_EVAL">EVALUATE</option>
@@ -339,6 +340,11 @@ export function DatasetManager({ detection }: { detection: Detection }) {
             {selectedDataset.split_type === "HELD_OUT_EVAL" && (
               <div className="mt-3 rounded-2xl border border-purple-400/20 bg-purple-500/10 px-3 py-2 text-xs text-purple-300">
                 This is a protected held-out dataset. Items cannot be edited.
+              </div>
+            )}
+            {selectedDataset.split_type === "MASTER" && (
+              <div className="mt-3 rounded-2xl border border-sky-400/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                MASTER dataset — use Saved Datasets to auto-split this curated source set into TRAIN, TEST, and EVALUATE datasets.
               </div>
             )}
             {selectedDataset.split_type === "GOLDEN" && (
@@ -469,7 +475,7 @@ function DatasetUploadForm({
   onUploaded: () => void;
 }) {
   const [name, setName] = useState("");
-  const [splitType, setSplitType] = useState<string>("ITERATION");
+  const [splitType, setSplitType] = useState<SplitType>("MASTER");
   const [mode, setMode] = useState<"json" | "csv" | "files">("files");
   const [jsonInput, setJsonInput] = useState("");
   const [csvInput, setCsvInput] = useState("");
@@ -649,8 +655,9 @@ function DatasetUploadForm({
           <select
             className="app-select"
             value={splitType}
-            onChange={(e) => setSplitType(e.target.value)}
+            onChange={(e) => setSplitType(e.target.value as SplitType)}
           >
+            <option value="MASTER">MASTER — source dataset for labeling and image attributes</option>
             <option value="ITERATION">TRAIN — for prompt development, corrections via HIL</option>
             <option value="GOLDEN">TEST — fixed regression gate set</option>
             <option value="HELD_OUT_EVAL">EVALUATE — protected final evaluation</option>

@@ -1,7 +1,7 @@
 // ============ Core Enums ============
 
 export type Decision = "DETECTED" | "NOT_DETECTED";
-export type SplitType = "GOLDEN" | "ITERATION" | "HELD_OUT_EVAL" | "CUSTOM";
+export type SplitType = "MASTER" | "GOLDEN" | "ITERATION" | "HELD_OUT_EVAL" | "CUSTOM";
 export type PrimaryMetric = "precision" | "recall" | "f1";
 export type DetectionCategory = "INCORRECT_CAPTURE" | "HAZARD_IDENTIFICATION";
 export type ErrorTag =

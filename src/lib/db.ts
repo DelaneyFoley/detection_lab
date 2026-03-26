@@ -61,7 +61,7 @@ function initSchema(db: Database.Database) {
       dataset_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       detection_id TEXT,
-      split_type TEXT NOT NULL CHECK(split_type IN ('GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
+      split_type TEXT NOT NULL CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
       dataset_hash TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -157,7 +157,7 @@ function initSchema(db: Database.Database) {
   `);
 
   ensureDatasetItemColumns(db);
-  ensureNullableDatasetDetectionId(db);
+  ensureDatasetTableShape(db);
   ensureDetectionColumns(db);
   ensureNullableGroundTruthColumns(db);
   ensureRunsColumns(db);
@@ -165,10 +165,14 @@ function initSchema(db: Database.Database) {
   ensurePredictionRuntimeColumns(db);
 }
 
-function ensureNullableDatasetDetectionId(db: Database.Database) {
+function ensureDatasetTableShape(db: Database.Database) {
   const columns = db.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string; notnull: number }>;
   const detectionIdColumn = columns.find((c) => c.name === "detection_id");
-  if (!detectionIdColumn || detectionIdColumn.notnull === 0) return;
+  const tableSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'datasets'")
+    .get() as { sql?: string } | undefined;
+  const hasMasterSplit = String(tableSqlRow?.sql || "").includes("'MASTER'");
+  if (detectionIdColumn?.notnull === 0 && hasMasterSplit) return;
 
   db.exec(`
     PRAGMA foreign_keys = OFF;
@@ -178,7 +182,7 @@ function ensureNullableDatasetDetectionId(db: Database.Database) {
       dataset_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       detection_id TEXT,
-      split_type TEXT NOT NULL CHECK(split_type IN ('GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
+      split_type TEXT NOT NULL CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
       dataset_hash TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,

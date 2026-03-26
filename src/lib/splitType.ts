@@ -1,5 +1,21 @@
+import type { SplitType } from "@/types";
+
+export const DATASET_SPLIT_TYPES: SplitType[] = [
+  "MASTER",
+  "ITERATION",
+  "GOLDEN",
+  "HELD_OUT_EVAL",
+  "CUSTOM",
+];
+
+export function isDatasetSplitType(value: string): value is SplitType {
+  return DATASET_SPLIT_TYPES.includes(value as SplitType);
+}
+
 export function splitTypeLabel(splitType: string): string {
   switch (splitType) {
+    case "MASTER":
+      return "MASTER";
     case "ITERATION":
       return "TRAIN";
     case "GOLDEN":
@@ -15,6 +31,8 @@ export function splitTypeLabel(splitType: string): string {
 
 export function splitTypeBadgeClass(splitType: string): string {
   switch (splitType) {
+    case "MASTER":
+      return "app-pill app-pill-master";
     case "ITERATION":
       return "app-pill app-pill-train";
     case "GOLDEN":

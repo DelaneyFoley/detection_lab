@@ -10,6 +10,7 @@ export interface DataStore {
 export interface FileStore {
   ensureDatasetUploadDir(datasetId: string): Promise<string>;
   writeDatasetFile(datasetId: string, fileName: string, content: Buffer): Promise<string>;
+  copyLocalUriToDataset(datasetId: string, sourceUri: string, fileName?: string): Promise<string>;
   removeDatasetUploadDir(datasetId: string): Promise<void>;
   removeLocalUri(uri: string): Promise<void>;
   renameLocalUri(oldUri: string, newUri: string): Promise<string>;

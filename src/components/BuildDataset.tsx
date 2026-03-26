@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
-import type { Dataset, DatasetItem, Detection, PromptVersion } from "@/types";
+import type { Dataset, DatasetItem, Detection, PromptVersion, SplitType } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import { InfoTip } from "@/components/shared/InfoTip";
@@ -30,7 +30,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   const [selectedExistingDatasetId, setSelectedExistingDatasetId] = useState("");
 
   const [datasetName, setDatasetName] = useState("");
-  const [splitType, setSplitType] = useState<"" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT">("");
+  const [splitType, setSplitType] = useState<"" | SplitType | "AUTO_SPLIT">("");
   const [rows, setRows] = useState<BuildRow[]>([]);
   const [buildInputMode, setBuildInputMode] = useState<"files" | "excel" | "json">("files");
   const [excelFileName, setExcelFileName] = useState("");
@@ -93,12 +93,13 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         : Array.isArray(datasetPayload?.items)
           ? (datasetPayload.items as Dataset[])
           : [];
+      const runnableDatasetRows = datasetRows.filter((dataset) => dataset.split_type !== "MASTER");
       setPrompts(promptRows);
-      setDatasets(datasetRows);
+      setDatasets(runnableDatasetRows);
       if (promptRows[0]?.prompt_version_id) {
         setSelectedPromptId((prev) => prev || promptRows[0].prompt_version_id);
       }
-      setSelectedExistingDatasetId((prev) => (datasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
+      setSelectedExistingDatasetId((prev) => (runnableDatasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
     };
     loadData();
   }, [detection, refreshCounter]);
@@ -152,8 +153,11 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     [mode, rows, datasetName, splitType]
   );
   const canRun = useMemo(
-    () => !!detection && !!selectedPromptId && (mode === "load" ? !!selectedExistingDatasetId : canSave),
-    [detection, selectedPromptId, mode, selectedExistingDatasetId, canSave]
+    () =>
+      !!detection &&
+      !!selectedPromptId &&
+      (mode === "load" ? !!selectedExistingDatasetId : canSave && splitType !== "MASTER"),
+    [detection, selectedPromptId, mode, selectedExistingDatasetId, canSave, splitType]
   );
   const selectedBuildFileCount = useMemo(() => rows.filter((r) => !!r.file).length, [rows]);
 
@@ -287,8 +291,14 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   };
 
   const createDatasetOnly = async () => {
-    if (splitType !== "ITERATION" && splitType !== "GOLDEN" && splitType !== "HELD_OUT_EVAL") {
-      throw new Error("Select TRAIN, TEST, or EVAL to save a single dataset.");
+    if (
+      splitType !== "MASTER" &&
+      splitType !== "ITERATION" &&
+      splitType !== "GOLDEN" &&
+      splitType !== "HELD_OUT_EVAL" &&
+      splitType !== "CUSTOM"
+    ) {
+      throw new Error("Select MASTER, TRAIN, TEST, EVALUATE, or CUSTOM to save a dataset.");
     }
     const validation = validateImageIds(rows);
     if (!validation.ok) throw new Error(validation.error);
@@ -701,16 +711,22 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                   }`}
                   value={splitType}
                   onChange={(e) =>
-                    setSplitType(e.target.value as "" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT")
+                    setSplitType(e.target.value as "" | SplitType | "AUTO_SPLIT")
                   }
                 >
                   <option value="">Select split type</option>
+                  <option value="MASTER">MASTER</option>
                   <option value="ITERATION">TRAIN</option>
                   <option value="GOLDEN">TEST</option>
-                  <option value="HELD_OUT_EVAL">EVAL</option>
-                  <option value="AUTO_SPLIT">AUTO-SPLIT</option>
+                  <option value="HELD_OUT_EVAL">EVALUATE</option>
+                  <option value="CUSTOM">CUSTOM</option>
                 </select>
                 {!splitType && <p className="mt-1 text-[11px] text-red-400">Split type is required.</p>}
+                {splitType === "MASTER" && (
+                  <p className="mt-1 text-[11px] text-gray-400">
+                    MASTER datasets are curated source sets. Save here, then auto-split from Saved Datasets to create TRAIN, TEST, and EVALUATE.
+                  </p>
+                )}
               </div>
             </>
           )}

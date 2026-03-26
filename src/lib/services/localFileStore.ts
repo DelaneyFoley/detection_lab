@@ -16,6 +16,16 @@ class LocalFileStore implements FileStore {
     return this.absPathToLocalUri(absPath);
   }
 
+  async copyLocalUriToDataset(datasetId: string, sourceUri: string, fileName?: string): Promise<string> {
+    const sourceAbs = this.localUriToAbsPath(sourceUri);
+    if (!sourceAbs) return sourceUri;
+    const dir = await this.ensureDatasetUploadDir(datasetId);
+    const nextFileName = fileName || path.basename(sourceAbs);
+    const absPath = path.join(dir, nextFileName);
+    await fs.copyFile(sourceAbs, absPath);
+    return this.absPathToLocalUri(absPath);
+  }
+
   async removeDatasetUploadDir(datasetId: string): Promise<void> {
     const dir = path.join(process.cwd(), "public", "uploads", "datasets", datasetId);
     await fs.rm(dir, { recursive: true, force: true });

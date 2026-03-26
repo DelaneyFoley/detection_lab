@@ -18,8 +18,8 @@
   --app-accent: #2f6fff;
   --app-accent-strong: #1f56d8;
   --app-accent-soft: rgba(47, 111, 255, 0.18);
-  --app-not-detected: #5cb8ff;
-  --app-not-detected-soft: rgba(92, 184, 255, 0.18);
+  --app-not-detected: #7fd1ff;
+  --app-not-detected-soft: rgba(127, 209, 255, 0.18);
   --app-purple: #b269ff;
   --app-purple-soft: rgba(178, 105, 255, 0.18);
   --app-success: #2fe3aa;
@@ -57,8 +57,8 @@ html {
   --app-accent: #2f6fff;
   --app-accent-strong: #2559cf;
   --app-accent-soft: rgba(47, 111, 255, 0.12);
-  --app-not-detected: #4da7f2;
-  --app-not-detected-soft: rgba(77, 167, 242, 0.14);
+  --app-not-detected: #53b4f8;
+  --app-not-detected-soft: rgba(83, 180, 248, 0.14);
   --app-purple: #8f58dd;
   --app-purple-soft: rgba(143, 88, 221, 0.12);
   --app-success: #1d9870;
@@ -575,7 +575,7 @@ select optgroup {
   border-color: color-mix(in srgb, var(--app-not-detected) 64%, transparent);
   background: var(--app-not-detected-soft);
   color: var(--app-not-detected);
-  box-shadow: 0 0 16px rgba(92, 184, 255, 0.12);
+  box-shadow: 0 0 16px rgba(127, 209, 255, 0.12);
 }
 
 .app-badge-success {
@@ -677,6 +677,12 @@ select optgroup {
   border-color: rgba(66, 190, 255, 0.24);
   background: rgba(8, 43, 76, 0.9);
   color: #67d1ff;
+}
+
+.app-pill-master {
+  border-color: rgba(78, 208, 168, 0.24);
+  background: rgba(13, 61, 51, 0.9);
+  color: #7df0cb;
 }
 
 .app-pill-test {

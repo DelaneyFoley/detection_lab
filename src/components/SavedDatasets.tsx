@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
-import type { Dataset, DatasetItem, Detection } from "@/types";
+import type { Dataset, DatasetItem, Detection, SplitType } from "@/types";
 import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
@@ -20,10 +20,11 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [datasetItems, setDatasetItems] = useState<DatasetItem[]>([]);
   const [editingName, setEditingName] = useState("");
   const [editingDetectionId, setEditingDetectionId] = useState("");
-  const [editingSplit, setEditingSplit] = useState("ITERATION");
+  const [editingSplit, setEditingSplit] = useState<SplitType>("MASTER");
   const [selectedPreviewIndex, setSelectedPreviewIndex] = useState<number | null>(null);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
   const [isSavingDetails, setIsSavingDetails] = useState(false);
+  const [autoSplittingMaster, setAutoSplittingMaster] = useState(false);
   const [itemSortBy, setItemSortBy] = useState<"image_id" | "ground_truth_label">("image_id");
   const [itemSortDir, setItemSortDir] = useState<"asc" | "desc">("asc");
   const [appendingImages, setAppendingImages] = useState(false);
@@ -361,6 +362,91 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     URL.revokeObjectURL(url);
   };
 
+  const autoSplitMasterDataset = async () => {
+    if (!selectedDataset || selectedDataset.split_type !== "MASTER") return;
+
+    const imageIdValidation = validateDatasetItemImageIds(datasetItems);
+    if (!imageIdValidation.ok) {
+      notify({ message: imageIdValidation.error, tone: "error" });
+      return;
+    }
+    if (datasetItems.length === 0) {
+      notify({ message: "MASTER dataset must contain images before it can be split.", tone: "error" });
+      return;
+    }
+
+    const unlabeled = datasetItems.find((item) => !item.ground_truth_label);
+    if (unlabeled) {
+      notify({
+        message: `Every MASTER item needs a ground-truth label before auto-splitting. Missing label on ${unlabeled.image_id}.`,
+        tone: "error",
+      });
+      return;
+    }
+
+    const baseName = deriveMasterSplitBaseName(selectedDataset.name);
+    const derivedNames = [`${baseName} (TRAIN)`, `${baseName} (TEST)`, `${baseName} (EVALUATE)`];
+    const duplicateNames = derivedNames.filter((name) =>
+      datasets.some((dataset) => dataset.dataset_id !== selectedDataset.dataset_id && dataset.name === name)
+    );
+
+    const confirmed = await confirm({
+      title: "Auto-Split MASTER Dataset",
+      message:
+        duplicateNames.length > 0
+          ? `This will keep "${selectedDataset.name}" as MASTER and create TRAIN, TEST, and EVALUATE datasets. Matching dataset names already exist: ${duplicateNames.join(", ")}. Continue anyway?`
+          : `This will keep "${selectedDataset.name}" as MASTER and create TRAIN, TEST, and EVALUATE datasets from its current labels and image attributes.`,
+      confirmLabel: "Create Split Datasets",
+    });
+    if (!confirmed) return;
+
+    setAutoSplittingMaster(true);
+    try {
+      const res = await fetch("/api/datasets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "create_split_datasets",
+          name_prefix: baseName,
+          detection_id: selectedDataset.detection_id,
+          items: datasetItems.map((item) => ({
+            image_id: item.image_id.trim(),
+            image_uri: item.image_uri,
+            image_description: item.image_description || "",
+            ground_truth_label: item.ground_truth_label,
+            segment_tags: normalizeSegmentTags(item.segment_tags),
+          })),
+        }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(payload?.error || "Failed to auto-split MASTER dataset");
+      }
+
+      await loadDatasets();
+      await loadDatasetItems(selectedDataset.dataset_id);
+      triggerRefresh();
+
+      const created = Array.isArray(payload?.created) ? payload.created : [];
+      const summary = created
+        .map((row: any) => `${splitTypeLabel(String(row?.split_type || ""))}=${Number(row?.size || 0)}`)
+        .join(", ");
+      notify({
+        message: summary
+          ? `Created split datasets from MASTER: ${summary}.`
+          : "Created split datasets from MASTER.",
+        tone: "success",
+      });
+    } catch (error) {
+      notify({
+        message: error instanceof Error ? error.message : "Failed to auto-split MASTER dataset",
+        tone: "error",
+      });
+    } finally {
+      setAutoSplittingMaster(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="app-page-header">
@@ -449,6 +535,15 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               <h3 className="text-lg font-semibold text-gray-100">{selectedDataset.name}</h3>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              {selectedDataset.split_type === "MASTER" && !isEditingDetails && (
+                <button
+                  onClick={() => void autoSplitMasterDataset()}
+                  disabled={autoSplittingMaster || datasetItems.length === 0}
+                  className="app-btn app-btn-success app-btn-md disabled:opacity-50"
+                >
+                  {autoSplittingMaster ? "Auto-Splitting..." : "Auto-Split MASTER"}
+                </button>
+              )}
               <button
                 onClick={() => {
                   if (isEditingDetails) {
@@ -534,8 +629,9 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 <select
                   className="app-select"
                   value={editingSplit}
-                  onChange={(e) => setEditingSplit(e.target.value)}
+                  onChange={(e) => setEditingSplit(e.target.value as SplitType)}
                 >
+                  <option value="MASTER">MASTER</option>
                   <option value="GOLDEN">TEST</option>
                   <option value="ITERATION">TRAIN</option>
                   <option value="HELD_OUT_EVAL">EVALUATE</option>
@@ -805,9 +901,10 @@ function GlobalDatasetUploadForm({
   detections: Detection[];
   onUploaded: () => void;
 }) {
+  type UploadDatasetSplitType = "" | SplitType | "AUTO_SPLIT";
   const [detectionId, setDetectionId] = useState<string>("");
   const [name, setName] = useState("");
-  const [splitType, setSplitType] = useState<"" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT">("");
+  const [splitType, setSplitType] = useState<UploadDatasetSplitType>("MASTER");
   const [mode, setMode] = useState<"json" | "excel" | "files">("files");
   const [jsonInput, setJsonInput] = useState("");
   const [jsonRows, setJsonRows] = useState<
@@ -954,7 +1051,7 @@ function GlobalDatasetUploadForm({
           }
         } else {
           if (!splitType) {
-            setError("Choose TRAIN, TEST, or EVALUATE split.");
+            setError("Choose MASTER, TRAIN, TEST, EVALUATE, or CUSTOM split.");
             return;
           }
           const formData = new FormData();
@@ -1003,7 +1100,7 @@ function GlobalDatasetUploadForm({
           if (!res.ok) throw new Error(payload?.error || "Failed to create split datasets");
         } else {
           if (!splitType) {
-            setError("Choose TRAIN, TEST, or EVALUATE split.");
+            setError("Choose MASTER, TRAIN, TEST, EVALUATE, or CUSTOM split.");
             return;
           }
           const res = await fetch("/api/datasets", {
@@ -1061,7 +1158,7 @@ function GlobalDatasetUploadForm({
           if (!res.ok) throw new Error(payload?.error || "Failed to create split datasets");
         } else {
           if (!splitType) {
-            setError("Choose TRAIN, TEST, or EVALUATE split.");
+            setError("Choose MASTER, TRAIN, TEST, EVALUATE, or CUSTOM split.");
             return;
           }
           const res = await fetch("/api/datasets", {
@@ -1118,13 +1215,14 @@ function GlobalDatasetUploadForm({
           <select
             className="app-select"
             value={splitType}
-            onChange={(e) => setSplitType(e.target.value as "" | "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL" | "AUTO_SPLIT")}
+            onChange={(e) => setSplitType(e.target.value as UploadDatasetSplitType)}
           >
             <option value="">Select split type</option>
+            <option value="MASTER">MASTER</option>
             <option value="ITERATION">TRAIN</option>
             <option value="GOLDEN">TEST</option>
             <option value="HELD_OUT_EVAL">EVALUATE</option>
-            <option value="AUTO_SPLIT">AUTO-SPLIT</option>
+            <option value="CUSTOM">CUSTOM</option>
           </select>
         </div>
       </div>
@@ -1376,10 +1474,9 @@ function GlobalDatasetUploadForm({
 
       {error && <div className="text-xs text-red-400">{error}</div>}
 
-      {splitType === "AUTO_SPLIT" && (
+      {splitType === "MASTER" && (
         <p className="text-xs text-gray-400">
-          Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split with label stratification and attribute balancing.
-          All rows must have `ground_truth_label` set.
+          MASTER is the curated source dataset for labeling and image attributes. After it is fully labeled, use Auto-Split in Saved Datasets to create TRAIN, TEST, and EVALUATE datasets while keeping MASTER unchanged.
         </p>
       )}
 
@@ -1409,6 +1506,13 @@ function GlobalDatasetUploadForm({
 
 function sanitizeImageId(input: string) {
   return input.trim().replace(/[^a-zA-Z0-9_-]+/g, "_");
+}
+
+function deriveMasterSplitBaseName(name: string) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+\((MASTER|TRAIN|TEST|EVAL|EVALUATE)\)\s*$/i, "")
+    .trim();
 }
 
 function validateDatasetItemImageIds(

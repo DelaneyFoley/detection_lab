@@ -5,6 +5,7 @@ import path from "path";
 import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
 import { DatasetDeleteSchema } from "@/lib/schemas";
+import { isDatasetSplitType } from "@/lib/splitType";
 import { fileStore } from "@/lib/services";
 import { datasetRepository } from "@/lib/repositories";
 
@@ -70,6 +71,9 @@ export async function POST(req: NextRequest) {
       name = String(formData.get("name") || "").trim();
       detectionId = String(formData.get("detection_id") || "").trim() || null;
       splitType = String(formData.get("split_type") || "ITERATION").trim();
+      if (!isDatasetSplitType(splitType)) {
+        return NextResponse.json({ error: `Invalid split_type: ${splitType}` }, { status: 400 });
+      }
 
       const metaRaw = String(formData.get("items") || "[]");
       const itemMeta = JSON.parse(metaRaw) as Array<{
@@ -191,7 +195,7 @@ export async function POST(req: NextRequest) {
         allocateByRatios(notDetected);
 
         const now = new Date().toISOString();
-        const createDatasetWithItems = (
+        const createDatasetWithItems = async (
           splitType: "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL",
           splitItems: typeof normalized
         ) => {
@@ -204,7 +208,7 @@ export async function POST(req: NextRequest) {
             }))
           );
           const hash = crypto.createHash("sha256").update(hashContent).digest("hex").slice(0, 16);
-          const splitLabel = splitType === "ITERATION" ? "TRAIN" : splitType === "GOLDEN" ? "TEST" : "EVAL";
+          const splitLabel = splitType === "ITERATION" ? "TRAIN" : splitType === "GOLDEN" ? "TEST" : "EVALUATE";
           datasetRepository.createDataset({
             datasetId,
             name: `${namePrefix} (${splitLabel})`,
@@ -217,24 +221,34 @@ export async function POST(req: NextRequest) {
           });
 
           datasetRepository.insertDatasetItems(
-            splitItems.map((item) => ({
-              itemId: uuid(),
-              datasetId,
-              imageId: item.image_id,
-              imageUri: item.image_uri,
-              imageDescription: item.image_description || "",
-              segmentTagsJson: JSON.stringify(item.segment_tags || []),
-              groundTruthLabel: item.ground_truth_label,
-            }))
+            await Promise.all(
+              splitItems.map(async (item) => {
+                const localAbs = fileStore.localUriToAbsPath(item.image_uri);
+                const ext = localAbs ? path.extname(localAbs) : path.extname(item.image_uri || "");
+                const safeFilename = `${sanitizeName(item.image_id)}${ext.toLowerCase() || ".jpg"}`;
+                const imageUri = localAbs
+                  ? await fileStore.copyLocalUriToDataset(datasetId, item.image_uri, safeFilename)
+                  : item.image_uri;
+                return {
+                  itemId: uuid(),
+                  datasetId,
+                  imageId: item.image_id,
+                  imageUri,
+                  imageDescription: item.image_description || "",
+                  segmentTagsJson: JSON.stringify(item.segment_tags || []),
+                  groundTruthLabel: item.ground_truth_label,
+                };
+              })
+            )
           );
           return { dataset_id: datasetId, split_type: splitType, size: splitItems.length, name: `${namePrefix} (${splitLabel})` };
         };
 
-        const created = [
+        const created = await Promise.all([
           createDatasetWithItems("ITERATION", splits.ITERATION),
           createDatasetWithItems("GOLDEN", splits.GOLDEN),
           createDatasetWithItems("HELD_OUT_EVAL", splits.HELD_OUT_EVAL),
-        ];
+        ]);
 
         return NextResponse.json({
           created,
@@ -249,6 +263,9 @@ export async function POST(req: NextRequest) {
       name = body.name;
       detectionId = String(body.detection_id || "").trim() || null;
       splitType = body.split_type;
+      if (!isDatasetSplitType(String(splitType || ""))) {
+        return NextResponse.json({ error: `Invalid split_type: ${splitType}` }, { status: 400 });
+      }
       items = body.items || [];
     }
 
@@ -551,13 +568,17 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
   }
 
+  if (Object.prototype.hasOwnProperty.call(body, "split_type") && !isDatasetSplitType(String(body.split_type || ""))) {
+    return NextResponse.json({ error: `Invalid split_type: ${String(body.split_type || "")}` }, { status: 400 });
+  }
+
   datasetRepository.updateDatasetMeta(
     body.dataset_id,
     body.name ?? dataset.name,
     Object.prototype.hasOwnProperty.call(body, "detection_id")
       ? (String(body.detection_id || "").trim() || null)
       : (dataset.detection_id ?? null),
-    body.split_type ?? dataset.split_type,
+    Object.prototype.hasOwnProperty.call(body, "split_type") ? body.split_type : dataset.split_type,
     now
   );
 

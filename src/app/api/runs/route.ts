@@ -97,6 +97,12 @@ export async function POST(req: NextRequest) {
     // Fetch dataset
     const dataset = runRepository.getDatasetById(dataset_id);
     if (!dataset) return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
+    if (dataset.split_type === "MASTER") {
+      return NextResponse.json(
+        { error: "MASTER datasets are for labeling and curation only. Auto-split to TRAIN, TEST, and EVALUATE before running." },
+        { status: 400 }
+      );
+    }
     if (dataset.split_type === "HELD_OUT_EVAL" && !allowEvalRun) {
       return NextResponse.json(
         { error: "EVALUATE datasets can only be run from the Held-Out Eval tab." },
