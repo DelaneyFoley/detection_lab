@@ -4,4 +4,7 @@ export { promptRepository } from "@/lib/repositories/promptRepository";
 export { detectionRepository } from "@/lib/repositories/detectionRepository";
 export { settingsRepository } from "@/lib/repositories/settingsRepository";
 export { reviewRepository } from "@/lib/repositories/reviewRepository";
+export { reviewFlagRepository } from "@/lib/repositories/reviewFlagRepository";
 export { systemRepository } from "@/lib/repositories/systemRepository";
+export { qaRepository } from "@/lib/repositories/qaRepository";
+export { notificationRepository } from "@/lib/repositories/notificationRepository";

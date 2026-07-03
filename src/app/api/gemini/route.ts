@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { DEFAULT_PROMPT_FEEDBACK_TEMPLATE, renderPromptFeedbackTemplate } from "@/lib/adminPrompts";
+import { DEFAULT_PROMPT_FEEDBACK_TEMPLATE, DEFAULT_FEEDBACK_IMAGE_LIMITS, FEEDBACK_IMAGE_LIMIT_KEYS, renderPromptFeedbackTemplate } from "@/lib/adminPrompts";
 import { buildImagePart } from "@/lib/gemini";
 import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
@@ -20,7 +20,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
   }
 
-  // Cluster errors
+  // Load image limits from settings
+  const limitRows = settingsRepository.getByKeys(FEEDBACK_IMAGE_LIMIT_KEYS);
+  const limitMap = new Map(limitRows.map((r) => [r.key, r.value]));
+  const imageLimits = {
+    fp: parseInt(limitMap.get("feedback_fp_image_limit") || "", 10) || DEFAULT_FEEDBACK_IMAGE_LIMITS.feedback_fp_image_limit,
+    fn: parseInt(limitMap.get("feedback_fn_image_limit") || "", 10) || DEFAULT_FEEDBACK_IMAGE_LIMITS.feedback_fn_image_limit,
+    tp: limitMap.has("feedback_tp_image_limit") ? parseInt(limitMap.get("feedback_tp_image_limit")!, 10) : DEFAULT_FEEDBACK_IMAGE_LIMITS.feedback_tp_image_limit,
+    tn: limitMap.has("feedback_tn_image_limit") ? parseInt(limitMap.get("feedback_tn_image_limit")!, 10) : DEFAULT_FEEDBACK_IMAGE_LIMITS.feedback_tn_image_limit,
+    parseFail: parseInt(limitMap.get("feedback_parse_fail_image_limit") || "", 10) || DEFAULT_FEEDBACK_IMAGE_LIMITS.feedback_parse_fail_image_limit,
+  };
+
+  // Cluster predictions
   const falsePositives = predictions.filter(
     (p: any) => p.predicted_decision === "DETECTED" && (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED"
   );
@@ -29,37 +40,33 @@ export async function POST(req: NextRequest) {
   );
   const truePositives = predictions.filter(
     (p: any) => p.predicted_decision === "DETECTED" && (p.corrected_label || p.ground_truth_label) === "DETECTED"
-  ).slice(0, 3);
+  );
   const trueNegatives = predictions.filter(
     (p: any) => p.predicted_decision === "NOT_DETECTED" && (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED"
-  ).slice(0, 3);
+  );
 
   const errorTags = predictions
     .filter((p: any) => p.error_tag)
     .map((p: any) => ({ image_id: p.image_id, error_tag: p.error_tag, note: p.reviewer_note }));
   const trueParseFailures = predictions.filter((p: any) => !p.parse_ok && !isInferenceCallFailure(p));
 
+  // Text lists — send ALL FP/FN (no cap), no text-only for TP/TN
   const falsePositiveList =
     falsePositives
-      .slice(0, 5)
-      .map((p: any) => `- Image: ${p.image_id}, Evidence: "${p.evidence}", Confidence: ${p.confidence}`)
+      .map((p: any) => `- Image: ${p.image_id}, Evidence: "${p.evidence}", Confidence: ${p.confidence}${p.error_tag ? `, Tag: ${p.error_tag}` : ""}${p.reviewer_note ? `, Note: ${p.reviewer_note}` : ""}`)
       .join("\n") || "None";
   const falseNegativeList =
     falseNegatives
-      .slice(0, 5)
-      .map((p: any) => `- Image: ${p.image_id}, Evidence: "${p.evidence}", Confidence: ${p.confidence}`)
+      .map((p: any) => `- Image: ${p.image_id}, Evidence: "${p.evidence}", Confidence: ${p.confidence}${p.error_tag ? `, Tag: ${p.error_tag}` : ""}${p.reviewer_note ? `, Note: ${p.reviewer_note}` : ""}`)
       .join("\n") || "None";
-  const truePositiveList =
-    truePositives.map((p: any) => `- Image: ${p.image_id}, Evidence: "${p.evidence}"`).join("\n") || "None";
-  const trueNegativeList =
-    trueNegatives.map((p: any) => `- Image: ${p.image_id}, Evidence: "${p.evidence}"`).join("\n") || "None";
+  const truePositiveList = "See attached images below (if any).";
+  const trueNegativeList = "See attached images below (if any).";
   const errorTagList =
     errorTags.length > 0
       ? errorTags.map((t: any) => `- ${t.image_id}: ${t.error_tag} ${t.note ? "— " + t.note : ""}`).join("\n")
       : "None";
   const parseFailList =
     trueParseFailures
-      .slice(0, 5)
       .map(
         (p: any) =>
           `- Image: ${p.image_id}, Reason: ${p.parse_error_reason || "parse failure"}, Fix: ${p.parse_fix_suggestion || "tighten output JSON contract"}`
@@ -105,12 +112,12 @@ export async function POST(req: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: model_override || "gemini-2.5-flash" });
     const multimodalParts: any[] = [analysisPrompt];
-    const sampledForVision = samplePredictionsForVision(predictions);
+    const sampledForVision = samplePredictionsForVision(predictions, imageLimits);
     for (const p of sampledForVision) {
       multimodalParts.push(
         `\nImage Context: ${p.cluster} | image_id=${p.image_id} | predicted=${p.predicted_decision || "PARSE_FAIL"} | gt=${
           p.corrected_label || p.ground_truth_label || "UNSET"
-        } | parse_ok=${Boolean(p.parse_ok)}`
+        } | evidence=${p.evidence || "none"} | parse_ok=${Boolean(p.parse_ok)}${p.error_tag ? ` | error_tag=${p.error_tag}` : ""}${p.reviewer_note ? ` | reviewer_note=${p.reviewer_note}` : ""}`
       );
       const imageParts = await buildImagePart(String(p.image_uri || ""));
       if (imageParts.length > 0) {
@@ -136,20 +143,50 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function samplePredictionsForVision(predictions: any[]): any[] {
+function prioritizeByReviewerNote(items: any[]): any[] {
+  const withNotes = items.filter((p) => p.reviewer_note || p.error_tag);
+  const withoutNotes = items.filter((p) => !p.reviewer_note && !p.error_tag);
+  return [...withNotes, ...withoutNotes];
+}
+
+function samplePredictionsForVision(
+  predictions: any[],
+  limits: { fp: number; fn: number; tp: number; tn: number; parseFail: number }
+): any[] {
   const parseFails = predictions
     .filter((p) => !p.parse_ok && !isInferenceCallFailure(p))
-    .slice(0, 4)
+    .slice(0, limits.parseFail)
     .map((p) => ({ ...p, cluster: "parse_fail" }));
-  const fps = predictions
-    .filter((p) => p.parse_ok && p.predicted_decision === "DETECTED" && (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED")
-    .slice(0, 3)
+
+  const fpCandidates = prioritizeByReviewerNote(
+    predictions.filter((p) => p.parse_ok && p.predicted_decision === "DETECTED" && (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED")
+  );
+  const fps = fpCandidates
+    .slice(0, limits.fp)
     .map((p) => ({ ...p, cluster: "false_positive" }));
-  const fns = predictions
-    .filter((p) => p.parse_ok && p.predicted_decision === "NOT_DETECTED" && (p.corrected_label || p.ground_truth_label) === "DETECTED")
-    .slice(0, 3)
+
+  const fnCandidates = prioritizeByReviewerNote(
+    predictions.filter((p) => p.parse_ok && p.predicted_decision === "NOT_DETECTED" && (p.corrected_label || p.ground_truth_label) === "DETECTED")
+  );
+  const fns = fnCandidates
+    .slice(0, limits.fn)
     .map((p) => ({ ...p, cluster: "false_negative" }));
-  return [...parseFails, ...fps, ...fns].filter((p) => !!p.image_uri);
+
+  const tpCandidates = prioritizeByReviewerNote(
+    predictions.filter((p) => p.parse_ok && p.predicted_decision === "DETECTED" && (p.corrected_label || p.ground_truth_label) === "DETECTED")
+  );
+  const tps = tpCandidates
+    .slice(0, limits.tp)
+    .map((p) => ({ ...p, cluster: "true_positive" }));
+
+  const tnCandidates = prioritizeByReviewerNote(
+    predictions.filter((p) => p.parse_ok && p.predicted_decision === "NOT_DETECTED" && (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED")
+  );
+  const tns = tnCandidates
+    .slice(0, limits.tn)
+    .map((p) => ({ ...p, cluster: "true_negative" }));
+
+  return [...parseFails, ...fps, ...fns, ...tps, ...tns].filter((p) => !!p.image_uri);
 }
 
 function isInferenceCallFailure(prediction: any): boolean {

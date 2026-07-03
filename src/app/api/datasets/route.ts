@@ -4,20 +4,33 @@ import crypto from "crypto";
 import path from "path";
 import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
-import { DatasetDeleteSchema } from "@/lib/schemas";
+import { DatasetDeleteSchema, DatasetDuplicateSchema, DatasetAssignAnnotatorsSchema, DatasetFinalizeParentSchema } from "@/lib/schemas";
 import { isDatasetSplitType } from "@/lib/splitType";
 import { fileStore } from "@/lib/services";
-import { datasetRepository } from "@/lib/repositories";
+import { datasetRepository, qaRepository, notificationRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
   try {
     const detectionId = req.nextUrl.searchParams.get("detection_id");
     const datasetId = req.nextUrl.searchParams.get("dataset_id");
+    const childrenOf = req.nextUrl.searchParams.get("children_of");
     const includeUnassigned = req.nextUrl.searchParams.get("include_unassigned") === "1";
     const unassignedOnly = req.nextUrl.searchParams.get("unassigned") === "1";
     const search = parseSearch(req.nextUrl.searchParams.get("search"));
     const hasPagination = req.nextUrl.searchParams.has("page") || req.nextUrl.searchParams.has("page_size");
     const { page, pageSize } = parsePagination(req, { page: 1, pageSize: 50 });
+
+    if (childrenOf) {
+      const children = datasetRepository.getChildDatasets(childrenOf);
+      return NextResponse.json({ children });
+    }
+
+    const correctionsOf = req.nextUrl.searchParams.get("corrections");
+    if (correctionsOf) {
+      const corrections = datasetRepository.getCorrections(correctionsOf);
+      return NextResponse.json({ corrections });
+    }
+
     if (datasetId) {
       const { dataset, items } = datasetRepository.getDatasetWithItems(datasetId);
       return NextResponse.json({
@@ -99,6 +112,16 @@ export async function POST(req: NextRequest) {
       const metaValidation = validateAndNormalizeItemMetas(itemMeta);
       if (!metaValidation.ok) {
         return NextResponse.json({ error: metaValidation.error }, { status: 400 });
+      }
+
+      const formUploadIds = itemMeta.map((m) => String(m.image_id || "")).filter(Boolean);
+      const formDuplicates = datasetRepository.findDuplicateImageIds(formUploadIds);
+      if (formDuplicates.length > 0) {
+        const first = formDuplicates[0];
+        return NextResponse.json(
+          { error: `Duplicate image_id "${first.image_id}" already exists in dataset "${first.dataset_name}".` },
+          { status: 400 }
+        );
       }
 
       const savedItems: any[] = [];
@@ -274,6 +297,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: postValidation.error }, { status: 400 });
     }
     items = postValidation.items;
+
+    const uploadImageIds = items.map((i: any) => String(i.image_id || "")).filter(Boolean);
+    const duplicates = datasetRepository.findDuplicateImageIds(uploadImageIds);
+    if (duplicates.length > 0) {
+      const first = duplicates[0];
+      return NextResponse.json(
+        { error: `Duplicate image_id "${first.image_id}" already exists in dataset "${first.dataset_name}".` },
+        { status: 400 }
+      );
+    }
 
     const hashContent = JSON.stringify(
       items.map((i: any) => ({
@@ -498,7 +531,42 @@ export async function PUT(req: NextRequest) {
 
     datasetRepository.bulkUpdateDatasetItems(pendingUpdates);
     datasetRepository.refreshDatasetStats(datasetId, now);
+    datasetRepository.refreshItemsLabeledCount(datasetId);
+
+    const currentStatus = dataset.qa_status || "draft";
+    if (currentStatus === "assigned") {
+      qaRepository.updateQaStatus(datasetId, "in_annotation");
+    }
+
     return NextResponse.json({ ok: true, updated: pendingUpdates.length });
+  }
+
+  if (body.action === "update_attributes") {
+    const datasetId = String(body.dataset_id || "").trim();
+    if (!datasetId) {
+      return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
+    }
+    const dataset = datasetRepository.getDatasetById(datasetId);
+    if (!dataset) {
+      return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
+    }
+    const taxonomy = Array.isArray(body.segment_taxonomy) ? body.segment_taxonomy.map(String) : [];
+    datasetRepository.updateDatasetAttributes(datasetId, taxonomy);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "delete_item") {
+    if (!body.item_id) {
+      return NextResponse.json({ error: "item_id is required" }, { status: 400 });
+    }
+    const existing = datasetRepository.getDatasetItemById(body.item_id);
+    if (!existing) {
+      return NextResponse.json({ error: "Dataset item not found" }, { status: 404 });
+    }
+    datasetRepository.deleteDatasetItem(body.item_id);
+    await fileStore.removeLocalUri(existing.image_uri || "");
+    datasetRepository.refreshDatasetStats(existing.dataset_id, now);
+    return NextResponse.json({ ok: true });
   }
 
   if (body.item_id) {
@@ -542,21 +610,147 @@ export async function PUT(req: NextRequest) {
     });
 
     datasetRepository.refreshDatasetStats(existing.dataset_id, now);
+    datasetRepository.refreshItemsLabeledCount(existing.dataset_id);
+
+    const itemDataset = datasetRepository.getDatasetById(existing.dataset_id);
+    const itemCurrentStatus = itemDataset?.qa_status || "draft";
+    if (itemCurrentStatus === "assigned" && nextGroundTruth) {
+      qaRepository.updateQaStatus(existing.dataset_id, "in_annotation");
+    }
+
     return NextResponse.json({ ok: true });
   }
 
-  if (body.action === "delete_item") {
-    if (!body.item_id) {
-      return NextResponse.json({ error: "item_id is required" }, { status: 400 });
+  if (body.action === "assign_annotators") {
+    const parsed = DatasetAssignAnnotatorsSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Validation failed", details: parsed.error.issues }, { status: 400 });
     }
-    const existing = datasetRepository.getDatasetItemById(body.item_id);
-    if (!existing) {
-      return NextResponse.json({ error: "Dataset item not found" }, { status: 404 });
+    const data = parsed.data;
+    const parent = datasetRepository.getDatasetById(data.parent_dataset_id);
+    if (!parent) {
+      return NextResponse.json({ error: "Parent dataset not found" }, { status: 404 });
     }
-    datasetRepository.deleteDatasetItem(body.item_id);
-    await fileStore.removeLocalUri(existing.image_uri || "");
-    datasetRepository.refreshDatasetStats(existing.dataset_id, now);
-    return NextResponse.json({ ok: true });
+    const isParent = datasetRepository.isParentDataset(data.parent_dataset_id);
+    if (parent.qa_status !== "draft" && !isParent) {
+      return NextResponse.json({ error: "Dataset must be in draft status or already have children to assign annotators" }, { status: 400 });
+    }
+    const alreadyAssigned = qaRepository.getAnnotatorsAlreadyAssigned(data.parent_dataset_id);
+    const duplicates = data.annotators.filter((a) => alreadyAssigned.includes(a));
+    if (duplicates.length > 0) {
+      return NextResponse.json({ error: `Annotator(s) already assigned: ${duplicates.join(", ")}` }, { status: 400 });
+    }
+    const childIds = datasetRepository.batchCreateChildDatasets({
+      parentId: data.parent_dataset_id,
+      annotators: data.annotators,
+      resetLabels: data.reset_labels,
+      resetSegments: data.reset_segments,
+    });
+    for (let i = 0; i < childIds.length; i++) {
+      qaRepository.createLog({
+        datasetId: childIds[i],
+        action: "assigned",
+        actor: undefined,
+        details: { assigned_to: data.annotators[i] },
+      });
+    }
+    return NextResponse.json({ ok: true, created: childIds });
+  }
+
+  if (body.action === "finalize_parent") {
+    const parsed = DatasetFinalizeParentSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Validation failed", details: parsed.error.issues }, { status: 400 });
+    }
+    const data = parsed.data;
+    const parent = datasetRepository.getDatasetById(data.parent_dataset_id);
+    if (!parent) {
+      return NextResponse.json({ error: "Parent dataset not found" }, { status: 404 });
+    }
+    const children = datasetRepository.getChildDatasets(data.parent_dataset_id);
+    if (children.length === 0) {
+      return NextResponse.json({ error: "No child datasets to merge" }, { status: 400 });
+    }
+    const allApproved = children.every((c: any) => c.qa_status === "approved");
+    if (!allApproved) {
+      return NextResponse.json({ error: "All child datasets must be approved before finalizing" }, { status: 400 });
+    }
+    const conflicts = datasetRepository.getMergeConflicts(data.parent_dataset_id);
+    if (conflicts.length > 0 && (!data.resolutions || data.resolutions.length === 0)) {
+      return NextResponse.json({ conflicts });
+    }
+    datasetRepository.mergeChildrenIntoParent(data.parent_dataset_id, data.resolutions || []);
+
+    for (const child of children) {
+      if (child.assigned_to) {
+        notificationRepository.createNotification({
+          recipient: child.assigned_to,
+          type: "archive_complete",
+          datasetId: child.dataset_id,
+          title: "Dataset Finalized",
+          message: `Your annotations for "${child.name}" have been merged into the master dataset. Review your results to see how your labels compared.`,
+        });
+      }
+    }
+
+    return NextResponse.json({ ok: true, status: "finalized" });
+  }
+
+  if (body.action === "duplicate") {
+    const parsed = DatasetDuplicateSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Validation failed", details: parsed.error.issues }, { status: 400 });
+    }
+    const data = parsed.data;
+    const source = datasetRepository.getDatasetById(data.dataset_id);
+    if (!source) {
+      return NextResponse.json({ error: "Source dataset not found" }, { status: 404 });
+    }
+    const newId = uuid();
+
+    const baseName = source.name.replace(/\s*-\s*\[.*?\]\s*$/, "");
+    const sourceAssignee = source.assigned_to || null;
+    const dupAssignee = data.assigned_to || null;
+
+    let newName: string;
+    let renameSource = false;
+    let sourceNewName = "";
+
+    if (dupAssignee) {
+      newName = `${baseName} - [${dupAssignee}]`;
+      if (!sourceAssignee) {
+        renameSource = true;
+        sourceNewName = `${baseName} - [Unassigned]`;
+      } else if (!source.name.match(/\s*-\s*\[.*?\]\s*$/)) {
+        renameSource = true;
+        sourceNewName = `${baseName} - [${sourceAssignee}]`;
+      }
+    } else if (sourceAssignee) {
+      newName = `${baseName} - [Unassigned]`;
+      if (!source.name.match(/\s*-\s*\[.*?\]\s*$/)) {
+        renameSource = true;
+        sourceNewName = `${baseName} - [${sourceAssignee}]`;
+      }
+    } else {
+      newName = `${baseName} - [Unassigned 2]`;
+      renameSource = true;
+      sourceNewName = `${baseName} - [Unassigned 1]`;
+    }
+
+    datasetRepository.duplicateDataset({
+      sourceDatasetId: data.dataset_id,
+      newDatasetId: newId,
+      newName,
+      assignedTo: dupAssignee,
+      resetLabels: data.reset_labels,
+    });
+    if (renameSource) {
+      datasetRepository.updateDatasetMeta(data.dataset_id, sourceNewName, source.detection_id ?? null, source.split_type, now);
+    }
+    if (data.link) {
+      qaRepository.linkDatasets(data.dataset_id, newId);
+    }
+    return NextResponse.json({ ok: true, new_dataset_id: newId, new_name: newName });
   }
 
   if (!body.dataset_id) {
@@ -572,15 +766,30 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: `Invalid split_type: ${String(body.split_type || "")}` }, { status: 400 });
   }
 
+  const newName = body.name ?? dataset.name;
   datasetRepository.updateDatasetMeta(
     body.dataset_id,
-    body.name ?? dataset.name,
+    newName,
     Object.prototype.hasOwnProperty.call(body, "detection_id")
       ? (String(body.detection_id || "").trim() || null)
       : (dataset.detection_id ?? null),
     Object.prototype.hasOwnProperty.call(body, "split_type") ? body.split_type : dataset.split_type,
     now
   );
+
+  if (newName !== dataset.name) {
+    const children = datasetRepository.getChildDatasets(body.dataset_id);
+    for (const child of children) {
+      const annotatorSuffix = child.assigned_to ? ` - ${child.assigned_to}` : "";
+      datasetRepository.updateDatasetMeta(
+        child.dataset_id,
+        `${newName}${annotatorSuffix}`,
+        child.detection_id ?? null,
+        child.split_type,
+        now
+      );
+    }
+  }
 
   datasetRepository.refreshDatasetStats(body.dataset_id, now);
   return NextResponse.json({ ok: true });
@@ -716,11 +925,11 @@ function parseSegmentTags(value: unknown): string[] {
       return normalizeSegmentTags(value);
     }
   }
-  return ["Baseline"];
+  return [];
 }
 
 function normalizeSegmentTags(value: unknown): string[] {
-  if (value == null) return ["Baseline"];
+  if (value == null) return [];
   const rawParts = Array.isArray(value)
     ? value.map((v) => String(v || ""))
     : String(value)

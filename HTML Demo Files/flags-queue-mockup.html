@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flags Queue — Design Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --app-bg: #02060d;
+    --app-bg-accent: #081220;
+    --app-bg-elevated: #050b14;
+    --app-surface: rgba(10, 20, 33, 0.96);
+    --app-surface-strong: rgba(11, 22, 36, 0.98);
+    --app-surface-soft: rgba(13, 25, 41, 0.94);
+    --app-field-bg: rgba(9, 17, 28, 0.98);
+    --app-field-hover: rgba(12, 22, 35, 0.99);
+    --app-border: rgba(147, 173, 204, 0.24);
+    --app-border-strong: rgba(165, 189, 218, 0.34);
+    --app-text: #edf4fb;
+    --app-text-muted: #8fa2b8;
+    --app-text-subtle: #7387a0;
+    --app-accent: #2f6fff;
+    --app-purple: #b269ff;
+    --app-purple-soft: rgba(178, 105, 255, 0.18);
+    --app-not-detected: #7fd1ff;
+    --app-not-detected-soft: rgba(127, 209, 255, 0.18);
+    --app-success: #2fe3aa;
+    --app-warning: #f0b464;
+    --app-table-row-hover: rgba(51, 92, 132, 0.16);
+    --app-badge-bg: rgba(8, 15, 24, 0.9);
+    --app-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+  }
+  html { color-scheme: dark; }
+  body {
+    min-height: 100vh;
+    color: var(--app-text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background:
+      radial-gradient(circle at top center, rgba(41, 115, 177, 0.16), transparent 24%),
+      radial-gradient(circle at top left, rgba(25, 78, 132, 0.10), transparent 20%),
+      linear-gradient(180deg, var(--app-bg-elevated) 0%, var(--app-bg) 100%);
+  }
+  .app-card {
+    background: var(--app-surface-soft);
+    border: 1px solid var(--app-border-strong);
+    border-radius: 10px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.015);
+  }
+  .app-select {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--app-border-strong);
+    background: var(--app-field-bg);
+    color: var(--app-text);
+    transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  }
+  .app-select:hover {
+    border-color: color-mix(in srgb, var(--app-border-strong) 88%, white);
+    background: var(--app-field-hover);
+  }
+  .app-select:focus {
+    border-color: rgba(92,184,255,0.72);
+    box-shadow: 0 0 0 3px rgba(92,184,255,0.12);
+    outline: none;
+  }
+  select, select option { background-color: var(--app-field-bg); color: var(--app-text); }
+  .app-input {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--app-border-strong);
+    background: var(--app-field-bg);
+    color: var(--app-text);
+  }
+  .app-input:focus {
+    border-color: rgba(92,184,255,0.72);
+    box-shadow: 0 0 0 3px rgba(92,184,255,0.12);
+    outline: none;
+  }
+  .app-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    border: 1px solid transparent; border-radius: 8px;
+    padding: 0.46rem 0.78rem; font-size: 0.78rem; font-weight: 600; line-height: 1.1;
+    transition: transform 140ms ease, opacity 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
+    cursor: pointer;
+  }
+  .app-btn:hover { transform: translateY(-1px); }
+  .app-btn:active { transform: translateY(0); }
+  .app-btn:disabled { opacity: 0.55; transform: none; cursor: not-allowed; }
+  .app-btn-primary {
+    background: linear-gradient(180deg, #46aef8 0%, #2f92df 100%);
+    border-color: rgba(120, 192, 255, 0.20);
+    color: #f8fbff;
+  }
+  .app-btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #57baff 0%, #379de8 100%);
+    box-shadow: 0 12px 24px rgba(47, 146, 223, 0.22);
+  }
+  .app-btn-subtle {
+    background: rgba(42, 58, 77, 0.90);
+    border-color: rgba(145, 169, 199, 0.28);
+    color: #e7f0f8;
+  }
+  .app-btn-subtle:hover:not(:disabled) {
+    background: rgba(52, 71, 92, 0.96);
+    border-color: rgba(160, 184, 214, 0.42);
+    color: #fff;
+  }
+  .app-btn-secondary {
+    background: rgba(32, 46, 62, 0.85);
+    border-color: rgba(120, 140, 170, 0.28);
+    color: #e7f0f8;
+  }
+  .app-btn-secondary:hover:not(:disabled) {
+    background: rgba(42, 58, 77, 0.95);
+    border-color: rgba(160, 184, 214, 0.42);
+  }
+  .app-btn-sm { padding: 0.28rem 0.56rem; font-size: 0.72rem; }
+  .app-badge {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    border-radius: 6px;
+    border: 1px solid var(--app-border-strong);
+    background: var(--app-badge-bg);
+    padding: 0.22rem 0.58rem;
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em;
+  }
+  ::selection { background: rgba(92,184,255,0.28); color: #f8fbff; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(124,148,173,0.4) transparent; }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(124,148,173,0.3);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  .caret { transition: transform 160ms ease; display:inline-flex; }
+  .caret.open { transform: rotate(90deg); }
+  .hidden-init { display: none !important; }
+
+  /* Demo tips */
+  .demo-tip { position: relative; display: inline-flex; align-items: center; gap: 0.4rem; vertical-align: middle; }
+  .demo-tip-overlay { position: absolute; z-index: 30; gap: 0; }
+  .demo-tip-overlay.demo-tip-active { z-index: 55; }
+  .demo-tip-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 9999px;
+    border: 1px dashed rgba(234, 255, 0, 0.75);
+    background: rgba(234, 255, 0, 0.16);
+    color: #eaff00; font-size: 12px; font-weight: 700; line-height: 1;
+    cursor: pointer; padding: 0;
+    transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+    text-shadow: 0 0 6px rgba(234, 255, 0, 0.7);
+  }
+  .demo-tip-btn:hover { transform: scale(1.08); background: rgba(234, 255, 0, 0.32); border-color: rgba(234, 255, 0, 1); }
+  .demo-tip-btn[aria-expanded="true"] { background: rgba(234, 255, 0, 0.4); border-style: solid; color: #ffffff; }
+  .demo-tip-popover {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 60;
+    width: 340px; max-width: calc(100vw - 2rem);
+    padding: 0.85rem 0.9rem 0.75rem 0.9rem;
+    border-radius: 10px;
+    border: 1px dashed rgba(234, 255, 0, 0.6);
+    background: rgba(24, 24, 10, 0.98);
+    color: #fff9c4; font-size: 11.5px; line-height: 1.5;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(234, 255, 0, 0.08);
+  }
+  .demo-tip-popover::before {
+    content: "DEMO TIP";
+    display: inline-block;
+    font-size: 9.5px; letter-spacing: 0.14em; font-weight: 700;
+    color: #eaff00;
+    padding: 2px 6px; border-radius: 4px;
+    border: 1px solid rgba(234, 255, 0, 0.5);
+    background: rgba(234, 255, 0, 0.12);
+    margin-bottom: 8px;
+  }
+  .demo-tip-popover.demo-tip-popover-right { left: auto; right: 0; }
+  .demo-tip-popover p { margin: 0; }
+  .demo-tip-popover p + p { margin-top: 0.5rem; }
+  .demo-tip-popover ul { margin: 0.4rem 0 0 1.1rem; padding: 0; list-style: disc; }
+  .demo-tip-popover ul li { margin-top: 0.2rem; }
+  .demo-tip-popover strong { color: #faff9e; font-weight: 600; }
+  .demo-tip-close {
+    position: absolute; top: 4px; right: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 6px;
+    border: none; background: transparent;
+    color: rgba(234, 255, 0, 0.75); cursor: pointer;
+    font-size: 14px; line-height: 1;
+  }
+  .demo-tip-close:hover { background: rgba(234, 255, 0, 0.2); color: #ffffff; }
+
+  /* Mock image placeholder */
+  .mock-thumb {
+    background: linear-gradient(135deg, rgba(92,140,190,0.35), rgba(30,58,92,0.7));
+    display: inline-flex; align-items: center; justify-content: center;
+    color: rgba(220, 234, 250, 0.55);
+    font-family: ui-monospace, monospace;
+    letter-spacing: 0.06em;
+  }
+  .mock-viewport {
+    background: linear-gradient(135deg, rgba(56,90,132,0.28), rgba(20,42,68,0.75));
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(220, 234, 250, 0.55);
+    font-family: ui-monospace, monospace; font-size: 12px; letter-spacing: 0.1em;
+  }
+
+  /* Section label */
+  .section-label {
+    color: rgba(147, 173, 204, 0.7);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .section-divider { padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.06); }
+  .section-divider:first-child { border-top: none; padding-top: 0; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="mx-auto max-w-7xl px-6 py-8 space-y-6">
+
+  <!-- Page header -->
+  <div>
+    <h2 class="text-xl font-semibold text-[var(--app-text)]">Quality Assurance</h2>
+    <p class="mt-1 text-sm text-[var(--app-text-muted)]">Manage dataset QA workflows, inter-annotator agreement, and performance metrics.</p>
+  </div>
+
+  <!-- Sub-tab bar -->
+  <div class="flex gap-1 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-soft)] p-1">
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>
+      Pipeline
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors bg-[rgba(92,184,255,0.12)] text-[var(--app-text)] ring-1 ring-[rgba(182,223,255,0.22)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+      Flags Queue
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"></path><path d="M14 9.3V1.99"></path><path d="M8.5 2h7"></path><path d="M14 9.3a6.5 6.5 0 1 1-4 0"></path></svg>
+      QA Sampling
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+      Discrepancies
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+      Performance Metrics
+    </button>
+  </div>
+
+  <!-- Page-size row (mirrors real app — floated top-right, no filters) -->
+  <div class="flex justify-end relative">
+    <div class="relative">
+      <div class="demo-tip demo-tip-overlay" style="top: -10px; right: 100%; margin-right: 4px;">
+        <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+        <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog">
+          <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+          <p>Page size applies to <strong>both</strong> sections independently — Open and Resolved each maintain their own page cursor. Changing this resets both back to page&nbsp;1.</p>
+        </div>
+      </div>
+      <select id="pageSizeSel" class="app-select h-8 px-2 text-[11px]" style="width: 110px;">
+        <option value="10">10 / page</option>
+        <option value="25">25 / page</option>
+        <option value="50">50 / page</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Open Flags Section -->
+  <div class="app-card overflow-visible relative">
+    <div class="flex items-center justify-between px-4 py-3">
+      <div class="flex items-center gap-2 relative">
+        <button id="openToggle" class="flex items-center gap-2 text-left hover:opacity-80">
+          <span class="caret open" id="openCaret">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-[var(--app-text-subtle)]"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </span>
+          <span class="text-sm font-medium text-[var(--app-text)]">Open Flags</span>
+          <span id="openCountBadge" class="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300">0</span>
+        </button>
+        <div class="demo-tip demo-tip-overlay" style="top: -8px; left: 100%; margin-left: 6px;">
+          <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+          <div class="demo-tip-popover hidden-init" role="dialog" style="width: 380px;">
+            <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+            <p>Every flag raised by an annotator during labeling lands here — dataset-scoped so a reviewer can triage across all in-flight work in one place.</p>
+            <p>Click any row to open the resolution modal. Each row surfaces the essentials at a glance:</p>
+            <ul>
+              <li><strong>Thumbnail</strong> — instant visual identifier so reviewers don't need to open every flag.</li>
+              <li><strong>Image ID · annotator · dataset</strong> — where this came from and who raised it.</li>
+              <li><strong>Reason</strong> — the free-text note the annotator wrote when flagging.</li>
+              <li><strong>Flagged date</strong> — age of the flag drives triage order.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="openBody" class="border-t border-[var(--app-border)]">
+      <div id="openEmpty" class="hidden-init px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">No open flags.</div>
+      <div id="openList" class="max-h-[520px] overflow-y-auto"></div>
+      <div id="openPager" class="hidden-init flex items-center justify-between px-4 py-2 border-t border-[var(--app-border)] bg-[var(--app-surface-soft)]">
+        <span class="text-[11px] text-[var(--app-text-subtle)]">Page <span id="openPageNum">1</span> of <span id="openPageTotal">1</span></span>
+        <div class="flex gap-1">
+          <button id="openPrev" class="app-btn app-btn-subtle app-btn-sm disabled:opacity-30">Prev</button>
+          <button id="openNext" class="app-btn app-btn-subtle app-btn-sm disabled:opacity-30">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Resolved Flags Section -->
+  <div class="app-card overflow-visible relative">
+    <div class="flex items-center gap-2 px-4 py-3 relative">
+      <button id="resolvedToggle" class="flex items-center gap-2 text-left hover:opacity-80">
+        <span class="caret" id="resolvedCaret">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-[var(--app-text-subtle)]"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </span>
+        <span class="text-sm font-medium">Resolved Flags</span>
+        <span id="resolvedCountBadge" class="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-300">0</span>
+      </button>
+      <div class="demo-tip demo-tip-overlay" style="top: -8px; left: 220px;">
+        <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+        <div class="demo-tip-popover hidden-init" role="dialog" style="width: 360px;">
+          <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+          <p>Resolved rows stay collapsed by default so the queue reads as "what needs my attention." Expand when you're auditing a decision.</p>
+          <p>Each row shows the <strong>resolution action</strong>, <strong>resolver</strong>, and a snippet of the reviewer's note. Clicking opens the read-only diff view.</p>
+        </div>
+      </div>
+    </div>
+    <div id="resolvedBody" class="hidden-init border-t border-[var(--app-border)]">
+      <div id="resolvedEmpty" class="hidden-init px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">No resolved flags yet.</div>
+      <div id="resolvedList" class="max-h-[520px] overflow-y-auto"></div>
+      <div id="resolvedPager" class="hidden-init flex items-center justify-between px-4 py-2 border-t border-[var(--app-border)] bg-[var(--app-surface-soft)]">
+        <span class="text-[11px] text-[var(--app-text-subtle)]">Page <span id="resolvedPageNum">1</span> of <span id="resolvedPageTotal">1</span></span>
+        <div class="flex gap-1">
+          <button id="resolvedPrev" class="app-btn app-btn-subtle app-btn-sm disabled:opacity-30">Prev</button>
+          <button id="resolvedNext" class="app-btn app-btn-subtle app-btn-sm disabled:opacity-30">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ================= Resolve modal (open flag) ================= -->
+<div id="resolveModal" class="fixed inset-0 z-50 hidden-init items-start justify-center overflow-y-auto bg-black/80 p-3 md:p-6">
+  <div class="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto" role="dialog">
+    <!-- Header -->
+    <div class="mb-3 flex items-center justify-between">
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-subtle)]">Image Preview</div>
+        <div class="mt-1 text-xs text-gray-400">
+          Flag Review · <span id="resolveIndex">1</span>/<span id="resolveTotal">1</span> · <span id="resolveImageId">—</span>
+        </div>
+      </div>
+      <button class="app-btn app-btn-primary px-3 py-1.5 text-xs" onclick="closeResolveModal()">Close</button>
+    </div>
+
+    <!-- Grid: image + details -->
+    <div class="grid gap-x-3 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr]">
+      <!-- Toolbar -->
+      <div class="flex items-center justify-center gap-2 mb-2 lg:col-start-1 lg:row-start-1">
+        <button class="app-btn app-btn-secondary px-3 py-1.5 text-xs">Zoom -</button>
+        <button class="app-btn app-btn-secondary px-3 py-1.5 text-xs">Zoom +</button>
+        <button class="app-btn app-btn-secondary px-3 py-1.5 text-xs">Reset</button>
+        <button id="resolvePrev" class="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40">Prev</button>
+        <button id="resolveNext" class="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40">Next</button>
+      </div>
+
+      <!-- Image viewport -->
+      <div class="flex h-[52vh] items-center justify-center overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 lg:h-[70vh] lg:col-start-1 lg:row-start-2">
+        <div id="resolveViewport" class="mock-viewport h-full w-full rounded">image placeholder</div>
+      </div>
+
+      <!-- Details -->
+      <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-xs lg:col-start-2 lg:row-start-2">
+        <div class="space-y-4">
+          <!-- Identity -->
+          <div class="section-divider flex items-start justify-between gap-3">
+            <div>
+              <div class="section-label">Image ID</div>
+              <p class="mt-1 text-xs font-mono text-gray-200" id="resolveIdText">—</p>
+            </div>
+            <div class="text-right">
+              <p class="text-xs font-medium text-gray-100" id="resolveAnnotator">—</p>
+              <p class="text-[11px] text-gray-500" id="resolveDataset">—</p>
+            </div>
+          </div>
+
+          <!-- Flag Reason -->
+          <div class="section-divider">
+            <div class="border-l-2 border-amber-500 bg-amber-500/[0.06] rounded-r-md pl-3 pr-3 py-2.5">
+              <div class="flex items-center gap-2 mb-1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#f0b464" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+                <span class="text-[11px] uppercase tracking-[0.14em] font-semibold text-amber-400">Flag Reason</span>
+              </div>
+              <p class="text-xs text-gray-200" id="resolveReason">—</p>
+              <p class="text-[11px] text-amber-200/50 mt-1">Flagged <span id="resolveFlaggedDate">—</span></p>
+            </div>
+          </div>
+
+          <!-- Ground Truth Label -->
+          <div class="section-divider space-y-2">
+            <div class="section-label">Ground Truth Label</div>
+            <div class="flex items-center gap-3 flex-wrap" id="resolveLabelBtns">
+              <!-- injected -->
+            </div>
+          </div>
+
+          <!-- Attributes -->
+          <div class="section-divider space-y-2 relative">
+            <div class="section-label">Attributes</div>
+            <div id="resolveAttrChips" class="flex flex-wrap gap-2"></div>
+            <div class="demo-tip demo-tip-overlay" style="top: -8px; right: -8px;">
+              <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+              <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog" style="width: 340px;">
+                <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+                <p>The attribute palette is <strong>dataset-defined</strong> — whatever taxonomy the dataset owner configured on the dataset itself appears here. Toggle to add/remove; changes flow directly into the assessment below.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Reviewer Assessment (auto) -->
+          <div class="section-divider space-y-2 relative">
+            <div class="section-label">Reviewer Assessment</div>
+            <p class="text-[11px] text-gray-500">Set automatically from your label &amp; attribute edits</p>
+            <div id="resolveAssessment" class="space-y-1.5"></div>
+            <input id="resolveNote" class="app-input w-full px-2 py-1.5 text-sm mt-2" placeholder="Note (optional)..." />
+            <div class="demo-tip demo-tip-overlay" style="top: -8px; right: -8px;">
+              <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+              <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog" style="width: 360px;">
+                <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+                <p>The assessment is derived from your edits — no radio buttons for the reviewer to pick.</p>
+                <ul>
+                  <li>No changes → <strong>Accepted</strong></li>
+                  <li>Label only → <strong>Label corrected</strong></li>
+                  <li>Attributes only → <strong>Attributes corrected</strong></li>
+                  <li>Both → <strong>Label &amp; attributes corrected</strong></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resolve -->
+          <div class="section-divider">
+            <button id="resolveBtn" class="app-btn app-btn-primary text-xs w-full py-2.5">Resolve</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= View modal (resolved flag) ================= -->
+<div id="viewModal" class="fixed inset-0 z-50 hidden-init items-start justify-center overflow-y-auto bg-black/80 p-3 md:p-6">
+  <div class="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto" role="dialog">
+    <div class="mb-3 flex items-center justify-between">
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-subtle)]">Image Preview</div>
+        <div class="mt-1 text-xs text-gray-400">
+          Resolved Flag · <span id="viewIndex">1</span>/<span id="viewTotal">1</span> · <span id="viewImageId">—</span>
+        </div>
+      </div>
+      <button class="app-btn app-btn-primary px-3 py-1.5 text-xs" onclick="closeViewModal()">Close</button>
+    </div>
+
+    <div class="grid gap-x-3 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr]">
+      <div class="flex items-center justify-center gap-2 mb-2 lg:col-start-1 lg:row-start-1">
+        <button class="app-btn app-btn-secondary px-3 py-1.5 text-xs">Zoom -</button>
+        <button class="app-btn app-btn-secondary px-3 py-1.5 text-xs">Zoom +</button>
+        <button class="app-btn app-btn-secondary px-3 py-1.5 text-xs">Reset</button>
+        <button id="viewPrev" class="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40">Prev</button>
+        <button id="viewNext" class="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40">Next</button>
+      </div>
+
+      <div class="flex h-[52vh] items-center justify-center overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 lg:h-[70vh] lg:col-start-1 lg:row-start-2">
+        <div id="viewViewport" class="mock-viewport h-full w-full rounded">image placeholder</div>
+      </div>
+
+      <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-xs lg:col-start-2 lg:row-start-2">
+        <div class="space-y-4">
+          <!-- Identity -->
+          <div class="section-divider flex items-start justify-between gap-3">
+            <div>
+              <div class="section-label">Image ID</div>
+              <p class="mt-1 text-xs font-mono text-gray-200" id="viewIdText">—</p>
+            </div>
+            <div class="text-right">
+              <p class="text-xs font-medium text-gray-100" id="viewAnnotator">—</p>
+              <p class="text-[11px] text-gray-500" id="viewDataset">—</p>
+            </div>
+          </div>
+
+          <!-- Flag Reason -->
+          <div class="section-divider">
+            <div class="border-l-2 border-amber-500 bg-amber-500/[0.06] rounded-r-md pl-3 pr-3 py-2.5">
+              <div class="flex items-center gap-2 mb-1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#f0b464" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+                <span class="text-[11px] uppercase tracking-[0.14em] font-semibold text-amber-400">Flag Reason</span>
+              </div>
+              <p class="text-xs text-gray-200" id="viewReason">—</p>
+              <p class="text-[11px] text-amber-200/50 mt-1">Flagged <span id="viewFlaggedDate">—</span></p>
+            </div>
+          </div>
+
+          <!-- Ground Truth Label diff -->
+          <div class="section-divider space-y-2 relative">
+            <div class="flex items-center justify-between">
+              <div class="section-label">Ground Truth Label</div>
+              <span id="viewLabelUpdated" class="hidden-init text-[11px] text-gray-500">Updated on resolve</span>
+            </div>
+            <div id="viewLabelDiff" class="text-xs"></div>
+          </div>
+
+          <!-- Attributes diff -->
+          <div class="section-divider space-y-2 relative">
+            <div class="flex items-center justify-between">
+              <div class="section-label">Attributes</div>
+              <span id="viewAttrUpdated" class="hidden-init text-[11px] text-gray-500">Updated on resolve</span>
+            </div>
+            <div id="viewAttrDiff" class="flex flex-wrap gap-1.5"></div>
+            <div id="viewDiffLegend" class="hidden-init flex items-center gap-3 text-[10px] text-gray-500 mt-1">
+              <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm bg-emerald-500/60"></span>Added</span>
+              <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm bg-red-500/60"></span>Removed</span>
+            </div>
+            <div class="demo-tip demo-tip-overlay" style="top: -8px; right: -8px;">
+              <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+              <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog" style="width: 340px;">
+                <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+                <p>Diff renders the union of previous and new attributes: <strong>neutral</strong> chips stayed, <strong>green +</strong> chips were added on resolve, <strong>red − strikethrough</strong> chips were removed.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resolution -->
+          <div class="section-divider space-y-2">
+            <div class="section-label">Resolution</div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium bg-emerald-500/10 text-emerald-300">
+                <span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400"></span>Resolved
+              </span>
+              <span id="viewAction" class="text-xs text-gray-200">—</span>
+            </div>
+            <p id="viewResolvedMeta" class="text-[11px] text-gray-500">—</p>
+            <p id="viewNote" class="text-xs text-gray-300 whitespace-pre-wrap"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toastBar" style="display:none;" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-[70] rounded-md border border-emerald-500/40 bg-[rgba(24,50,42,0.95)] px-4 py-2 text-xs text-emerald-100 shadow-lg"></div>
+
+<script>
+  /* ---------- Fixtures ---------- */
+  const DATASETS = {
+    mcl_v1:   "MC - Laundry V1",
+    mc2_test: "MC2 TEST",
+    mct_v1:   "MC - Toilet V1",
+    mo_v1:    "Major Oxidation V1",
+  };
+
+  // Real attribute taxonomy from the actual dataset (matches the app screenshots)
+  const ATTRIBUTE_TAXONOMY = [
+    "Blurry_image", "Occluded_view", "Distant", "No_plumbing",
+    "Rusting", "Oxidation", "Mold", "Dust", "Grime", "Staining",
+    "Sealant", "Paint", "Leak", "Color_confuser", "Excluded_hardware",
+    "Mineral_buildup", "Minor_corrosion", "Borderline",
+    "Severity_0", "Severity_1", "Severity_2", "Severity_3", "Severity_4",
+  ];
+
+  const OPEN_SEED = [
+    { id: "MCL_002",  dataset: "mcl_v1",   annotator: "Delaney",     reason: "The oxidation on the shutoff valve is raised but isolated, is this severity 3?", flagged: "2026-07-02", gt: "DETECTED", attrs: ["Oxidation","Severity_3"] },
+    { id: "MC2_0004", dataset: "mc2_test", annotator: "Delaney",     reason: "Does the rusting on the braided water line qualify as severity 3?",              flagged: "2026-07-02", gt: "DETECTED", attrs: ["Rusting","Severity_3"] },
+    { id: "MCT_AI_001", dataset: "mct_v1", annotator: null,          reason: "kjwbcfw",                                                                        flagged: "2026-07-02", gt: "UNSET",    attrs: [] },
+    { id: "MO-9",     dataset: "mo_v1",    annotator: "Sarah M.",    reason: "Is this a functional plumbing component?",                                        flagged: "2026-07-02", gt: "UNSET",    attrs: ["Borderline"] },
+    { id: "MC_2918",  dataset: "mct_v1",   annotator: "Annotator 2", reason: "This isnt toilet plumbing",                                                       flagged: "2026-07-02", gt: "NOT_DETECTED", attrs: ["Excluded_hardware"] },
+    { id: "MCL_014",  dataset: "mcl_v1",   annotator: "Delaney",     reason: "Reflection on the pipe looks like corrosion — second opinion?",                   flagged: "2026-07-01", gt: "NOT_DETECTED", attrs: ["Color_confuser"] },
+    { id: "MC2_0011", dataset: "mc2_test", annotator: "Sarah M.",    reason: "Mineral buildup vs. active corrosion — hard to distinguish.",                     flagged: "2026-07-01", gt: "DETECTED", attrs: ["Mineral_buildup","Severity_2"] },
+    { id: "MCT_022",  dataset: "mct_v1",   annotator: "Delaney",     reason: "Only visible at 200% zoom — is that in scope?",                                   flagged: "2026-06-30", gt: "DETECTED", attrs: ["Minor_corrosion","Severity_1"] },
+    { id: "MO-17",    dataset: "mo_v1",    annotator: "Annotator 2", reason: "Blistering pattern is unusual — flag for taxonomy review.",                       flagged: "2026-06-30", gt: "DETECTED", attrs: ["Oxidation","Severity_2"] },
+    { id: "MCL_027",  dataset: "mcl_v1",   annotator: "Sarah M.",    reason: "Angle hides most of the joint — insufficient evidence?",                          flagged: "2026-06-29", gt: "UNSET",    attrs: ["Occluded_view"] },
+    { id: "MC2_0018", dataset: "mc2_test", annotator: "Delaney",     reason: "Discoloration vs staining boundary is subjective here.",                          flagged: "2026-06-29", gt: "DETECTED", attrs: ["Staining","Severity_1"] },
+    { id: "MCT_031",  dataset: "mct_v1",   annotator: "Annotator 2", reason: "Sealant looks intentional but heavy — flag for review.",                          flagged: "2026-06-28", gt: "NOT_DETECTED", attrs: ["Sealant"] },
+    { id: "MO-24",    dataset: "mo_v1",    annotator: "Sarah M.",    reason: "Overexposed on the left side — most of the fitting is washed out.",               flagged: "2026-06-27", gt: "UNSET",    attrs: ["Blurry_image"] },
+    { id: "MCL_034",  dataset: "mcl_v1",   annotator: "Delaney",     reason: "Small hardware — under threshold size per spec.",                                  flagged: "2026-06-27", gt: "NOT_DETECTED", attrs: ["Distant"] },
+  ];
+
+  const RESOLVED_SEED = [
+    { id: "MCL_001",  dataset: "mcl_v1",   annotator: "Delaney",   reason: "Does the wall plate count as an eligible component?",
+      flagged: "2026-07-02", resolved: "2026-07-02T21:12:41", resolvedBy: "Delaney F.", action: "both_corrected",
+      prevLabel: "DETECTED", newLabel: "NOT_DETECTED",
+      prevAttrs: ["Baseline","Severity_3","Mold","Grime","Oxidation"],
+      newAttrs:  ["Baseline","Mold","Grime","Oxidation","Severity_1","Minor_corrosion","Dust"],
+      note: "No, the wall plate is excluded. The shut off valve bodies show only minor flat patina." },
+    { id: "MC2_0002", dataset: "mc2_test", annotator: "Sarah M.",  reason: "Correct severity call?",
+      flagged: "2026-06-28", resolved: "2026-06-29T14:03:12", resolvedBy: "Delaney F.", action: "accepted",
+      prevLabel: "DETECTED", newLabel: "DETECTED", prevAttrs: ["Rusting","Severity_3"], newAttrs: ["Rusting","Severity_3"], note: "" },
+    { id: "MCT_005",  dataset: "mct_v1",   annotator: "Delaney",   reason: "Not sure if this qualifies as major or just surface rust.",
+      flagged: "2026-06-27", resolved: "2026-06-28T09:41:00", resolvedBy: "Delaney F.", action: "both_corrected",
+      prevLabel: "NOT_DETECTED", newLabel: "DETECTED", prevAttrs: ["Staining"], newAttrs: ["Rusting","Severity_2","Minor_corrosion"], note: "Depth meets major threshold per spec §3.2." },
+    { id: "MO-3",     dataset: "mo_v1",    annotator: "Sarah M.",  reason: "Blistering pattern is unusual.",
+      flagged: "2026-06-26", resolved: "2026-06-27T16:22:44", resolvedBy: "Delaney F.", action: "attributes_corrected",
+      prevLabel: "DETECTED", newLabel: "DETECTED", prevAttrs: ["Rusting"], newAttrs: ["Oxidation","Severity_2"], note: "Reclassified rust → oxidation based on color and pattern." },
+    { id: "MCL_007",  dataset: "mcl_v1",   annotator: "Annotator 2", reason: "Might be shadow rather than corrosion.",
+      flagged: "2026-06-25", resolved: "2026-06-26T11:15:03", resolvedBy: "Delaney F.", action: "label_corrected",
+      prevLabel: "DETECTED", newLabel: "NOT_DETECTED", prevAttrs: ["Color_confuser"], newAttrs: ["Color_confuser"], note: "Shadow confirmed on second review." },
+    { id: "MC2_0007", dataset: "mc2_test", annotator: "Delaney",   reason: "Scaling call — not confident.",
+      flagged: "2026-06-24", resolved: "2026-06-25T13:05:00", resolvedBy: "Delaney F.", action: "both_corrected",
+      prevLabel: "NOT_DETECTED", newLabel: "DETECTED", prevAttrs: [], newAttrs: ["Oxidation","Severity_2"], note: "Visible scaling under raking light." },
+    { id: "MCT_012",  dataset: "mct_v1",   annotator: "Sarah M.",  reason: "Second opinion on severity.",
+      flagged: "2026-06-23", resolved: "2026-06-24T10:00:00", resolvedBy: "Delaney F.", action: "accepted",
+      prevLabel: "DETECTED", newLabel: "DETECTED", prevAttrs: ["Rusting","Severity_2"], newAttrs: ["Rusting","Severity_2"], note: "" },
+    { id: "MO-8",     dataset: "mo_v1",    annotator: "Annotator 2", reason: "Micro-cracks — in scope?",
+      flagged: "2026-06-22", resolved: "2026-06-23T15:44:11", resolvedBy: "Delaney F.", action: "label_corrected",
+      prevLabel: "NOT_DETECTED", newLabel: "DETECTED", prevAttrs: [], newAttrs: [], note: "Micro-cracks are in scope for v2." },
+    { id: "MCL_012",  dataset: "mcl_v1",   annotator: "Delaney",   reason: "Late-stage taxonomy question.",
+      flagged: "2026-06-21", resolved: "2026-06-22T12:12:00", resolvedBy: "Delaney F.", action: "attributes_corrected",
+      prevLabel: "DETECTED", newLabel: "DETECTED", prevAttrs: ["Oxidation"], newAttrs: ["Oxidation","Severity_3"], note: "Added severity per updated criteria." },
+    { id: "MC2_0009", dataset: "mc2_test", annotator: "Sarah M.",  reason: "Ambiguous scale/blistering boundary.",
+      flagged: "2026-06-20", resolved: "2026-06-21T09:30:00", resolvedBy: "Delaney F.", action: "both_corrected",
+      prevLabel: "DETECTED", newLabel: "DETECTED", prevAttrs: ["Mineral_buildup"], newAttrs: ["Oxidation","Severity_2"], note: "Corrected attribute; label stays." },
+    { id: "MCT_019",  dataset: "mct_v1",   annotator: "Delaney",   reason: "Angle of image hides most of the surface.",
+      flagged: "2026-06-19", resolved: "2026-06-20T14:11:00", resolvedBy: "Delaney F.", action: "accepted",
+      prevLabel: "UNSET", newLabel: "UNSET", prevAttrs: [], newAttrs: [], note: "UNSET is appropriate — insufficient evidence." },
+    { id: "MO-11",    dataset: "mo_v1",    annotator: "Annotator 2", reason: "Discoloration threshold.",
+      flagged: "2026-06-18", resolved: "2026-06-19T17:00:00", resolvedBy: "Delaney F.", action: "attributes_corrected",
+      prevLabel: "DETECTED", newLabel: "DETECTED", prevAttrs: ["Staining"], newAttrs: ["Minor_corrosion"], note: "Reclassified to match taxonomy." },
+  ];
+
+  const state = {
+    openFlags: [...OPEN_SEED],
+    resolvedFlags: [...RESOLVED_SEED],
+    pageSize: 10,
+    openPage: 1,
+    resolvedPage: 1,
+    openCollapsed: false,
+    resolvedCollapsed: true,
+    active: null,
+    activeIndex: -1,
+    activeView: null,
+    activeViewIndex: -1,
+    editedLabel: undefined,
+    editedAttrs: undefined,
+  };
+
+  /* ---------- Helpers ---------- */
+  const el = (id) => document.getElementById(id);
+  const datasetName = (id) => DATASETS[id] || id;
+  const localDate = (iso) => {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  };
+  const localDateTime = (iso) => {
+    const d = new Date(iso);
+    const date = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+    let h = d.getHours(); const m = String(d.getMinutes()).padStart(2, "0"); const s = String(d.getSeconds()).padStart(2, "0");
+    const suffix = h >= 12 ? "PM" : "AM"; h = h % 12; if (h === 0) h = 12;
+    return `${date}, ${h}:${m}:${s} ${suffix}`;
+  };
+  const attrsEqual = (a, b) => {
+    if (a.length !== b.length) return false;
+    const sa = [...a].sort(); const sb = [...b].sort();
+    return sa.every((v, i) => v === sb[i]);
+  };
+  function deriveAssessment(origLabel, newLabel, origAttrs, newAttrs) {
+    const labelChanged = origLabel !== newLabel;
+    const attrsChanged = !attrsEqual(origAttrs, newAttrs);
+    if (labelChanged && attrsChanged) return "both_corrected";
+    if (labelChanged) return "label_corrected";
+    if (attrsChanged) return "attributes_corrected";
+    return "accepted";
+  }
+  const humanize = (a) => ({ accepted: "Accepted", label_corrected: "Label corrected", attributes_corrected: "Attributes corrected", both_corrected: "Label & attributes corrected" }[a] || a);
+  const labelColor = (v) => v === "DETECTED" ? "text-[var(--app-purple)]" : v === "NOT_DETECTED" ? "text-[var(--app-not-detected)]" : "text-gray-500";
+
+  /* ---------- Render lists ---------- */
+  function renderThumb(id) {
+    const short = id.split(/[_-]/)[0].slice(0, 5);
+    return `<div class="mock-thumb h-12 w-12 rounded shrink-0 border border-[var(--app-border)] text-[9px]">${short}</div>`;
+  }
+
+  function render() { renderOpen(); renderResolved(); }
+
+  function renderOpen() {
+    el("openCountBadge").textContent = state.openFlags.length;
+    const list = el("openList");
+    const empty = el("openEmpty");
+    const pager = el("openPager");
+
+    if (state.openCollapsed) {
+      el("openCaret").classList.remove("open");
+      el("openBody").style.display = "none";
+      return;
+    }
+    el("openCaret").classList.add("open");
+    el("openBody").style.display = "";
+
+    if (state.openFlags.length === 0) {
+      list.innerHTML = "";
+      empty.classList.remove("hidden-init");
+      pager.classList.add("hidden-init");
+      return;
+    }
+    empty.classList.add("hidden-init");
+
+    const pageCount = Math.max(1, Math.ceil(state.openFlags.length / state.pageSize));
+    if (state.openPage > pageCount) state.openPage = pageCount;
+    const start = (state.openPage - 1) * state.pageSize;
+    const pageItems = state.openFlags.slice(start, start + state.pageSize);
+
+    list.innerHTML = pageItems.map((f, i) => {
+      const globalIdx = start + i;
+      const meta = f.annotator ? `${f.annotator} · ${datasetName(f.dataset)}` : datasetName(f.dataset);
+      return `
+        <div class="flex items-center gap-4 px-4 py-3 cursor-pointer border-b border-[var(--app-border)] last:border-b-0 hover:bg-[var(--app-table-row-hover)]" data-open-idx="${globalIdx}">
+          ${renderThumb(f.id)}
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <p class="text-xs font-mono text-[var(--app-text-subtle)] truncate">${f.id}</p>
+              <span class="text-[10px] text-[var(--app-text-muted)] truncate">${meta}</span>
+            </div>
+            <p class="mt-1 text-sm text-[var(--app-text)] truncate">${f.reason}</p>
+            <p class="mt-1 text-[11px] text-[var(--app-text-subtle)]">Flagged ${localDate(f.flagged)}</p>
+          </div>
+          <span class="text-xs text-[var(--app-text-subtle)] shrink-0">Click to review</span>
+        </div>
+      `;
+    }).join("");
+
+    list.querySelectorAll("[data-open-idx]").forEach((row) => {
+      row.addEventListener("click", () => openResolveModal(parseInt(row.dataset.openIdx, 10)));
+    });
+
+    if (pageCount > 1) {
+      pager.classList.remove("hidden-init");
+      el("openPageNum").textContent = state.openPage;
+      el("openPageTotal").textContent = pageCount;
+      el("openPrev").disabled = state.openPage <= 1;
+      el("openNext").disabled = state.openPage >= pageCount;
+    } else {
+      pager.classList.add("hidden-init");
+    }
+  }
+
+  function renderResolved() {
+    el("resolvedCountBadge").textContent = state.resolvedFlags.length;
+    const list = el("resolvedList");
+    const empty = el("resolvedEmpty");
+    const pager = el("resolvedPager");
+
+    if (state.resolvedCollapsed) {
+      el("resolvedCaret").classList.remove("open");
+      el("resolvedBody").classList.add("hidden-init");
+      return;
+    }
+    el("resolvedCaret").classList.add("open");
+    el("resolvedBody").classList.remove("hidden-init");
+
+    if (state.resolvedFlags.length === 0) {
+      list.innerHTML = "";
+      empty.classList.remove("hidden-init");
+      pager.classList.add("hidden-init");
+      return;
+    }
+    empty.classList.add("hidden-init");
+
+    const pageCount = Math.max(1, Math.ceil(state.resolvedFlags.length / state.pageSize));
+    if (state.resolvedPage > pageCount) state.resolvedPage = pageCount;
+    const start = (state.resolvedPage - 1) * state.pageSize;
+    const pageItems = state.resolvedFlags.slice(start, start + state.pageSize);
+
+    list.innerHTML = pageItems.map((f, i) => {
+      const globalIdx = start + i;
+      const meta = f.annotator ? `${f.annotator} · ${datasetName(f.dataset)}` : datasetName(f.dataset);
+      return `
+        <div class="flex items-center gap-4 px-4 py-3 cursor-pointer border-b border-[var(--app-border)] last:border-b-0 hover:bg-[var(--app-table-row-hover)]" data-resolved-idx="${globalIdx}">
+          ${renderThumb(f.id)}
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <p class="text-xs font-mono text-[var(--app-text-subtle)] truncate">${f.id}</p>
+              <span class="text-[10px] text-[var(--app-text-muted)] truncate">${meta}</span>
+            </div>
+            <p class="mt-1 text-sm text-[var(--app-text)] truncate">${f.reason}</p>
+            <div class="mt-1 flex items-center gap-3 text-[11px] text-[var(--app-text-subtle)] flex-wrap">
+              <span class="rounded bg-emerald-500/10 text-emerald-300 px-1.5 py-0.5 text-[10px]">${humanize(f.action)}</span>
+              <span>by ${f.resolvedBy}</span>
+              ${f.note ? `<span class="truncate max-w-[240px]">${f.note}</span>` : ""}
+              <span>${localDate(f.resolved)}</span>
+            </div>
+          </div>
+          <span class="text-[10px] font-medium rounded-full px-2 py-0.5 bg-emerald-500/20 text-emerald-300 shrink-0">resolved</span>
+        </div>
+      `;
+    }).join("");
+
+    list.querySelectorAll("[data-resolved-idx]").forEach((row) => {
+      row.addEventListener("click", () => openViewModal(parseInt(row.dataset.resolvedIdx, 10)));
+    });
+
+    if (pageCount > 1) {
+      pager.classList.remove("hidden-init");
+      el("resolvedPageNum").textContent = state.resolvedPage;
+      el("resolvedPageTotal").textContent = pageCount;
+      el("resolvedPrev").disabled = state.resolvedPage <= 1;
+      el("resolvedNext").disabled = state.resolvedPage >= pageCount;
+    } else {
+      pager.classList.add("hidden-init");
+    }
+  }
+
+  /* ---------- Resolve modal ---------- */
+  function openResolveModal(idx) {
+    const flag = state.openFlags[idx];
+    if (!flag) return;
+    state.active = flag;
+    state.activeIndex = idx;
+    state.editedLabel = undefined;
+    state.editedAttrs = undefined;
+    hydrateResolveModal();
+    const m = el("resolveModal");
+    m.classList.remove("hidden-init");
+    m.style.display = "flex";
+  }
+  function closeResolveModal() {
+    const m = el("resolveModal");
+    m.classList.add("hidden-init");
+    m.style.display = "none";
+    state.active = null; state.activeIndex = -1;
+  }
+
+  function hydrateResolveModal() {
+    const f = state.active;
+    if (!f) return;
+    el("resolveIndex").textContent = state.activeIndex + 1;
+    el("resolveTotal").textContent = state.openFlags.length;
+    el("resolveImageId").textContent = f.id;
+    el("resolveIdText").textContent = f.id;
+    el("resolveAnnotator").textContent = f.annotator || "Unassigned";
+    el("resolveDataset").textContent = datasetName(f.dataset);
+    el("resolveReason").textContent = f.reason;
+    el("resolveFlaggedDate").textContent = localDate(f.flagged);
+    el("resolveNote").value = "";
+    el("resolveViewport").textContent = f.id;
+    el("resolvePrev").disabled = state.activeIndex <= 0;
+    el("resolveNext").disabled = state.activeIndex >= state.openFlags.length - 1;
+    renderResolveEditors();
+  }
+
+  function renderResolveEditors() {
+    const f = state.active;
+    const currentLabel = state.editedLabel !== undefined ? state.editedLabel : f.gt;
+    const currentAttrs = state.editedAttrs !== undefined ? state.editedAttrs : f.attrs;
+
+    // Label buttons
+    const btns = [
+      { val: "DETECTED",     activeCls: "bg-[var(--app-purple-soft)] text-[var(--app-purple)] border-[color:color-mix(in_srgb,var(--app-purple)_36%,transparent)]" },
+      { val: "NOT_DETECTED", activeCls: "bg-[var(--app-not-detected-soft)] text-[var(--app-not-detected)] border-[color:color-mix(in_srgb,var(--app-not-detected)_36%,transparent)]" },
+      { val: "UNSET",        activeCls: "bg-gray-800 text-gray-100 border-gray-500" },
+    ];
+    el("resolveLabelBtns").innerHTML = btns.map(({ val, activeCls }) => {
+      const active = (val === "UNSET" && (currentLabel === null || currentLabel === "UNSET")) || val === currentLabel;
+      const cls = active ? activeCls : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800";
+      return `<button data-label-btn="${val}" class="px-3 py-1.5 rounded text-xs border ${cls}">${val}</button>`;
+    }).join("");
+    el("resolveLabelBtns").querySelectorAll("[data-label-btn]").forEach((b) => {
+      b.onclick = () => { state.editedLabel = b.dataset.labelBtn === "UNSET" ? null : b.dataset.labelBtn; renderResolveEditors(); };
+    });
+
+    // Attribute chips
+    const chips = el("resolveAttrChips");
+    chips.innerHTML = ATTRIBUTE_TAXONOMY.map((opt) => {
+      const on = currentAttrs.includes(opt);
+      const cls = on
+        ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
+        : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]";
+      return `<button type="button" data-attr="${opt}" class="px-2.5 py-1 text-[11px] transition ${cls}">${opt}</button>`;
+    }).join("");
+    chips.querySelectorAll("[data-attr]").forEach((btn) => {
+      btn.onclick = () => {
+        const opt = btn.dataset.attr;
+        const next = currentAttrs.includes(opt) ? currentAttrs.filter((x) => x !== opt) : [...currentAttrs, opt];
+        state.editedAttrs = next;
+        renderResolveEditors();
+      };
+    });
+
+    // Assessment (auto)
+    const origLabel = f.gt === "UNSET" ? null : f.gt;
+    const finalLabel = currentLabel === "UNSET" ? null : currentLabel;
+    const derived = deriveAssessment(origLabel, finalLabel, f.attrs, currentAttrs);
+    const rows = ["accepted", "label_corrected", "attributes_corrected", "both_corrected"];
+    el("resolveAssessment").innerHTML = rows.map((r) => {
+      const active = r === derived;
+      const cls = active ? "border-sky-400/70 bg-sky-500/10 text-sky-100" : "border-white/[0.08] text-gray-500";
+      const dotCls = active ? "border-sky-300" : "border-gray-600";
+      const dotFill = active ? '<span class="h-1.5 w-1.5 rounded-full bg-sky-300"></span>' : "";
+      return `<div class="flex items-center gap-3 px-3 py-2.5 rounded-md border text-xs ${cls}">
+        <span class="flex-shrink-0 h-3.5 w-3.5 rounded-full border flex items-center justify-center ${dotCls}">${dotFill}</span>
+        <span>${humanize(r)}</span>
+      </div>`;
+    }).join("");
+
+    el("resolveBtn").onclick = () => resolveActiveFlag(derived, finalLabel, currentAttrs);
+  }
+
+  function resolveActiveFlag(action, newLabel, newAttrs) {
+    const f = state.active;
+    if (!f) return;
+    const note = el("resolveNote").value.trim();
+    const resolved = {
+      id: f.id, dataset: f.dataset, annotator: f.annotator, reason: f.reason, flagged: f.flagged,
+      resolved: new Date().toISOString(),
+      resolvedBy: "Delaney F.", action,
+      prevLabel: f.gt === "UNSET" ? null : f.gt,
+      newLabel: newLabel,
+      prevAttrs: [...f.attrs], newAttrs: [...newAttrs], note,
+    };
+    state.openFlags.splice(state.activeIndex, 1);
+    state.resolvedFlags = [resolved, ...state.resolvedFlags];
+    closeResolveModal();
+    toast(`Flag ${f.id} resolved (${humanize(action)})`);
+    render();
+  }
+
+  /* ---------- View modal ---------- */
+  function openViewModal(idx) {
+    const flag = state.resolvedFlags[idx];
+    if (!flag) return;
+    state.activeView = flag;
+    state.activeViewIndex = idx;
+    hydrateViewModal();
+    const m = el("viewModal");
+    m.classList.remove("hidden-init");
+    m.style.display = "flex";
+  }
+  function closeViewModal() {
+    const m = el("viewModal");
+    m.classList.add("hidden-init");
+    m.style.display = "none";
+    state.activeView = null; state.activeViewIndex = -1;
+  }
+
+  function hydrateViewModal() {
+    const f = state.activeView;
+    if (!f) return;
+    el("viewIndex").textContent = state.activeViewIndex + 1;
+    el("viewTotal").textContent = state.resolvedFlags.length;
+    el("viewImageId").textContent = f.id;
+    el("viewIdText").textContent = f.id;
+    el("viewAnnotator").textContent = f.annotator || "Unassigned";
+    el("viewDataset").textContent = datasetName(f.dataset);
+    el("viewReason").textContent = f.reason;
+    el("viewFlaggedDate").textContent = localDate(f.flagged);
+    el("viewViewport").textContent = f.id;
+    el("viewPrev").disabled = state.activeViewIndex <= 0;
+    el("viewNext").disabled = state.activeViewIndex >= state.resolvedFlags.length - 1;
+
+    // Label diff
+    const prev = f.prevLabel, next = f.newLabel;
+    const labelDiff = el("viewLabelDiff");
+    const hasLabelDiff = prev !== null && next !== null && prev !== next;
+    if (hasLabelDiff) {
+      el("viewLabelUpdated").classList.remove("hidden-init");
+      labelDiff.innerHTML = `
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-medium line-through text-red-400">${prev}</span>
+          <span class="text-xs text-gray-500">→</span>
+          <span class="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">${next}</span>
+        </div>`;
+    } else {
+      el("viewLabelUpdated").classList.add("hidden-init");
+      const value = next ?? prev ?? "UNSET";
+      labelDiff.innerHTML = `<p class="text-xs font-medium ${labelColor(value)}">${value}</p>`;
+    }
+
+    // Attribute diff
+    const prevAttrs = f.prevAttrs || [], newAttrs = f.newAttrs || [];
+    const prevSet = new Set(prevAttrs), newSet = new Set(newAttrs);
+    const unionOrdered = [];
+    for (const t of prevAttrs) if (!unionOrdered.includes(t)) unionOrdered.push(t);
+    for (const t of newAttrs) if (!unionOrdered.includes(t)) unionOrdered.push(t);
+    const attrsChanged = !attrsEqual(prevAttrs, newAttrs);
+    const ad = el("viewAttrDiff");
+    if (unionOrdered.length === 0) {
+      ad.innerHTML = `<span class="text-[11px] text-[var(--app-text-subtle)] italic">No attributes</span>`;
+    } else {
+      ad.innerHTML = unionOrdered.map((tag) => {
+        const inPrev = prevSet.has(tag), inNew = newSet.has(tag);
+        if (inPrev && inNew) return `<span class="rounded-md border border-sky-400/50 bg-sky-500/12 px-2 py-0.5 text-[11px] text-sky-100">${tag}</span>`;
+        if (inNew) return `<span class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200">+ ${tag}</span>`;
+        return `<span class="rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] text-red-300 line-through">− ${tag}</span>`;
+      }).join("");
+    }
+    el("viewAttrUpdated").classList.toggle("hidden-init", !attrsChanged);
+    el("viewDiffLegend").style.display = attrsChanged ? "flex" : "none";
+    if (!attrsChanged) el("viewDiffLegend").classList.add("hidden-init"); else el("viewDiffLegend").classList.remove("hidden-init");
+
+    // Resolution
+    el("viewAction").textContent = humanize(f.action);
+    el("viewResolvedMeta").textContent = `Resolved by ${f.resolvedBy} · ${localDateTime(f.resolved)}`;
+    el("viewNote").textContent = f.note || "";
+    el("viewNote").style.display = f.note ? "" : "none";
+  }
+
+  /* ---------- Toast ---------- */
+  function toast(msg) {
+    const t = el("toastBar");
+    t.textContent = msg;
+    t.style.display = "block";
+    clearTimeout(toast._h);
+    toast._h = setTimeout(() => { t.style.display = "none"; }, 2600);
+  }
+
+  /* ---------- Wiring ---------- */
+  el("openToggle").addEventListener("click", () => { state.openCollapsed = !state.openCollapsed; render(); });
+  el("resolvedToggle").addEventListener("click", () => { state.resolvedCollapsed = !state.resolvedCollapsed; render(); });
+  el("pageSizeSel").addEventListener("change", (e) => {
+    state.pageSize = parseInt(e.target.value, 10);
+    state.openPage = 1; state.resolvedPage = 1; render();
+  });
+  el("openPrev").addEventListener("click", () => { if (state.openPage > 1) { state.openPage--; render(); } });
+  el("openNext").addEventListener("click", () => { state.openPage++; render(); });
+  el("resolvedPrev").addEventListener("click", () => { if (state.resolvedPage > 1) { state.resolvedPage--; render(); } });
+  el("resolvedNext").addEventListener("click", () => { state.resolvedPage++; render(); });
+
+  el("resolvePrev").addEventListener("click", () => { if (state.activeIndex > 0) { state.activeIndex--; state.active = state.openFlags[state.activeIndex]; state.editedLabel = undefined; state.editedAttrs = undefined; hydrateResolveModal(); } });
+  el("resolveNext").addEventListener("click", () => { if (state.activeIndex < state.openFlags.length - 1) { state.activeIndex++; state.active = state.openFlags[state.activeIndex]; state.editedLabel = undefined; state.editedAttrs = undefined; hydrateResolveModal(); } });
+  el("viewPrev").addEventListener("click", () => { if (state.activeViewIndex > 0) { state.activeViewIndex--; state.activeView = state.resolvedFlags[state.activeViewIndex]; hydrateViewModal(); } });
+  el("viewNext").addEventListener("click", () => { if (state.activeViewIndex < state.resolvedFlags.length - 1) { state.activeViewIndex++; state.activeView = state.resolvedFlags[state.activeViewIndex]; hydrateViewModal(); } });
+
+  // Backdrop click closes modal
+  [["resolveModal", closeResolveModal], ["viewModal", closeViewModal]].forEach(([id, closer]) => {
+    el(id).addEventListener("click", (e) => { if (e.target === el(id)) closer(); });
+  });
+  // Escape / arrow-nav
+  document.addEventListener("keydown", (e) => {
+    const resolveOpen = !el("resolveModal").classList.contains("hidden-init");
+    const viewOpen = !el("viewModal").classList.contains("hidden-init");
+    if (e.key === "Escape") {
+      if (resolveOpen) closeResolveModal();
+      else if (viewOpen) closeViewModal();
+    } else if (e.key === "ArrowLeft") {
+      if (resolveOpen) el("resolvePrev").click();
+      else if (viewOpen) el("viewPrev").click();
+    } else if (e.key === "ArrowRight") {
+      if (resolveOpen) el("resolveNext").click();
+      else if (viewOpen) el("viewNext").click();
+    }
+  });
+
+  /* ---------- Demo tips ---------- */
+  document.addEventListener("click", (e) => {
+    const closer = e.target.closest("[data-demo-tip-close]");
+    if (closer) {
+      const tip = closer.closest(".demo-tip");
+      tip.querySelector(".demo-tip-popover").classList.add("hidden-init");
+      tip.classList.remove("demo-tip-active");
+      tip.querySelector("[data-demo-tip]")?.setAttribute("aria-expanded", "false");
+      e.stopPropagation();
+      return;
+    }
+    const btn = e.target.closest("[data-demo-tip]");
+    if (btn) {
+      const tip = btn.closest(".demo-tip");
+      const pop = tip.querySelector(".demo-tip-popover");
+      const wasOpen = !pop.classList.contains("hidden-init");
+      document.querySelectorAll(".demo-tip-popover").forEach((p) => p.classList.add("hidden-init"));
+      document.querySelectorAll(".demo-tip").forEach((t) => t.classList.remove("demo-tip-active"));
+      document.querySelectorAll("[data-demo-tip]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+      if (!wasOpen) {
+        pop.classList.remove("hidden-init");
+        tip.classList.add("demo-tip-active");
+        btn.setAttribute("aria-expanded", "true");
+      }
+      e.stopPropagation();
+      return;
+    }
+    if (e.target.closest(".demo-tip-popover")) return;
+    document.querySelectorAll(".demo-tip-popover").forEach((p) => p.classList.add("hidden-init"));
+    document.querySelectorAll(".demo-tip").forEach((t) => t.classList.remove("demo-tip-active"));
+    document.querySelectorAll("[data-demo-tip]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+  });
+
+  /* ---------- Boot ---------- */
+  render();
+</script>
+</body>
+</html>

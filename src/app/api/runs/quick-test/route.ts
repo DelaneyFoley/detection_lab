@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runDetectionInference } from "@/lib/gemini";
+import { runDetectionInference } from "@/lib/inference";
+import { getProvider, PROVIDER_ENV_KEY } from "@/lib/models";
 import { runRepository } from "@/lib/repositories";
 
 export async function POST(req: NextRequest) {
@@ -7,13 +8,9 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const promptVersionId = String(formData.get("prompt_version_id") || "").trim();
     const detectionId = String(formData.get("detection_id") || "").trim();
-    const apiKey = String(formData.get("api_key") || process.env.GEMINI_API_KEY || "").trim();
     const modelOverride = String(formData.get("model_override") || "").trim();
     const files = formData.getAll("files") as File[];
 
-    if (!apiKey) {
-      return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
-    }
     if (!promptVersionId || !detectionId) {
       return NextResponse.json({ error: "prompt_version_id and detection_id are required" }, { status: 400 });
     }
@@ -28,6 +25,16 @@ export async function POST(req: NextRequest) {
     if (!prompt) {
       return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
     }
+
+    const modelUsed = modelOverride || prompt.model;
+    const provider = getProvider(modelUsed);
+    const envKey = PROVIDER_ENV_KEY[provider];
+    const apiKey = String(formData.get("api_key") || process.env[envKey] || "").trim();
+
+    if (!apiKey) {
+      return NextResponse.json({ error: `API key required (request api_key or ${envKey} env)` }, { status: 400 });
+    }
+
     const detection = runRepository.getDetectionById(detectionId);
     if (!detection) {
       return NextResponse.json({ error: "Detection not found" }, { status: 404 });
@@ -36,7 +43,7 @@ export async function POST(req: NextRequest) {
     const parsedPrompt = {
       ...prompt,
       prompt_structure: JSON.parse(prompt.prompt_structure || "{}"),
-      model: modelOverride || prompt.model,
+      model: modelUsed,
     };
 
     const results = await Promise.all(

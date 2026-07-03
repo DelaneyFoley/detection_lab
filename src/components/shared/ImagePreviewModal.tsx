@@ -128,7 +128,7 @@ export function ImagePreviewModal({
         ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="mb-3 flex items-center justify-between">
           <div className="min-w-0">
             <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-subtle)]">Image Preview</div>
             <div className="mt-1 text-xs text-gray-400">
@@ -136,21 +136,12 @@ export function ImagePreviewModal({
             {subtitle ? ` · ${subtitle}` : ""}
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              className="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40"
-              disabled={!canPrev}
-              onClick={onPrev}
-            >
-              Prev
-            </button>
-            <button
-              className="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40"
-              disabled={!canNext}
-              onClick={onNext}
-            >
-              Next
-            </button>
+          <button className="app-btn app-btn-primary px-3 py-1.5 text-xs" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className={details ? "grid gap-x-3 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr]" : ""}>
+          <div className="flex items-center justify-center gap-2 mb-2 lg:col-start-1 lg:row-start-1">
             <button
               className="app-btn app-btn-secondary px-3 py-1.5 text-xs"
               onClick={() => setZoom((z) => Math.max(1, z - 0.25))}
@@ -172,15 +163,24 @@ export function ImagePreviewModal({
             >
               Reset
             </button>
-            <button className="app-btn app-btn-primary px-3 py-1.5 text-xs" onClick={onClose}>
-              Close
+            <button
+              className="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40"
+              disabled={!canPrev}
+              onClick={onPrev}
+            >
+              Prev
+            </button>
+            <button
+              className="app-btn app-btn-secondary px-3 py-1.5 text-xs disabled:opacity-40"
+              disabled={!canNext}
+              onClick={onNext}
+            >
+              Next
             </button>
           </div>
-        </div>
-        <div className={details ? "grid gap-3 lg:grid-cols-[minmax(0,1fr)_360px]" : ""}>
           <div
             ref={viewportRef}
-            className="flex h-[52vh] items-center justify-center overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 lg:h-[70vh]"
+            className="flex h-[52vh] items-center justify-center overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 lg:h-[70vh] lg:col-start-1 lg:row-start-2"
             onMouseDown={(event) => {
               if (zoom <= 1) return;
               event.preventDefault();
@@ -203,6 +203,7 @@ export function ImagePreviewModal({
             }}
             style={{ cursor: zoom > 1 ? (dragging ? "grabbing" : "grab") : "default" }}
           >
+            {imageUrl ? (
             <img
               src={imageUrl}
               alt={imageAlt}
@@ -222,9 +223,12 @@ export function ImagePreviewModal({
               draggable={false}
               onDragStart={(event) => event.preventDefault()}
             />
+            ) : (
+              <div className="flex items-center justify-center h-full text-sm text-gray-500">No image available</div>
+            )}
           </div>
           {details && (
-            <div className={`max-h-[70vh] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-xs ${detailsClassName}`}>
+            <div className={`max-h-[70vh] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-xs lg:col-start-2 lg:row-start-2 ${detailsClassName}`}>
               {details}
             </div>
           )}

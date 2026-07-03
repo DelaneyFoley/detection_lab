@@ -25,7 +25,9 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 /.codex-backups/
 /public/uploads/

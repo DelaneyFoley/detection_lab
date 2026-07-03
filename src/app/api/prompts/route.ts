@@ -73,6 +73,7 @@ export async function POST(req: NextRequest) {
       topP: body.top_p ?? 1,
       maxOutputTokens: body.max_output_tokens ?? 1024,
       changeNotes: body.change_notes || "",
+      versionNotes: body.version_notes || "",
       createdBy: body.created_by || "user",
       createdAt: now,
     });
@@ -99,6 +100,10 @@ export async function PUT(req: NextRequest) {
         body.prompt_version_id,
         JSON.stringify(body.golden_set_regression_result)
       );
+    }
+
+    if (body.version_notes !== undefined) {
+      promptRepository.updateVersionNotes(body.prompt_version_id, body.version_notes);
     }
 
     return NextResponse.json({ ok: true });

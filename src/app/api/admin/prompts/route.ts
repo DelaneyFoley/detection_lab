@@ -6,6 +6,8 @@ import {
   DEFAULT_INCORRECT_CAPTURE_USER_PROMPT,
   DEFAULT_PROMPT_ASSIST_TEMPLATE,
   DEFAULT_PROMPT_FEEDBACK_TEMPLATE,
+  DEFAULT_FEEDBACK_IMAGE_LIMITS,
+  FEEDBACK_IMAGE_LIMIT_KEYS,
 } from "@/lib/adminPrompts";
 import { settingsRepository } from "@/lib/repositories";
 
@@ -25,8 +27,16 @@ export async function GET() {
       KEY_INCORRECT_CAPTURE_USER,
       KEY_HAZARD_IDENTIFICATION_SYSTEM,
       KEY_HAZARD_IDENTIFICATION_USER,
+      ...FEEDBACK_IMAGE_LIMIT_KEYS,
     ]);
     const byKey = new Map(rows.map((r) => [r.key, r.value]));
+
+    const imageLimits: Record<string, number> = {};
+    for (const key of FEEDBACK_IMAGE_LIMIT_KEYS) {
+      const stored = byKey.get(key);
+      imageLimits[key] = stored != null ? parseInt(stored, 10) : DEFAULT_FEEDBACK_IMAGE_LIMITS[key];
+    }
+
     return NextResponse.json({
       prompt_assist_template: byKey.get(KEY_PROMPT_ASSIST) || DEFAULT_PROMPT_ASSIST_TEMPLATE,
       prompt_feedback_template: byKey.get(KEY_PROMPT_FEEDBACK) || DEFAULT_PROMPT_FEEDBACK_TEMPLATE,
@@ -38,6 +48,7 @@ export async function GET() {
         byKey.get(KEY_HAZARD_IDENTIFICATION_SYSTEM) || DEFAULT_HAZARD_IDENTIFICATION_SYSTEM_PROMPT,
       hazard_identification_user_prompt:
         byKey.get(KEY_HAZARD_IDENTIFICATION_USER) || DEFAULT_HAZARD_IDENTIFICATION_USER_PROMPT,
+      ...imageLimits,
     });
   } catch (error: unknown) {
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -66,14 +77,24 @@ export async function PUT(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
-    settingsRepository.upsertMany([
+    const entries = [
       { key: KEY_PROMPT_ASSIST, value: promptAssist, updatedAt: now },
       { key: KEY_PROMPT_FEEDBACK, value: promptFeedback, updatedAt: now },
       { key: KEY_INCORRECT_CAPTURE_SYSTEM, value: incorrectCaptureSystem, updatedAt: now },
       { key: KEY_INCORRECT_CAPTURE_USER, value: incorrectCaptureUser, updatedAt: now },
       { key: KEY_HAZARD_IDENTIFICATION_SYSTEM, value: hazardIdentificationSystem, updatedAt: now },
       { key: KEY_HAZARD_IDENTIFICATION_USER, value: hazardIdentificationUser, updatedAt: now },
-    ]);
+    ];
+
+    for (const key of FEEDBACK_IMAGE_LIMIT_KEYS) {
+      const raw = body?.[key];
+      if (raw != null) {
+        const val = Math.max(0, Math.min(20, Math.floor(Number(raw))));
+        entries.push({ key, value: String(val), updatedAt: now });
+      }
+    }
+
+    settingsRepository.upsertMany(entries);
 
     return NextResponse.json({ ok: true });
   } catch (error: unknown) {

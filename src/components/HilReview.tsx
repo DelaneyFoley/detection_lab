@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAppStore } from "@/lib/store";
-import type { Detection, Run, Prediction, ErrorTag, Decision } from "@/types";
+import type { Detection, Run, Prediction, ErrorTag, Decision, ReviewFlag, ResolutionAction, GroundtruthCorrection } from "@/types";
 import { computeMetricsWithSegments } from "@/lib/metrics";
 import { formatMetricValue } from "@/lib/ui/metrics";
 import { splitTypeLabel } from "@/lib/splitType";
@@ -24,7 +24,15 @@ const AUTO_ERROR_TAGS = new Set<ErrorTag>([
   "INFERENCE_CALL_FAILED",
 ]);
 
-type FilterType = "all" | "fp" | "fn" | "parse_fail" | "correct" | "corrected";
+type FilterType = "all" | "fp" | "fn" | "parse_fail" | "correct" | "corrected" | "gt_corrected" | "flagged_open" | "flagged_resolved";
+
+const RESOLUTION_ACTIONS: { value: ResolutionAction; label: string }[] = [
+  { value: "label_confirmed", label: "Label Confirmed" },
+  { value: "label_corrected", label: "Label Corrected" },
+  { value: "attributes_corrected", label: "Attributes Corrected" },
+  { value: "image_removed", label: "Image Removed" },
+  { value: "needs_discussion", label: "Needs Discussion" },
+];
 
 export function HilReview({ detection }: { detection: Detection }) {
   const { selectedRunByDetection, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
@@ -39,6 +47,13 @@ export function HilReview({ detection }: { detection: Detection }) {
   const [datasetItemByImageId, setDatasetItemByImageId] = useState<Record<string, { item_id: string; segment_tags: string[] }>>({});
   const [loadingRun, setLoadingRun] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  const [flaggedPredictionIds, setFlaggedPredictionIds] = useState<Set<string>>(new Set());
+  const [resolvedFlaggedPredictionIds, setResolvedFlaggedPredictionIds] = useState<Set<string>>(new Set());
+  const [flagsByPredictionId, setFlagsByPredictionId] = useState<Record<string, ReviewFlag>>({});
+  const [resolvedFlagsByPredictionId, setResolvedFlagsByPredictionId] = useState<Record<string, ReviewFlag>>({});
+  const [gtCorrectionsByPredictionId, setGtCorrectionsByPredictionId] = useState<Record<string, GroundtruthCorrection[]>>({});
+  const [flagModalPredictionId, setFlagModalPredictionId] = useState<string | null>(null);
+  const [resolveModalFlagId, setResolveModalFlagId] = useState<string | null>(null);
   const liveMetrics = useMemo(() => {
     const segmentMap = new Map<string, string[]>();
     for (const [imageId, item] of Object.entries(datasetItemByImageId || {})) {
@@ -117,6 +132,43 @@ export function HilReview({ detection }: { detection: Detection }) {
       } else {
         setDatasetItemByImageId({});
       }
+
+      // Load review flags for this run
+      const flagsRes = await fetch(`/api/review-flags?run_id=${selectedRunId}`);
+      if (flagsRes.ok) {
+        const flagsData = await flagsRes.json();
+        const flags: ReviewFlag[] = Array.isArray(flagsData?.flags) ? flagsData.flags : [];
+        const openFlags = flags.filter((f) => f.status === "open");
+        const resolvedFlags = flags.filter((f) => f.status === "resolved");
+        setFlaggedPredictionIds(new Set(openFlags.map((f) => f.prediction_id!).filter(Boolean)));
+        setResolvedFlaggedPredictionIds(new Set(resolvedFlags.map((f) => f.prediction_id!).filter(Boolean)));
+        const byPredId: Record<string, ReviewFlag> = {};
+        for (const f of openFlags) {
+          if (f.prediction_id) byPredId[f.prediction_id] = f;
+        }
+        setFlagsByPredictionId(byPredId);
+        const resolvedByPredId: Record<string, ReviewFlag> = {};
+        for (const f of resolvedFlags) {
+          if (f.prediction_id) resolvedByPredId[f.prediction_id] = f;
+        }
+        setResolvedFlagsByPredictionId(resolvedByPredId);
+      }
+
+      // Load ground-truth correction log for this run (all entries per prediction)
+      const gtRes = await fetch(`/api/hil/gt-corrections?run_id=${selectedRunId}`);
+      if (gtRes.ok) {
+        const gtPayload = await gtRes.json();
+        const corrections: GroundtruthCorrection[] = Array.isArray(gtPayload?.corrections) ? gtPayload.corrections : [];
+        const byPrediction: Record<string, GroundtruthCorrection[]> = {};
+        for (const c of corrections) {
+          if (!byPrediction[c.prediction_id]) byPrediction[c.prediction_id] = [];
+          byPrediction[c.prediction_id].push(c);
+        }
+        setGtCorrectionsByPredictionId(byPrediction);
+      } else {
+        setGtCorrectionsByPredictionId({});
+      }
+
       setCurrentIndex(0);
     } catch (error) {
       setRunData(null);
@@ -140,6 +192,9 @@ export function HilReview({ detection }: { detection: Detection }) {
       case "parse_fail": return !p.parse_ok && !isInferenceCallFailure(p);
       case "correct": return p.parse_ok && p.predicted_decision === gt;
       case "corrected": return p.corrected_label !== null;
+      case "gt_corrected": return (gtCorrectionsByPredictionId[p.prediction_id]?.length || 0) > 0;
+      case "flagged_open": return flaggedPredictionIds.has(p.prediction_id);
+      case "flagged_resolved": return resolvedFlaggedPredictionIds.has(p.prediction_id);
       default: return true;
     }
   });
@@ -181,6 +236,7 @@ export function HilReview({ detection }: { detection: Detection }) {
             updates.ground_truth_label !== undefined ? updates.ground_truth_label : p.ground_truth_label,
           error_tag: updates.error_tag !== undefined ? updates.error_tag : p.error_tag,
           reviewer_note: updates.reviewer_note !== undefined ? updates.reviewer_note : p.reviewer_note,
+          image_description: updates.reviewer_note !== undefined ? updates.reviewer_note : p.image_description,
           corrected_at: new Date().toISOString(),
         };
 
@@ -208,6 +264,120 @@ export function HilReview({ detection }: { detection: Detection }) {
       loadRuns();
       triggerRefresh();
     }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "ground_truth_label") && selectedRunId) {
+      // Re-fetch GT correction log so the filter/history reflects the new entry.
+      const gtRes = await fetch(`/api/hil/gt-corrections?run_id=${selectedRunId}`);
+      if (gtRes.ok) {
+        const gtPayload = await gtRes.json();
+        const corrections: GroundtruthCorrection[] = Array.isArray(gtPayload?.corrections) ? gtPayload.corrections : [];
+        const byPrediction: Record<string, GroundtruthCorrection[]> = {};
+        for (const c of corrections) {
+          if (!byPrediction[c.prediction_id]) byPrediction[c.prediction_id] = [];
+          byPrediction[c.prediction_id].push(c);
+        }
+        setGtCorrectionsByPredictionId(byPrediction);
+      }
+    }
+  };
+
+  const [exporting, setExporting] = useState(false);
+
+  const exportRunToExcel = async () => {
+    if (!selectedRunId || exporting) return;
+    setExporting(true);
+    try {
+      const res = await fetch(`/api/runs/export?run_id=${selectedRunId}`);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `run_export_${selectedRunId.substring(0, 8)}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const createFlag = async (predictionId: string, reason: string) => {
+    const pred = predictions.find((p) => p.prediction_id === predictionId);
+    if (!pred) return;
+    const res = await fetch("/api/review-flags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prediction_id: predictionId,
+        detection_id: detection.detection_id,
+        image_id: pred.image_id,
+        reason,
+      }),
+    });
+    if (res.ok) {
+      setFlaggedPredictionIds((prev) => new Set([...prev, predictionId]));
+      const json = await res.json();
+      setFlagsByPredictionId((prev) => ({
+        ...prev,
+        [predictionId]: {
+          flag_id: json.flag_id,
+          prediction_id: predictionId,
+          dataset_item_id: null,
+          detection_id: detection.detection_id,
+          image_id: pred.image_id,
+          reason,
+          status: "open",
+          resolution_action: null,
+          resolution_note: null,
+          created_at: new Date().toISOString(),
+          resolved_at: null,
+        },
+      }));
+    }
+    setFlagModalPredictionId(null);
+  };
+
+  const resolveFlag = async (flagId: string, action: ResolutionAction, note: string) => {
+    const res = await fetch("/api/review-flags", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        flag_id: flagId,
+        status: "resolved",
+        resolution_action: action,
+        resolution_note: note || null,
+      }),
+    });
+    if (res.ok) {
+      const flag = Object.values(flagsByPredictionId).find((f) => f.flag_id === flagId);
+      if (flag?.prediction_id) {
+        const resolvedVersion: ReviewFlag = {
+          ...flag,
+          status: "resolved",
+          resolution_action: action,
+          resolution_note: note || null,
+          resolved_at: new Date().toISOString(),
+        };
+        setFlaggedPredictionIds((prev) => {
+          const next = new Set(prev);
+          next.delete(flag.prediction_id!);
+          return next;
+        });
+        setFlagsByPredictionId((prev) => {
+          const next = { ...prev };
+          delete next[flag.prediction_id!];
+          return next;
+        });
+        setResolvedFlaggedPredictionIds((prev) => new Set([...prev, flag.prediction_id!]));
+        setResolvedFlagsByPredictionId((prev) => ({
+          ...prev,
+          [flag.prediction_id!]: resolvedVersion,
+        }));
+      }
+    }
+    setResolveModalFlagId(null);
   };
 
   const currentPrediction = filteredPredictions[currentIndex];
@@ -279,6 +449,15 @@ export function HilReview({ detection }: { detection: Detection }) {
               </option>
             ))}
           </select>
+          {predictions.length > 0 && (
+            <button
+              onClick={exportRunToExcel}
+              disabled={exporting}
+              className="app-btn app-btn-subtle app-btn-sm text-xs whitespace-nowrap"
+            >
+              {exporting ? "Exporting..." : "Export to Excel"}
+            </button>
+          )}
         </div>
 
         {/* Filters */}
@@ -291,6 +470,9 @@ export function HilReview({ detection }: { detection: Detection }) {
               ["parse_fail", "Parse Failures"],
               ["correct", "Correct"],
               ["corrected", "Corrected"],
+              ["gt_corrected", "GT Updated"],
+              ["flagged_open", "Flagged — Open"],
+              ["flagged_resolved", "Flagged — Resolved"],
             ] as [FilterType, string][]).map(([key, label]) => {
               const count = predictions.filter((p) => {
                 const gt = p.corrected_label || p.ground_truth_label;
@@ -300,6 +482,9 @@ export function HilReview({ detection }: { detection: Detection }) {
                   case "parse_fail": return !p.parse_ok && !isInferenceCallFailure(p);
                   case "correct": return p.parse_ok && p.predicted_decision === gt;
                   case "corrected": return p.corrected_label !== null;
+                  case "gt_corrected": return (gtCorrectionsByPredictionId[p.prediction_id]?.length || 0) > 0;
+                  case "flagged_open": return flaggedPredictionIds.has(p.prediction_id);
+                  case "flagged_resolved": return resolvedFlaggedPredictionIds.has(p.prediction_id);
                   default: return true;
                 }
               }).length;
@@ -382,6 +567,7 @@ export function HilReview({ detection }: { detection: Detection }) {
                 <col style={{ width: "10rem" }} />
                 <col style={{ width: "6rem" }} />
                 <col style={{ width: "13rem" }} />
+                <col style={{ width: "12rem" }} />
                 <col style={{ width: "7rem" }} />
                 <col style={{ width: "6rem" }} />
                 <col style={{ width: "7rem" }} />
@@ -394,6 +580,7 @@ export function HilReview({ detection }: { detection: Detection }) {
                   <th className="app-table-col-label">Ground Truth</th>
                   <th className="app-table-col-label">Match</th>
                   <th className="app-table-col-label">Error Tag</th>
+                  <th className="app-table-col-label">Attributes</th>
                   <th className="app-table-col-label">Confidence</th>
                   <th className="app-table-col-label">Parse</th>
                   <th className="app-table-col-label">Actions</th>
@@ -404,17 +591,25 @@ export function HilReview({ detection }: { detection: Detection }) {
                   <PredictionRow
                     key={p.prediction_id}
                     prediction={p}
+                    segmentTags={datasetItemByImageId[p.image_id]?.segment_tags || []}
                     onUpdate={updatePrediction}
                     onImageReview={() => {
                       setCurrentIndex(i);
                       setViewMode("image");
                     }}
                     isIteration={runData?.split_type === "ITERATION"}
+                    isFlagged={flaggedPredictionIds.has(p.prediction_id)}
+                    onFlag={() => setFlagModalPredictionId(p.prediction_id)}
+                    onResolve={() => {
+                      const flag = flagsByPredictionId[p.prediction_id];
+                      if (flag) setResolveModalFlagId(flag.flag_id);
+                    }}
+                    flagReason={flagsByPredictionId[p.prediction_id]?.reason}
                   />
                 ))}
                 {filteredPredictions.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-8 text-center text-gray-500">
+                    <td colSpan={10} className="py-8 text-center text-gray-500">
                       No predictions match the selected filter.
                     </td>
                   </tr>
@@ -451,6 +646,30 @@ export function HilReview({ detection }: { detection: Detection }) {
           segmentTags={currentDatasetItem?.segment_tags || []}
           segmentOptions={Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy : []}
           onUpdateSegmentTags={(nextTags) => updateSegmentTagsForImage(currentPrediction.image_id, nextTags)}
+          isFlagged={flaggedPredictionIds.has(currentPrediction.prediction_id)}
+          onFlag={() => setFlagModalPredictionId(currentPrediction.prediction_id)}
+          onResolve={() => {
+            const flag = flagsByPredictionId[currentPrediction.prediction_id];
+            if (flag) setResolveModalFlagId(flag.flag_id);
+          }}
+          flagReason={flagsByPredictionId[currentPrediction.prediction_id]?.reason}
+          resolvedFlag={resolvedFlagsByPredictionId[currentPrediction.prediction_id]}
+          gtCorrections={gtCorrectionsByPredictionId[currentPrediction.prediction_id] || []}
+        />
+      )}
+
+      {flagModalPredictionId && (
+        <FlagModal
+          onSubmit={(reason) => createFlag(flagModalPredictionId, reason)}
+          onCancel={() => setFlagModalPredictionId(null)}
+        />
+      )}
+
+      {resolveModalFlagId && (
+        <ResolveModal
+          flag={Object.values(flagsByPredictionId).find((f) => f.flag_id === resolveModalFlagId)!}
+          onSubmit={(action, note) => resolveFlag(resolveModalFlagId, action, note)}
+          onCancel={() => setResolveModalFlagId(null)}
         />
       )}
 
@@ -489,14 +708,24 @@ function MetricStat({
 
 function PredictionRow({
   prediction: p,
+  segmentTags,
   onUpdate,
   onImageReview,
   isIteration,
+  isFlagged,
+  onFlag,
+  onResolve,
+  flagReason,
 }: {
   prediction: Prediction;
+  segmentTags: string[];
   onUpdate: (id: string, updates: any) => void;
   onImageReview: () => void;
   isIteration: boolean;
+  isFlagged: boolean;
+  onFlag: () => void;
+  onResolve: () => void;
+  flagReason?: string;
 }) {
   const gt = p.corrected_label || p.ground_truth_label;
   const isCorrect = p.parse_ok && p.predicted_decision === gt;
@@ -577,6 +806,15 @@ function PredictionRow({
         </div>
       </td>
       <td className="app-table-col-label text-xs">
+        <div className="app-table-left-slot flex flex-wrap gap-1">
+          {segmentTags.length > 0 ? segmentTags.map((tag) => (
+            <span key={tag} className="inline-block rounded bg-[var(--app-field-bg)] border border-[var(--app-border)] px-1.5 py-0.5 text-[10px] text-[var(--app-text-muted)]">
+              {tag}
+            </span>
+          )) : <span className="text-[var(--app-text-muted)]">—</span>}
+        </div>
+      </td>
+      <td className="app-table-col-label text-xs">
         <div className="app-table-left-slot">
           <span>{p.confidence != null ? p.confidence.toFixed(2) : "—"}</span>
         </div>
@@ -603,13 +841,30 @@ function PredictionRow({
         </div>
       </td>
       <td className="app-table-col-label">
-        <div className="app-table-left-slot">
+        <div className="app-table-left-slot flex gap-1">
           <button
             onClick={onImageReview}
             className="app-btn app-btn-subtle app-btn-sm text-xs"
           >
             Review
           </button>
+          {isFlagged ? (
+            <button
+              onClick={onResolve}
+              className="app-btn app-btn-sm text-xs text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20"
+              title={flagReason || "Flagged for review"}
+            >
+              Flagged
+            </button>
+          ) : (
+            <button
+              onClick={onFlag}
+              className="app-btn app-btn-subtle app-btn-sm text-xs"
+              title="Flag for secondary review"
+            >
+              Flag
+            </button>
+          )}
         </div>
       </td>
     </tr>
@@ -627,6 +882,12 @@ function ImageReviewMode({
   segmentTags,
   segmentOptions,
   onUpdateSegmentTags,
+  isFlagged,
+  onFlag,
+  onResolve,
+  flagReason,
+  resolvedFlag,
+  gtCorrections,
 }: {
   prediction: Prediction;
   index: number;
@@ -638,8 +899,14 @@ function ImageReviewMode({
   segmentTags: string[];
   segmentOptions: string[];
   onUpdateSegmentTags: (nextTags: string[]) => void;
+  isFlagged: boolean;
+  onFlag: () => void;
+  onResolve: () => void;
+  flagReason?: string;
+  resolvedFlag?: ReviewFlag;
+  gtCorrections?: GroundtruthCorrection[];
 }) {
-  const [note, setNote] = useState(p.reviewer_note || "");
+  const [note, setNote] = useState(p.image_description || p.reviewer_note || "");
   const [noteDirty, setNoteDirty] = useState(false);
   const [imageZoom, setImageZoom] = useState(1);
   const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
@@ -658,11 +925,12 @@ function ImageReviewMode({
     if (noteDirtyRef.current && lastPredictionIdRef.current) {
       onUpdateRef.current(lastPredictionIdRef.current, { reviewer_note: (lastNoteRef.current || "").trim() || null });
     }
-    setNote(p.reviewer_note || "");
+    const initialNote = p.image_description || p.reviewer_note || "";
+    setNote(initialNote);
     setNoteDirty(false);
     lastPredictionIdRef.current = p.prediction_id;
-    lastNoteRef.current = p.reviewer_note || "";
-  }, [p.prediction_id, p.reviewer_note]);
+    lastNoteRef.current = initialNote;
+  }, [p.prediction_id, p.reviewer_note, p.image_description]);
 
   useEffect(() => {
     lastNoteRef.current = note;
@@ -801,18 +1069,18 @@ function ImageReviewMode({
           </div>
           <div className="flex gap-2 shrink-0 flex-wrap justify-end max-w-[420px]">
             <button
-              onClick={() => setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))}
-              className="app-btn app-btn-subtle app-btn-sm text-xs"
-              disabled={imageZoom >= 4}
-            >
-              Zoom +
-            </button>
-            <button
               onClick={() => setImageZoom((z) => Math.max(1, Number((z - 0.25).toFixed(2))))}
               className="app-btn app-btn-subtle app-btn-sm text-xs"
               disabled={imageZoom <= 1}
             >
               Zoom -
+            </button>
+            <button
+              onClick={() => setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))}
+              className="app-btn app-btn-subtle app-btn-sm text-xs"
+              disabled={imageZoom >= 4}
+            >
+              Zoom +
             </button>
             <button
               onClick={() => {
@@ -834,7 +1102,7 @@ function ImageReviewMode({
         </div>
         <div
           ref={imageViewportRef}
-          className="w-full h-[500px] overflow-hidden rounded bg-gray-900 flex items-center justify-center"
+          className="w-full h-[700px] overflow-hidden rounded bg-gray-900 flex items-center justify-center"
           onMouseDown={startImageDrag}
           onMouseMove={moveImageDrag}
           onMouseUp={endImageDrag}
@@ -844,7 +1112,7 @@ function ImageReviewMode({
           <img
             src={p.image_uri}
             alt={p.image_id}
-            className="max-h-[500px] max-w-full object-contain rounded select-none"
+            className="max-h-[700px] max-w-full object-contain rounded select-none"
             style={{
               transform: `translate(${clampedImagePan.x}px, ${clampedImagePan.y}px) scale(${imageZoom})`,
               transformOrigin: "center center",
@@ -866,6 +1134,35 @@ function ImageReviewMode({
 
       {/* Review Panel */}
       <div className="space-y-4">
+        {/* Flag for Secondary Review — always at top */}
+        <div className="app-card p-4">
+          <h4 className="text-xs text-gray-500 font-medium mb-2">Secondary Review</h4>
+          {isFlagged ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-400"></span>
+                <span className="text-xs text-amber-400 font-medium">Flagged for review</span>
+              </div>
+              {flagReason && (
+                <p className="text-xs text-gray-300 bg-gray-900 rounded p-2">{flagReason}</p>
+              )}
+              <button
+                onClick={onResolve}
+                className="app-btn app-btn-sm text-xs text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20"
+              >
+                Resolve Flag
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onFlag}
+              className="app-btn app-btn-subtle app-btn-sm text-xs"
+            >
+              Flag for Secondary Review
+            </button>
+          )}
+        </div>
+
         {/* Prediction Summary */}
         <div className="app-card p-4">
           <div className="text-xs text-gray-300 space-y-2">
@@ -959,6 +1256,34 @@ function ImageReviewMode({
           <SegmentTagsEditor value={segmentTags} options={segmentOptions} onChange={onUpdateSegmentTags} />
         </div>
 
+        {/* Resolved flag history */}
+        {resolvedFlag && (
+          <div className="app-card p-4">
+            <h4 className="text-xs text-gray-500 font-medium mb-2">Resolved Secondary Review</h4>
+            <div className="space-y-2 text-xs">
+              <div>
+                <span className="text-gray-500">Question: </span>
+                <span className="text-gray-300">{resolvedFlag.reason}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Resolution: </span>
+                <span className="text-gray-300">{resolvedFlag.resolution_action?.replace(/_/g, " ") || "—"}</span>
+              </div>
+              {resolvedFlag.resolution_note && (
+                <div>
+                  <span className="text-gray-500">Note: </span>
+                  <span className="text-gray-300">{resolvedFlag.resolution_note}</span>
+                </div>
+              )}
+              {resolvedFlag.resolved_at && (
+                <div className="text-gray-500">
+                  Resolved {new Date(resolvedFlag.resolved_at).toLocaleDateString()}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Error Tag */}
         <div className="app-card p-4">
           <h4 className="text-xs text-gray-500 font-medium mb-2">Error Tag</h4>
@@ -1017,6 +1342,11 @@ function ImageReviewMode({
             </div>
           )}
         </div>
+
+        {/* Ground Truth Label History — logged below the raw Model Response */}
+        {gtCorrections && gtCorrections.length > 0 && (
+          <GroundtruthLabelHistory corrections={gtCorrections} />
+        )}
       </div>
     </div>
   );
@@ -1051,8 +1381,28 @@ function SegmentTagsEditor({
   options: string[];
   onChange: (next: string[]) => void;
 }) {
+  const extraTags = value.filter((tag) => !options.includes(tag));
   return (
     <div>
+      {extraTags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {extraTags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200"
+            >
+              {tag}
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((v) => v !== tag))}
+                className="text-amber-400/60 hover:text-amber-300 ml-0.5"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap gap-2">
         {options.map((option) => {
           const selected = value.includes(option);
@@ -1074,6 +1424,9 @@ function SegmentTagsEditor({
           );
         })}
       </div>
+      {options.length === 0 && value.length === 0 && (
+        <p className="text-[11px] text-gray-500">No attributes configured for this detection.</p>
+      )}
     </div>
   );
 }
@@ -1099,4 +1452,159 @@ function isInferenceCallFailure(prediction: Prediction): boolean {
   const reason = String(prediction.parse_error_reason || "");
   const raw = String(prediction.raw_response || "");
   return reason.startsWith("Model/API error:") || raw.startsWith("ERROR:");
+}
+
+function FlagModal({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="app-card-strong p-6 w-full max-w-md space-y-4">
+        <h3 className="text-sm font-semibold text-white">Flag for Secondary Review</h3>
+        <p className="text-xs text-gray-400">
+          What is your question or concern about this image?
+        </p>
+        <textarea
+          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-24"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g., Unsure if this qualifies as detected — looks borderline..."
+          autoFocus
+        />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="app-btn app-btn-subtle app-btn-sm text-xs">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(reason)}
+            disabled={!reason.trim()}
+            className="app-btn app-btn-primary app-btn-sm text-xs disabled:opacity-40"
+          >
+            Submit Flag
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResolveModal({
+  flag,
+  onSubmit,
+  onCancel,
+}: {
+  flag: ReviewFlag;
+  onSubmit: (action: ResolutionAction, note: string) => void;
+  onCancel: () => void;
+}) {
+  const [action, setAction] = useState<ResolutionAction>("label_confirmed");
+  const [note, setNote] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="app-card-strong p-6 w-full max-w-md space-y-4">
+        <h3 className="text-sm font-semibold text-white">Resolve Flag</h3>
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400">Original question:</p>
+          <p className="text-xs text-gray-200 bg-gray-900 rounded p-2">{flag.reason}</p>
+        </div>
+        <div className="space-y-2">
+          <label className="text-xs text-gray-400">Resolution action</label>
+          <select
+            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+            value={action}
+            onChange={(e) => setAction(e.target.value as ResolutionAction)}
+          >
+            {RESOLUTION_ACTIONS.map((a) => (
+              <option key={a.value} value={a.value}>{a.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-xs text-gray-400">Resolution note (optional)</label>
+          <textarea
+            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-20"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Additional context or answer to the reviewer's question..."
+          />
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="app-btn app-btn-subtle app-btn-sm text-xs">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(action, note)}
+            className="app-btn app-btn-success app-btn-sm text-xs"
+          >
+            Resolve
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GroundtruthLabelHistory({
+  corrections,
+}: {
+  corrections: GroundtruthCorrection[];
+}) {
+  return (
+    <div className="app-card p-4">
+      <h4 className="text-xs text-gray-500 font-medium mb-3">Ground Truth Label History</h4>
+      <ul className="space-y-3">
+        {corrections.map((c) => (
+          <li key={c.correction_id} className="border border-[var(--app-border)] rounded p-3 bg-[var(--app-field-bg)]">
+            <GroundtruthHistoryEntry correction={c} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function GroundtruthHistoryEntry({
+  correction,
+}: {
+  correction: GroundtruthCorrection;
+}) {
+  const oldLabel = correction.old_label || "UNSET";
+  const newLabel = correction.new_label || "UNSET";
+  const aiPred = correction.predicted_decision || "PARSE_FAIL";
+  const aiMatch = correction.ai_matches_new_gt;
+  const actor = correction.actor || "user";
+  const when = new Date(correction.created_at);
+
+  return (
+    <div className="text-xs text-gray-300 space-y-2">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <span className="text-gray-400">{when.toLocaleString()}</span>
+        <span className="text-gray-500">by <span className="text-gray-300 font-medium">{actor}</span></span>
+      </div>
+      <div>
+        <span className="text-gray-500">Change: </span>
+        <span className="font-medium">{oldLabel}</span>
+        <span className="text-gray-500"> → </span>
+        <span className="font-medium">{newLabel}</span>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-gray-500">AI prediction:</span>
+        <DecisionBadge decision={aiPred} />
+        {aiMatch === null ? (
+          <span className="text-gray-400">(no AI prediction)</span>
+        ) : aiMatch ? (
+          <span className="text-emerald-300 font-medium">matches new GT</span>
+        ) : (
+          <span className="text-amber-300 font-medium">disagrees with new GT</span>
+        )}
+      </div>
+    </div>
+  );
 }

@@ -184,3 +184,13 @@ export function renderPromptFeedbackTemplate(
     .replaceAll("{{PARSE_FAIL_TOTAL}}", String(context.parseFailTotal))
     .replaceAll("{{PARSE_FAIL_LIST}}", context.parseFailList);
 }
+
+export const DEFAULT_FEEDBACK_IMAGE_LIMITS: Record<string, number> = {
+  feedback_fp_image_limit: 3,
+  feedback_fn_image_limit: 3,
+  feedback_tp_image_limit: 0,
+  feedback_tn_image_limit: 0,
+  feedback_parse_fail_image_limit: 4,
+};
+
+export const FEEDBACK_IMAGE_LIMIT_KEYS = Object.keys(DEFAULT_FEEDBACK_IMAGE_LIMITS);

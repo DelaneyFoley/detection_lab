@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { DEFAULT_FEEDBACK_IMAGE_LIMITS, FEEDBACK_IMAGE_LIMIT_KEYS } from "@/lib/adminPrompts";
 
 type PromptSettings = {
   prompt_assist_template: string;
@@ -12,10 +13,20 @@ type PromptSettings = {
   hazard_identification_user_prompt: string;
 };
 
+type ImageLimits = Record<string, number>;
+
 type TemplateItem = {
   key: keyof PromptSettings;
   title: string;
   description: string;
+};
+
+const IMAGE_LIMIT_LABELS: Record<string, string> = {
+  feedback_fp_image_limit: "False Positives",
+  feedback_fn_image_limit: "False Negatives",
+  feedback_tp_image_limit: "True Positives",
+  feedback_tn_image_limit: "True Negatives",
+  feedback_parse_fail_image_limit: "Parse Failures",
 };
 
 const WORKBENCH_TEMPLATES: TemplateItem[] = [
@@ -86,6 +97,8 @@ export function AdminPrompts() {
     hazard_identification_system_prompt: "",
     hazard_identification_user_prompt: "",
   });
+  const [imageLimits, setImageLimits] = useState<ImageLimits>({ ...DEFAULT_FEEDBACK_IMAGE_LIMITS });
+  const [imageLimitsDraft, setImageLimitsDraft] = useState<ImageLimits>({ ...DEFAULT_FEEDBACK_IMAGE_LIMITS });
   const [expanded, setExpanded] = useState<Record<keyof PromptSettings, boolean>>({
     prompt_assist_template: false,
     prompt_feedback_template: false,
@@ -112,6 +125,13 @@ export function AdminPrompts() {
       };
       setData(next);
       setDraft(next);
+
+      const limits: ImageLimits = {};
+      for (const key of FEEDBACK_IMAGE_LIMIT_KEYS) {
+        limits[key] = typeof json?.[key] === "number" ? json[key] : DEFAULT_FEEDBACK_IMAGE_LIMITS[key];
+      }
+      setImageLimits(limits);
+      setImageLimitsDraft(limits);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load admin prompts");
     } finally {
@@ -130,11 +150,12 @@ export function AdminPrompts() {
       const res = await fetch("/api/admin/prompts", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(draft),
+        body: JSON.stringify({ ...draft, ...imageLimitsDraft }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || "Failed to save admin prompts");
       setData(draft);
+      setImageLimits(imageLimitsDraft);
       setEditing(false);
       setSavedAt(new Date().toLocaleString());
     } catch (err) {
@@ -168,6 +189,7 @@ export function AdminPrompts() {
               <button
                 onClick={() => {
                   setDraft(data);
+                  setImageLimitsDraft(imageLimits);
                   setEditing(false);
                 }}
                 className="app-btn app-btn-subtle app-btn-md text-sm"
@@ -190,18 +212,35 @@ export function AdminPrompts() {
             title="Generation and feedback templates"
             description="These templates shape how AI-assisted editing behaves across detections."
           >
-            {WORKBENCH_TEMPLATES.map((item) => (
-              <TemplateCard
-                key={item.key}
-                title={item.title}
-                description={item.description}
-                value={(editing ? draft : data)[item.key]}
-                editing={editing}
-                expanded={editing || expanded[item.key]}
-                onToggle={() => setExpanded((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
-                onChange={(value) => setDraft((prev) => ({ ...prev, [item.key]: value }))}
-              />
-            ))}
+            {WORKBENCH_TEMPLATES.map((item) =>
+              item.key === "prompt_feedback_template" ? (
+                <FeedbackTemplateCard
+                  key={item.key}
+                  title={item.title}
+                  description={item.description}
+                  value={(editing ? draft : data)[item.key]}
+                  editing={editing}
+                  expanded={editing || expanded[item.key]}
+                  onToggle={() => setExpanded((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
+                  onChange={(value) => setDraft((prev) => ({ ...prev, [item.key]: value }))}
+                  imageLimits={editing ? imageLimitsDraft : imageLimits}
+                  onImageLimitChange={(key, val) =>
+                    setImageLimitsDraft((prev) => ({ ...prev, [key]: val }))
+                  }
+                />
+              ) : (
+                <TemplateCard
+                  key={item.key}
+                  title={item.title}
+                  description={item.description}
+                  value={(editing ? draft : data)[item.key]}
+                  editing={editing}
+                  expanded={editing || expanded[item.key]}
+                  onToggle={() => setExpanded((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
+                  onChange={(value) => setDraft((prev) => ({ ...prev, [item.key]: value }))}
+                />
+              )
+            )}
           </SectionBlock>
 
           {CATEGORY_TEMPLATES.map((section) => (
@@ -225,9 +264,104 @@ export function AdminPrompts() {
               ))}
             </SectionBlock>
           ))}
+
+          <AnnotatorRegistry />
         </>
       )}
     </div>
+  );
+}
+
+function AnnotatorRegistry() {
+  const [annotators, setAnnotators] = useState<string[]>([]);
+  const [newName, setNewName] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch("/api/qa?action=annotators");
+    if (res.ok) {
+      const data = await res.json();
+      setAnnotators(data.annotators || []);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const addAnnotator = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    await fetch("/api/qa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "add_annotator", name }),
+    });
+    setNewName("");
+    load();
+  };
+
+  const removeAnnotator = async (name: string) => {
+    await fetch("/api/qa", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "remove_annotator", name }),
+    });
+    load();
+  };
+
+  return (
+    <section className="app-card-strong space-y-4 p-5">
+      <div>
+        <div className="app-kicker mb-2">User Management</div>
+        <h3 className="text-lg font-semibold text-white">Annotator Registry</h3>
+        <p className="mt-1 text-sm text-[var(--app-text-muted)]">
+          Manage the list of annotators available for dataset assignment.
+        </p>
+      </div>
+      <div className="flex items-end gap-2">
+        <div className="flex-1 max-w-xs">
+          <label className="app-label mb-1 block text-xs">New annotator name</label>
+          <input
+            type="text"
+            className="app-input px-3 py-2 text-sm"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addAnnotator()}
+            placeholder="e.g. Jane Smith"
+          />
+        </div>
+        <button
+          onClick={addAnnotator}
+          disabled={!newName.trim()}
+          className="app-btn app-btn-primary app-btn-md text-sm disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
+      {loading ? (
+        <p className="text-sm text-[var(--app-text-muted)]">Loading...</p>
+      ) : annotators.length === 0 ? (
+        <p className="text-sm text-[var(--app-text-muted)]">No annotators registered yet.</p>
+      ) : (
+        <div className="space-y-1">
+          {annotators.map((name) => (
+            <div
+              key={name}
+              className="flex items-center justify-between rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-soft)] px-4 py-2"
+            >
+              <span className="text-sm text-[var(--app-text)]">{name}</span>
+              <button
+                onClick={() => removeAnnotator(name)}
+                className="text-xs text-red-400 hover:text-red-300"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -282,6 +416,86 @@ function TemplateCard({
       </button>
       {expanded && (
         <div className="border-t border-white/6 px-4 py-4">
+          {editing ? (
+            <textarea
+              className="app-textarea min-h-[320px] max-h-[68vh] overflow-y-auto px-3 py-3 text-xs font-mono"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          ) : (
+            <pre className="rounded-2xl border border-white/6 bg-[rgba(5,13,20,0.72)] p-4 text-xs text-gray-300 whitespace-pre-wrap max-h-[58vh] overflow-y-auto">
+              {value}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeedbackTemplateCard({
+  title,
+  description,
+  value,
+  editing,
+  onChange,
+  expanded,
+  onToggle,
+  imageLimits,
+  onImageLimitChange,
+}: {
+  title: string;
+  description: string;
+  value: string;
+  editing: boolean;
+  onChange: (value: string) => void;
+  expanded: boolean;
+  onToggle: () => void;
+  imageLimits: ImageLimits;
+  onImageLimitChange: (key: string, val: number) => void;
+}) {
+  return (
+    <div className="app-card overflow-hidden">
+      <button type="button" className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left" onClick={onToggle}>
+        <div>
+          <h4 className="text-sm font-medium text-white">{title}</h4>
+          <p className="mt-1 text-xs leading-5 text-[var(--app-text-muted)]">{description}</p>
+        </div>
+        <span className="text-xs font-medium text-[var(--app-accent)]">{expanded ? "Collapse" : "Expand"}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-white/6 px-4 py-4 space-y-4">
+          <div>
+            <h5 className="text-sm font-semibold text-white mb-1">Image Limits</h5>
+            <p className="text-xs text-[var(--app-text-muted)] mb-3">
+              Maximum number of images sent to the VLM for each outcome type during prompt feedback analysis. Set 0 to disable a category.
+            </p>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              {FEEDBACK_IMAGE_LIMIT_KEYS.map((key) => (
+                <div key={key}>
+                  <label className="block text-xs text-gray-400 mb-1">
+                    {IMAGE_LIMIT_LABELS[key] || key}
+                  </label>
+                  {editing ? (
+                    <input
+                      type="number"
+                      min={0}
+                      max={20}
+                      className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+                      value={imageLimits[key] ?? DEFAULT_FEEDBACK_IMAGE_LIMITS[key]}
+                      onChange={(e) =>
+                        onImageLimitChange(key, Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))
+                      }
+                    />
+                  ) : (
+                    <div className="rounded-lg border border-white/8 bg-[rgba(5,13,20,0.72)] px-3 py-2 text-sm text-gray-200">
+                      {imageLimits[key] ?? DEFAULT_FEEDBACK_IMAGE_LIMITS[key]}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
           {editing ? (
             <textarea
               className="app-textarea min-h-[320px] max-h-[68vh] overflow-y-auto px-3 py-3 text-xs font-mono"

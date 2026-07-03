@@ -13,7 +13,7 @@ interface AppState {
   apiKey: string;
   setApiKey: (key: string) => void;
 
-  // Global Gemini model override for run execution
+  // Global model override for run execution
   selectedModel: string;
   setSelectedModel: (model: string) => void;
 
@@ -21,6 +21,12 @@ interface AppState {
   selectedRunByDetection: Record<string, string>;
   setSelectedRunForDetection: (detectionId: string, runId: string) => void;
   clearSelectedRunForDetection: (detectionId: string) => void;
+
+  // Cross-tab navigation
+  pendingDatasetId: string | null;
+  setPendingDatasetId: (id: string | null) => void;
+  pendingSubView: string | null;
+  setPendingSubView: (v: string | null) => void;
 
   // Refresh triggers
   refreshCounter: number;
@@ -54,6 +60,11 @@ export const useAppStore = create<AppState>((set) => ({
       delete next[detectionId];
       return { selectedRunByDetection: next };
     }),
+
+  pendingDatasetId: null,
+  setPendingDatasetId: (id) => set({ pendingDatasetId: id }),
+  pendingSubView: null,
+  setPendingSubView: (v) => set({ pendingSubView: v }),
 
   refreshCounter: 0,
   triggerRefresh: () => set((s) => ({ refreshCounter: s.refreshCounter + 1 })),

@@ -23,12 +23,13 @@ export class PromptRepository {
     topP: number;
     maxOutputTokens: number;
     changeNotes: string;
+    versionNotes?: string;
     createdBy: string;
     createdAt: string;
   }) {
     dataStore.run(
-      `INSERT INTO prompt_versions (prompt_version_id, detection_id, version_label, system_prompt, user_prompt_template, prompt_structure, model, temperature, top_p, max_output_tokens, change_notes, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO prompt_versions (prompt_version_id, detection_id, version_label, system_prompt, user_prompt_template, prompt_structure, model, temperature, top_p, max_output_tokens, change_notes, version_notes, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.promptVersionId,
       input.detectionId,
       input.versionLabel,
@@ -40,8 +41,17 @@ export class PromptRepository {
       input.topP,
       input.maxOutputTokens,
       input.changeNotes,
+      input.versionNotes || "",
       input.createdBy,
       input.createdAt
+    );
+  }
+
+  updateVersionNotes(promptVersionId: string, versionNotes: string) {
+    dataStore.run(
+      "UPDATE prompt_versions SET version_notes = ? WHERE prompt_version_id = ?",
+      versionNotes,
+      promptVersionId
     );
   }
 

@@ -28,19 +28,54 @@ export async function PUT(req: NextRequest) {
       correctedAt: now,
     });
 
+    // Sync reviewer_note to dataset_items.image_description
+    if (Object.prototype.hasOwnProperty.call(body, "reviewer_note")) {
+      const run = reviewRepository.getRunById(pred.run_id);
+      if (run) {
+        reviewRepository.updateDatasetItemDescription(
+          run.dataset_id,
+          pred.image_id,
+          body.reviewer_note || null
+        );
+      }
+    }
+
   // Reviewer can set ground truth directly during HIL review.
     const metricsImpactedByGroundTruthChange = Object.prototype.hasOwnProperty.call(body, "ground_truth_label");
     if (metricsImpactedByGroundTruthChange) {
-      reviewRepository.updatePredictionGroundTruth(body.prediction_id, body.ground_truth_label ?? null);
+      const oldGt = pred.ground_truth_label ?? null;
+      const newGt = body.ground_truth_label ?? null;
+      reviewRepository.updatePredictionGroundTruth(body.prediction_id, newGt);
 
+      let datasetIdForLog: string | null = null;
       if (body.update_ground_truth) {
         const run = reviewRepository.getRunById(pred.run_id);
         if (run) {
+          datasetIdForLog = run.dataset_id;
           reviewRepository.updateDatasetItemGroundTruth(
             run.dataset_id,
             pred.image_id,
-            body.ground_truth_label ?? null
+            newGt
           );
+        }
+      }
+
+      if (oldGt !== newGt) {
+        if (!datasetIdForLog) {
+          const run = reviewRepository.getRunById(pred.run_id);
+          datasetIdForLog = run?.dataset_id ?? null;
+        }
+        if (datasetIdForLog) {
+          reviewRepository.logGroundtruthCorrection({
+            predictionId: body.prediction_id,
+            runId: pred.run_id,
+            datasetId: datasetIdForLog,
+            imageId: pred.image_id,
+            oldLabel: oldGt,
+            newLabel: newGt,
+            predictedDecision: pred.predicted_decision ?? null,
+            reason: body.correction_reason ?? null,
+          });
         }
       }
     }

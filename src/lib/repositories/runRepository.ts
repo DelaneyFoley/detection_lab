@@ -8,7 +8,16 @@ export class RunRepository {
   }
 
   getRunPredictions(runId: string): Prediction[] {
-    return sortByImageId(dataStore.all<Prediction>("SELECT * FROM predictions WHERE run_id = ?", runId));
+    const run = this.getRunById(runId);
+    if (!run) return [];
+    return sortByImageId(dataStore.all<Prediction>(
+      `SELECT p.*, di.image_description, di.segment_tags
+       FROM predictions p
+       LEFT JOIN dataset_items di ON di.dataset_id = ? AND di.image_id = p.image_id
+       WHERE p.run_id = ?`,
+      run.dataset_id,
+      runId
+    ));
   }
 
   listRuns(filters: {

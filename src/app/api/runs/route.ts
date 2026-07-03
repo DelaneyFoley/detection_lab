@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuid } from "uuid";
-import { runDetectionInference } from "@/lib/gemini";
+import { runDetectionInference } from "@/lib/inference";
+import { getProvider, PROVIDER_ENV_KEY } from "@/lib/models";
 import { computeMetricsWithSegments } from "@/lib/metrics";
 import type { Prediction } from "@/types";
 import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
@@ -80,19 +81,23 @@ export async function POST(req: NextRequest) {
     const payload = parsedBody.data;
     const { prompt_version_id, dataset_id, detection_id, model_override } = payload;
     const allowEvalRun = payload.allow_eval_run === true;
-    const apiKey = String(payload.api_key || process.env.GEMINI_API_KEY || "").trim();
     const requestedConcurrency = Number(payload.max_concurrency);
     const maxConcurrency = Number.isFinite(requestedConcurrency)
       ? Math.max(1, Math.min(12, Math.floor(requestedConcurrency)))
       : 4;
 
-    if (!apiKey) {
-      return NextResponse.json({ error: "API key required (request api_key or GEMINI_API_KEY env)" }, { status: 400 });
-    }
-
     // Fetch prompt
     const prompt = runRepository.getPromptVersionById(prompt_version_id);
     if (!prompt) return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
+
+    const modelUsed = model_override || prompt.model;
+    const provider = getProvider(modelUsed);
+    const envKey = PROVIDER_ENV_KEY[provider];
+    const apiKey = String(payload.api_key || process.env[envKey] || "").trim();
+
+    if (!apiKey) {
+      return NextResponse.json({ error: `API key required (request api_key or ${envKey} env)` }, { status: 400 });
+    }
 
     // Fetch dataset
     const dataset = runRepository.getDatasetById(dataset_id);
@@ -118,7 +123,6 @@ export async function POST(req: NextRequest) {
 
     const runId = uuid();
     const now = new Date().toISOString();
-    const modelUsed = model_override || prompt.model;
     const decodingParams = {
       model: modelUsed,
       temperature: prompt.temperature,
@@ -309,7 +313,7 @@ function parseSegmentTags(value: unknown): string[] {
       return normalizeSegmentTags(value);
     }
   }
-  return ["Baseline"];
+  return [];
 }
 
 function normalizeSegmentTags(value: unknown): string[] {

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
-import type { Dataset, DatasetItem, Detection, PromptVersion, SplitType } from "@/types";
+import type { Dataset, DatasetItem, Detection, PromptVersion, SplitType, ReviewFlag, ResolutionAction } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import { InfoTip } from "@/components/shared/InfoTip";
@@ -32,9 +32,8 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   const [datasetName, setDatasetName] = useState("");
   const [splitType, setSplitType] = useState<"" | SplitType | "AUTO_SPLIT">("");
   const [rows, setRows] = useState<BuildRow[]>([]);
-  const [buildInputMode, setBuildInputMode] = useState<"files" | "excel" | "json">("files");
-  const [excelFileName, setExcelFileName] = useState("");
-  const [jsonInput, setJsonInput] = useState("");
+  const [buildInputMode, setBuildInputMode] = useState<"files" | "csv">("files");
+  const [csvFileName, setCsvFileName] = useState("");
 
   const [building, setBuilding] = useState(false);
   const [buildMode, setBuildMode] = useState<"save" | "run" | null>(null);
@@ -51,6 +50,14 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   const [savingSegments, setSavingSegments] = useState(false);
   const autoSplit = splitType === "AUTO_SPLIT";
 
+  // Review flags state (only used in load mode)
+  const [flaggedItemIds, setFlaggedItemIds] = useState<Set<string>>(new Set());
+  const [flagsByItemId, setFlagsByItemId] = useState<Record<string, ReviewFlag>>({});
+  const [resolvedFlagsByItemId, setResolvedFlagsByItemId] = useState<Record<string, ReviewFlag>>({});
+  const [flagModalItemId, setFlagModalItemId] = useState<string | null>(null);
+  const [resolveModalFlagId, setResolveModalFlagId] = useState<string | null>(null);
+  const [datasetFlagFilter, setDatasetFlagFilter] = useState<false | "open" | "resolved">(false);
+
   const segmentOptions = useMemo(() => {
     return segmentOptionsDraft;
   }, [segmentOptionsDraft]);
@@ -63,8 +70,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     setDatasetName("");
     setSplitType("");
     setBuildInputMode("files");
-    setExcelFileName("");
-    setJsonInput("");
+    setCsvFileName("");
     setBuiltDatasetId(null);
     setStatus("");
     setValidationError("");
@@ -93,13 +99,12 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         : Array.isArray(datasetPayload?.items)
           ? (datasetPayload.items as Dataset[])
           : [];
-      const runnableDatasetRows = datasetRows.filter((dataset) => dataset.split_type !== "MASTER");
       setPrompts(promptRows);
-      setDatasets(runnableDatasetRows);
+      setDatasets(datasetRows);
       if (promptRows[0]?.prompt_version_id) {
         setSelectedPromptId((prev) => prev || promptRows[0].prompt_version_id);
       }
-      setSelectedExistingDatasetId((prev) => (runnableDatasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
+      setSelectedExistingDatasetId((prev) => (datasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
     };
     loadData();
   }, [detection, refreshCounter]);
@@ -123,6 +128,26 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         }))
       );
       setBuiltDatasetId(selectedExistingDatasetId);
+
+      // Load review flags for this dataset
+      const flagsRes = await fetch(`/api/review-flags?dataset_id=${selectedExistingDatasetId}`);
+      if (flagsRes.ok) {
+        const flagsData = await flagsRes.json();
+        const flags: ReviewFlag[] = Array.isArray(flagsData?.flags) ? flagsData.flags : [];
+        const openFlags = flags.filter((f) => f.status === "open");
+        const resolvedFlags = flags.filter((f) => f.status === "resolved");
+        setFlaggedItemIds(new Set(openFlags.map((f) => f.dataset_item_id!).filter(Boolean)));
+        const byItemId: Record<string, ReviewFlag> = {};
+        for (const f of openFlags) {
+          if (f.dataset_item_id) byItemId[f.dataset_item_id] = f;
+        }
+        setFlagsByItemId(byItemId);
+        const resolvedById: Record<string, ReviewFlag> = {};
+        for (const f of resolvedFlags) {
+          if (f.dataset_item_id) resolvedById[f.dataset_item_id] = f;
+        }
+        setResolvedFlagsByItemId(resolvedById);
+      }
     };
     loadItems();
   }, [mode, selectedExistingDatasetId]);
@@ -183,13 +208,13 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     event.currentTarget.value = "";
   };
 
-  const onPickExcelFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
-      const parsed = await parseExcelManifest(file);
+      const parsed = await parseCsvManifest(file);
       const mapped: BuildRow[] = parsed.map((row, i) => ({
-        id: `${Date.now()}_xlsx_${i}_${row.image_id}`,
+        id: `${Date.now()}_csv_${i}_${row.image_id}`,
         preview: row.image_url,
         imageId: row.image_id,
         groundTruthLabel: row.ground_truth_label,
@@ -199,36 +224,14 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         aiDescription: "",
       }));
       setRows(mapped);
-      setExcelFileName(file.name);
+      setCsvFileName(file.name);
       setValidationError("");
       setStatus(`Loaded ${mapped.length} rows from ${file.name}`);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Failed to parse Excel";
+      const msg = error instanceof Error ? error.message : "Failed to parse CSV";
       setValidationError(msg);
     } finally {
       event.currentTarget.value = "";
-    }
-  };
-
-  const loadFromJsonInput = () => {
-    try {
-      const parsed = parseJsonManifest(jsonInput);
-      const mapped: BuildRow[] = parsed.map((row, i) => ({
-        id: `${Date.now()}_json_${i}_${row.image_id}`,
-        preview: row.image_url,
-        imageId: row.image_id,
-        groundTruthLabel: row.ground_truth_label,
-        segmentTags: normalizeSegmentTags(row.segment_tags),
-        aiAssignedLabel: "",
-        aiConfidence: null,
-        aiDescription: "",
-      }));
-      setRows(mapped);
-      setValidationError("");
-      setStatus(`Loaded ${mapped.length} rows from JSON.`);
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Failed to parse JSON";
-      setValidationError(msg);
     }
   };
 
@@ -243,6 +246,82 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
 
   const updateRow = (id: string, patch: Partial<BuildRow>) => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  };
+
+  const createDatasetFlag = async (itemId: string, reason: string) => {
+    const row = rows.find((r) => r.id === itemId);
+    if (!row || !detection) return;
+    const res = await fetch("/api/review-flags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dataset_item_id: itemId,
+        detection_id: detection.detection_id,
+        image_id: row.imageId,
+        reason,
+      }),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      setFlaggedItemIds((prev) => new Set([...prev, itemId]));
+      setFlagsByItemId((prev) => ({
+        ...prev,
+        [itemId]: {
+          flag_id: json.flag_id,
+          prediction_id: null,
+          dataset_item_id: itemId,
+          detection_id: detection.detection_id,
+          image_id: row.imageId,
+          reason,
+          status: "open",
+          resolution_action: null,
+          resolution_note: null,
+          created_at: new Date().toISOString(),
+          resolved_at: null,
+        },
+      }));
+    }
+    setFlagModalItemId(null);
+  };
+
+  const resolveDatasetFlag = async (flagId: string, action: ResolutionAction, note: string) => {
+    const res = await fetch("/api/review-flags", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        flag_id: flagId,
+        status: "resolved",
+        resolution_action: action,
+        resolution_note: note || null,
+      }),
+    });
+    if (res.ok) {
+      const flag = Object.values(flagsByItemId).find((f) => f.flag_id === flagId);
+      if (flag?.dataset_item_id) {
+        const resolvedVersion: ReviewFlag = {
+          ...flag,
+          status: "resolved",
+          resolution_action: action,
+          resolution_note: note || null,
+          resolved_at: new Date().toISOString(),
+        };
+        setFlaggedItemIds((prev) => {
+          const next = new Set(prev);
+          next.delete(flag.dataset_item_id!);
+          return next;
+        });
+        setFlagsByItemId((prev) => {
+          const next = { ...prev };
+          delete next[flag.dataset_item_id!];
+          return next;
+        });
+        setResolvedFlagsByItemId((prev) => ({
+          ...prev,
+          [flag.dataset_item_id!]: resolvedVersion,
+        }));
+      }
+    }
+    setResolveModalFlagId(null);
   };
 
   const addSegmentOption = () => {
@@ -447,8 +526,8 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        api_key: apiKey,
-        model_override: selectedModel,
+        ...(apiKey ? { api_key: apiKey } : {}),
+        ...(selectedModel ? { model_override: selectedModel } : {}),
         prompt_version_id: selectedPromptId,
         dataset_id: datasetId,
         detection_id: detection.detection_id,
@@ -529,8 +608,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     setSplitType("ITERATION");
     setRows([]);
     setBuildInputMode("files");
-    setExcelFileName("");
-    setJsonInput("");
+    setCsvFileName("");
     setSplitType("");
     setBuiltDatasetId(null);
     setStatus("");
@@ -636,8 +714,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 setDatasetName("");
                 setSplitType("");
                 setBuildInputMode("files");
-                setExcelFileName("");
-                setJsonInput("");
+                setCsvFileName("");
                 setBuiltDatasetId(null);
                 setStatus("");
                 setValidationError("");
@@ -753,17 +830,10 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setBuildInputMode("excel")}
-                    className={`app-toggle ${buildInputMode === "excel" ? "app-toggle-active" : ""}`}
+                    onClick={() => setBuildInputMode("csv")}
+                    className={`app-toggle ${buildInputMode === "csv" ? "app-toggle-active" : ""}`}
                   >
-                    Upload Excel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBuildInputMode("json")}
-                    className={`app-toggle ${buildInputMode === "json" ? "app-toggle-active" : ""}`}
-                  >
-                    Paste JSON
+                    Upload CSV
                   </button>
                 </div>
 
@@ -790,54 +860,33 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                         )}
                       </div>
                     </>
-                  ) : buildInputMode === "excel" ? (
+                  ) : (
                     <>
                       <div className="space-y-1">
                         <label className="block text-xs text-gray-400">
-                          Excel Manifest {excelFileName ? `• ${excelFileName}` : ""}
+                          CSV Manifest {csvFileName ? `• ${csvFileName}` : ""}
                         </label>
                         <p className="text-[11px] text-gray-500">
-                          Required columns: `image_id`, `image_url`, `ground_truth_label`
-                        </p>
-                        <p className="text-[11px] text-gray-500">
-                          Optional column: `attributes` with comma-separated values
+                          Columns: imageId, imageUrl, groundTruthLabel, attributes.{" "}
+                          <a href="/dataset-manifest-example.csv" download className="text-sky-400 hover:underline">Download template</a>
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-3">
                         <input
-                          id="build-dataset-excel-input"
+                          id="build-dataset-csv-input"
                           type="file"
-                          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                          onChange={onPickExcelFile}
+                          accept=".csv,text/csv"
+                          onChange={onPickCsvFile}
                           className="hidden"
                         />
                         <label
-                          htmlFor="build-dataset-excel-input"
+                          htmlFor="build-dataset-csv-input"
                           className="app-btn app-btn-secondary app-btn-sm cursor-pointer"
                         >
                           Choose Files
                         </label>
-                        {excelFileName && <span className="text-xs text-gray-500">1 File Selected</span>}
+                        {csvFileName && <span className="text-xs text-gray-500">1 File Selected</span>}
                       </div>
-                    </>
-                  ) : (
-                    <>
-                      <label className="block text-xs text-gray-400">
-                        JSON Array (`image_id`, `image_url` or `image_uri`, optional `ground_truth_label`, optional `attribute_tags`)
-                      </label>
-                      <textarea
-                        className="app-textarea h-36 w-full px-3 py-2 text-xs font-mono"
-                        value={jsonInput}
-                        onChange={(e) => setJsonInput(e.target.value)}
-                        placeholder={`[\n  {"image_id":"img_001","image_url":"https://...","ground_truth_label":"DETECTED","attribute_tags":["daytime"]}\n]`}
-                      />
-                      <button
-                        type="button"
-                        onClick={loadFromJsonInput}
-                        className="app-btn app-btn-secondary app-btn-sm"
-                      >
-                        Load JSON
-                      </button>
                     </>
                   )}
                 </div>
@@ -909,15 +958,32 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
 
         {rows.length > 0 && (
           <div className="app-table-wrap max-h-72 overflow-auto">
+            {mode === "load" && (flaggedItemIds.size > 0 || Object.keys(resolvedFlagsByItemId).length > 0) && (
+              <div className="px-3 py-2 flex gap-2 items-center border-b border-white/6">
+                <button
+                  onClick={() => setDatasetFlagFilter((v) => v === "open" ? false : "open")}
+                  className={`app-toggle text-xs ${datasetFlagFilter === "open" ? "app-toggle-active" : ""}`}
+                >
+                  Flagged — Open ({flaggedItemIds.size})
+                </button>
+                <button
+                  onClick={() => setDatasetFlagFilter((v) => v === "resolved" ? false : "resolved")}
+                  className={`app-toggle text-xs ${datasetFlagFilter === "resolved" ? "app-toggle-active" : ""}`}
+                >
+                  Flagged — Resolved ({Object.keys(resolvedFlagsByItemId).length})
+                </button>
+              </div>
+            )}
             <table className="app-table app-table-fixed text-xs">
               <colgroup>
                 <col style={{ width: "7.5rem" }} />
                 <col style={{ width: "12rem" }} />
                 <col style={{ width: "9rem" }} />
-                <col style={{ width: "16rem" }} />
+                <col style={{ width: "14rem" }} />
                 <col style={{ width: "8.5rem" }} />
                 <col style={{ width: "7.5rem" }} />
                 <col />
+                {mode === "load" && <col style={{ width: "7rem" }} />}
                 {mode === "build" && <col style={{ width: "5.75rem" }} />}
               </colgroup>
               <thead className="sticky top-0">
@@ -929,11 +995,18 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                   <th className="app-table-col-label">AI Label</th>
                   <th className="app-table-col-label">Confidence</th>
                   <th className="app-table-col-label">AI Description</th>
+                  {mode === "load" && <th className="app-table-col-label">Flag</th>}
                   {mode === "build" && <th className="app-table-col-right">Action</th>}
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, index) => (
+                {rows
+                  .filter((r) => {
+                    if (datasetFlagFilter === "open") return flaggedItemIds.has(r.id);
+                    if (datasetFlagFilter === "resolved") return !!resolvedFlagsByItemId[r.id];
+                    return true;
+                  })
+                  .map((r, index) => (
                   <tr key={r.id}>
                     <td>
                       <img
@@ -997,6 +1070,31 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                     <td className="text-gray-400 max-w-xs truncate" title={r.aiDescription || ""}>
                       {r.aiDescription || "—"}
                     </td>
+                    {mode === "load" && (
+                      <td className="app-table-col-label">
+                        <div className="app-table-left-slot">
+                          {flaggedItemIds.has(r.id) ? (
+                            <button
+                              onClick={() => {
+                                const flag = flagsByItemId[r.id];
+                                if (flag) setResolveModalFlagId(flag.flag_id);
+                              }}
+                              className="app-btn app-btn-sm text-[10px] text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20"
+                              title={flagsByItemId[r.id]?.reason || "Flagged"}
+                            >
+                              Flagged
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setFlagModalItemId(r.id)}
+                              className="app-btn app-btn-subtle app-btn-sm text-[10px]"
+                            >
+                              Flag
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    )}
                     {mode === "build" && (
                       <td className="app-table-col-right">
                         <button className="text-red-400 hover:text-red-300" onClick={() => removeRow(r.id)}>
@@ -1061,6 +1159,40 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         details={
           previewRow ? (
             <div className="space-y-3">
+              {/* Flag for Secondary Review — at top */}
+              {mode === "load" && (
+                <div className="border-b border-white/6 pb-3">
+                  <label className="text-xs text-gray-500 block mb-1">Secondary Review</label>
+                  {flaggedItemIds.has(previewRow.id) ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block w-2 h-2 rounded-full bg-amber-400"></span>
+                        <span className="text-xs text-amber-400 font-medium">Flagged for review</span>
+                      </div>
+                      {flagsByItemId[previewRow.id]?.reason && (
+                        <p className="text-xs text-gray-300 bg-gray-800 rounded p-2">{flagsByItemId[previewRow.id].reason}</p>
+                      )}
+                      <button
+                        onClick={() => {
+                          const flag = flagsByItemId[previewRow.id];
+                          if (flag) setResolveModalFlagId(flag.flag_id);
+                        }}
+                        className="app-btn app-btn-sm text-[10px] text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20"
+                      >
+                        Resolve Flag
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setFlagModalItemId(previewRow.id)}
+                      className="app-btn app-btn-subtle app-btn-sm text-[10px]"
+                    >
+                      Flag for Secondary Review
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Image ID</label>
                 {mode === "build" ? (
@@ -1114,6 +1246,35 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                   <SegmentTagList value={previewRow.segmentTags} />
                 )}
               </div>
+
+              {/* Resolved flag history — below attributes */}
+              {mode === "load" && resolvedFlagsByItemId[previewRow.id] && (
+                <div className="border-t border-white/6 pt-3">
+                  <label className="text-xs text-gray-500 block mb-1">Resolved Secondary Review</label>
+                  <div className="space-y-1 text-xs">
+                    <div>
+                      <span className="text-gray-500">Question: </span>
+                      <span className="text-gray-300">{resolvedFlagsByItemId[previewRow.id].reason}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Resolution: </span>
+                      <span className="text-gray-300">{resolvedFlagsByItemId[previewRow.id].resolution_action?.replace(/_/g, " ") || "—"}</span>
+                    </div>
+                    {resolvedFlagsByItemId[previewRow.id].resolution_note && (
+                      <div>
+                        <span className="text-gray-500">Note: </span>
+                        <span className="text-gray-300">{resolvedFlagsByItemId[previewRow.id].resolution_note}</span>
+                      </div>
+                    )}
+                    {resolvedFlagsByItemId[previewRow.id].resolved_at && (
+                      <div className="text-gray-500">
+                        Resolved {new Date(resolvedFlagsByItemId[previewRow.id].resolved_at!).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="text-xs text-gray-500 block mb-1">AI Description</label>
                 <div className="text-xs text-gray-300 whitespace-pre-wrap break-words">{previewRow.aiDescription || "—"}</div>
@@ -1140,6 +1301,21 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           ) : null
         }
       />
+
+      {flagModalItemId && (
+        <DatasetFlagModal
+          onSubmit={(reason) => createDatasetFlag(flagModalItemId, reason)}
+          onCancel={() => setFlagModalItemId(null)}
+        />
+      )}
+
+      {resolveModalFlagId && (
+        <DatasetResolveModal
+          flag={Object.values(flagsByItemId).find((f) => f.flag_id === resolveModalFlagId)!}
+          onSubmit={(action, note) => resolveDatasetFlag(resolveModalFlagId, action, note)}
+          onCancel={() => setResolveModalFlagId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1159,38 +1335,59 @@ function validateImageIds(rows: BuildRow[]): { ok: true } | { ok: false; error: 
   return { ok: true };
 }
 
-async function parseExcelManifest(file: File): Promise<Array<{
+async function parseCsvManifest(file: File): Promise<Array<{
   image_id: string;
   image_url: string;
   ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
   segment_tags?: string[] | string;
 }>> {
-  const xlsx = await import("xlsx");
-  const buffer = await file.arrayBuffer();
-  const workbook = xlsx.read(buffer, { type: "array" });
-  const firstSheetName = workbook.SheetNames[0];
-  if (!firstSheetName) throw new Error("Excel file has no sheets.");
-  const sheet = workbook.Sheets[firstSheetName];
-  const rawRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-  return normalizeManifestRows(rawRows, "Excel");
+  const text = await file.text();
+  const rows = parseCsvText(text);
+  if (rows.length === 0) throw new Error("CSV file is empty or has no data rows.");
+  return normalizeManifestRows(rows, "CSV");
 }
 
-function parseJsonManifest(input: string): Array<{
-  image_id: string;
-  image_url: string;
-  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
-  segment_tags?: string[] | string;
-}> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(String(input || ""));
-  } catch {
-    throw new Error("Invalid JSON.");
+function parseCsvText(text: string): Array<Record<string, string>> {
+  const lines: string[][] = [];
+  let current: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      current.push(field); field = "";
+    } else if (ch === "\n" || (ch === "\r" && text[i + 1] === "\n")) {
+      current.push(field); field = "";
+      lines.push(current); current = [];
+      if (ch === "\r") i++;
+    } else if (ch === "\r") {
+      current.push(field); field = "";
+      lines.push(current); current = [];
+    } else {
+      field += ch;
+    }
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error("JSON must be a non-empty array.");
-  }
-  return normalizeManifestRows(parsed as Array<Record<string, unknown>>, "JSON");
+  if (field || current.length > 0) { current.push(field); lines.push(current); }
+
+  if (lines.length < 2) return [];
+  const headers = lines[0].map((h) => h.trim());
+  return lines.slice(1)
+    .filter((row) => row.some((cell) => cell.trim()))
+    .map((row) => {
+      const obj: Record<string, string> = {};
+      headers.forEach((h, i) => { obj[h] = row[i] ?? ""; });
+      return obj;
+    });
 }
 
 function normalizeManifestRows(
@@ -1212,7 +1409,7 @@ function normalizeManifestRows(
   for (let i = 0; i < rowsInput.length; i++) {
     const row = rowsInput[i] || {};
     const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
-    const imageUrl = String(row.image_url || row.image_uri || row.imageUri || "").trim();
+    const imageUrl = String(row.image_url || row.image_uri || row.imageUrl || row.imageUri || "").trim();
     const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || "").trim().toUpperCase();
     const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.attribute_tags ?? row.attributeTags ?? row.attributes ?? row.segments ?? "") as string[] | string;
     if (!imageId) {
@@ -1260,20 +1457,30 @@ function delay(ms: number) {
 
 function normalizeSegmentTags(value: unknown): string[] {
   if (value == null) return ["Baseline"];
-  const parts = Array.isArray(value)
-    ? value.map((v) => String(v || ""))
-    : String(value)
-        .split(/[;,|]/g)
-        .map((v) => String(v || ""));
+  if (Array.isArray(value)) {
+    const parts = value.map((v) => String(v || "").trim()).filter(Boolean);
+    return dedupeStrings(parts);
+  }
+  const str = String(value).trim();
+  if (str.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(str);
+      if (Array.isArray(parsed)) return dedupeStrings(parsed.map((v: unknown) => String(v || "").trim()).filter(Boolean));
+    } catch { /* fall through */ }
+  }
+  const rawParts = str.split(/[;,|]/g).map((v) => v.trim());
+  return dedupeStrings(rawParts);
+}
+
+function dedupeStrings(parts: string[]): string[] {
   const seen = new Set<string>();
   const tags: string[] = [];
   for (const part of parts) {
-    const clean = part.trim();
-    if (!clean) continue;
-    const key = clean.toLowerCase();
+    if (!part) continue;
+    const key = part.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    tags.push(clean);
+    tags.push(part);
   }
   return tags.length > 0 ? tags : ["Baseline"];
 }
@@ -1429,4 +1636,109 @@ function LabelBadge({ label }: { label: string }) {
     return <span className="app-badge app-badge-muted">Unset</span>;
   }
   return <span className="text-gray-300">{label}</span>;
+}
+
+const DATASET_RESOLUTION_ACTIONS: { value: ResolutionAction; label: string }[] = [
+  { value: "label_confirmed", label: "Label Confirmed" },
+  { value: "label_corrected", label: "Label Corrected" },
+  { value: "attributes_corrected", label: "Attributes Corrected" },
+  { value: "image_removed", label: "Image Removed" },
+  { value: "needs_discussion", label: "Needs Discussion" },
+];
+
+function DatasetFlagModal({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (reason: string) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="app-card-strong p-6 w-full max-w-md space-y-4">
+        <h3 className="text-sm font-semibold text-white">Flag for Secondary Review</h3>
+        <p className="text-xs text-gray-400">
+          What is your question or concern about this image?
+        </p>
+        <textarea
+          className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-24"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g., Unsure about the ground truth label — could be either..."
+          autoFocus
+        />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="app-btn app-btn-subtle app-btn-sm text-xs">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(reason)}
+            disabled={!reason.trim()}
+            className="app-btn app-btn-primary app-btn-sm text-xs disabled:opacity-40"
+          >
+            Submit Flag
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DatasetResolveModal({
+  flag,
+  onSubmit,
+  onCancel,
+}: {
+  flag: ReviewFlag;
+  onSubmit: (action: ResolutionAction, note: string) => void;
+  onCancel: () => void;
+}) {
+  const [action, setAction] = useState<ResolutionAction>("label_confirmed");
+  const [note, setNote] = useState("");
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="app-card-strong p-6 w-full max-w-md space-y-4">
+        <h3 className="text-sm font-semibold text-white">Resolve Flag</h3>
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400">Original question:</p>
+          <p className="text-xs text-gray-200 bg-gray-900 rounded p-2">{flag.reason}</p>
+        </div>
+        <div className="space-y-2">
+          <label className="text-xs text-gray-400">Resolution action</label>
+          <select
+            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm"
+            value={action}
+            onChange={(e) => setAction(e.target.value as ResolutionAction)}
+          >
+            {DATASET_RESOLUTION_ACTIONS.map((a) => (
+              <option key={a.value} value={a.value}>{a.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-2">
+          <label className="text-xs text-gray-400">Resolution note (optional)</label>
+          <textarea
+            className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-20"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Additional context or answer to the reviewer's question..."
+          />
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="app-btn app-btn-subtle app-btn-sm text-xs">
+            Cancel
+          </button>
+          <button
+            onClick={() => onSubmit(action, note)}
+            className="app-btn app-btn-success app-btn-sm text-xs"
+          >
+            Resolve
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

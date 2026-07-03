@@ -13,15 +13,16 @@ type ToastOptions = {
 
 type ConfirmOptions = {
   title?: string;
-  message: string;
+  message: string | ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
-  tone?: "default" | "danger";
+  dismissLabel?: string;
+  tone?: "default" | "danger" | "warning";
 };
 
 type FeedbackContextValue = {
   notify: (input: string | ToastOptions) => void;
-  confirm: (options: string | ConfirmOptions) => Promise<boolean>;
+  confirm: (options: string | ConfirmOptions) => Promise<boolean | null>;
 };
 
 type ToastItem = ToastOptions & { id: number };
@@ -31,7 +32,7 @@ const FeedbackContext = createContext<FeedbackContextValue | null>(null);
 export function AppFeedbackProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [confirmState, setConfirmState] = useState<(ConfirmOptions & { open: boolean }) | null>(null);
-  const confirmResolverRef = useRef<((value: boolean) => void) | null>(null);
+  const confirmResolverRef = useRef<((value: boolean | null) => void) | null>(null);
   const nextToastIdRef = useRef(1);
 
   const dismissToast = useCallback((id: number) => {
@@ -48,7 +49,7 @@ export function AppFeedbackProvider({ children }: { children: ReactNode }) {
     [dismissToast]
   );
 
-  const resolveConfirm = useCallback((value: boolean) => {
+  const resolveConfirm = useCallback((value: boolean | null) => {
     confirmResolverRef.current?.(value);
     confirmResolverRef.current = null;
     setConfirmState(null);
@@ -63,9 +64,10 @@ export function AppFeedbackProvider({ children }: { children: ReactNode }) {
       message: payload.message,
       confirmLabel: payload.confirmLabel || "Confirm",
       cancelLabel: payload.cancelLabel || "Cancel",
+      dismissLabel: payload.dismissLabel,
       tone: payload.tone || "default",
     });
-    return new Promise<boolean>((resolve) => {
+    return new Promise<boolean | null>((resolve) => {
       confirmResolverRef.current = resolve;
     });
   }, []);
@@ -117,12 +119,27 @@ export function AppFeedbackProvider({ children }: { children: ReactNode }) {
         <div className="app-modal-overlay fixed inset-0 z-[90] flex items-center justify-center p-4">
           <div className="app-modal-panel w-full max-w-md rounded-[16px] p-5">
             <div className="text-lg font-semibold text-white">{confirmState.title}</div>
-            <p className="mt-3 text-sm leading-6 text-[var(--app-text-muted)]">{confirmState.message}</p>
-            <div className="mt-5 flex justify-end gap-3">
+            <div className="mt-3 text-sm leading-6 text-[var(--app-text-muted)] whitespace-pre-line">{confirmState.message}</div>
+            <div className={`mt-5 flex gap-3 ${confirmState.dismissLabel ? "justify-between" : confirmState.tone === "danger" ? "justify-between" : "justify-end"}`}>
+              {confirmState.dismissLabel && (
+                <button
+                  type="button"
+                  onClick={() => resolveConfirm(null)}
+                  className="app-btn app-btn-md bg-red-500/20 text-red-200 border border-red-400/30 hover:bg-red-500/30"
+                >
+                  {confirmState.dismissLabel}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => resolveConfirm(false)}
-                className="app-btn app-btn-subtle app-btn-md"
+                className={`app-btn app-btn-md ${
+                  confirmState.tone === "danger"
+                    ? "bg-purple-500/20 text-purple-200 border border-purple-400/30 hover:bg-purple-500/30"
+                    : confirmState.tone === "warning"
+                      ? "bg-red-500/20 text-red-200 border border-red-400/30 hover:bg-red-500/30"
+                      : "app-btn-subtle"
+                }`}
               >
                 {confirmState.cancelLabel}
               </button>
@@ -130,7 +147,9 @@ export function AppFeedbackProvider({ children }: { children: ReactNode }) {
                 type="button"
                 onClick={() => resolveConfirm(true)}
                 className={`app-btn app-btn-md ${
-                  confirmState.tone === "danger" ? "app-btn-danger" : "app-btn-primary"
+                  confirmState.tone === "danger" || confirmState.tone === "warning"
+                    ? "bg-purple-500/20 text-purple-200 border border-purple-400/30 hover:bg-purple-500/30"
+                    : "app-btn-primary"
                 }`}
               >
                 {confirmState.confirmLabel}

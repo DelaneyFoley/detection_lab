@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Flag Resolution Modals — Design Mockup</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --app-bg: #02060d;
+    --app-bg-accent: #081220;
+    --app-bg-elevated: #050b14;
+    --app-surface: rgba(10, 20, 33, 0.96);
+    --app-surface-strong: rgba(11, 22, 36, 0.98);
+    --app-surface-soft: rgba(13, 25, 41, 0.94);
+    --app-field-bg: rgba(9, 17, 28, 0.98);
+    --app-field-hover: rgba(12, 22, 35, 0.99);
+    --app-border: rgba(147, 173, 204, 0.24);
+    --app-border-strong: rgba(165, 189, 218, 0.34);
+    --app-text: #edf4fb;
+    --app-text-muted: #8fa2b8;
+    --app-text-subtle: #7387a0;
+    --app-text-on-accent: #f8fbff;
+    --app-accent: #2f6fff;
+    --app-purple: #b269ff;
+    --app-purple-soft: rgba(178, 105, 255, 0.18);
+    --app-not-detected: #7fd1ff;
+    --app-not-detected-soft: rgba(127, 209, 255, 0.18);
+    --app-success: #2fe3aa;
+    --app-warning: #f0b464;
+    --app-table-head: #22344d;
+    --app-table-row-hover: rgba(51, 92, 132, 0.16);
+    --app-badge-bg: rgba(8, 15, 24, 0.9);
+    --app-overlay: rgba(4, 10, 16, 0.72);
+    --app-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
+  }
+  html { color-scheme: dark; }
+  body {
+    min-height: 100vh;
+    color: var(--app-text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background:
+      radial-gradient(circle at top center, rgba(41, 115, 177, 0.16), transparent 24%),
+      radial-gradient(circle at top left, rgba(25, 78, 132, 0.10), transparent 20%),
+      linear-gradient(180deg, var(--app-bg-elevated) 0%, var(--app-bg) 100%);
+  }
+  .app-card {
+    background: var(--app-surface-soft);
+    border: 1px solid var(--app-border-strong);
+    border-radius: 10px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.015);
+  }
+  .app-panel {
+    background: var(--app-surface);
+    border: 1px solid var(--app-border-strong);
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.26);
+  }
+  .app-label {
+    color: var(--app-text-subtle);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .app-input, .app-select {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--app-border-strong);
+    background: var(--app-field-bg);
+    color: var(--app-text);
+    transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  }
+  .app-input:hover, .app-select:hover {
+    border-color: color-mix(in srgb, var(--app-border-strong) 88%, white);
+    background: var(--app-field-hover);
+  }
+  .app-input:focus, .app-select:focus {
+    border-color: rgba(92,184,255,0.72);
+    box-shadow: 0 0 0 3px rgba(92,184,255,0.12);
+    outline: none;
+  }
+  select, select option { background-color: var(--app-field-bg); color: var(--app-text); }
+  .app-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+    border: 1px solid transparent; border-radius: 8px;
+    padding: 0.46rem 0.78rem; font-size: 0.78rem; font-weight: 600; line-height: 1.1;
+    transition: transform 140ms ease, opacity 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
+    cursor: pointer;
+  }
+  .app-btn:hover { transform: translateY(-1px); }
+  .app-btn:active { transform: translateY(0); }
+  .app-btn:disabled { opacity: 0.55; transform: none; cursor: not-allowed; }
+  .app-btn-primary {
+    background: linear-gradient(180deg, #46aef8 0%, #2f92df 100%);
+    border-color: rgba(120, 192, 255, 0.20);
+    color: #f8fbff;
+  }
+  .app-btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #57baff 0%, #379de8 100%);
+    box-shadow: 0 12px 24px rgba(47, 146, 223, 0.22);
+  }
+  .app-btn-subtle {
+    background: rgba(42, 58, 77, 0.90);
+    border-color: rgba(145, 169, 199, 0.28);
+    color: #e7f0f8;
+  }
+  .app-btn-subtle:hover:not(:disabled) {
+    background: rgba(52, 71, 92, 0.96);
+    border-color: rgba(160, 184, 214, 0.42);
+    color: #fff;
+  }
+  .app-badge {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    border-radius: 6px;
+    border: 1px solid var(--app-border-strong);
+    background: var(--app-badge-bg);
+    padding: 0.22rem 0.58rem;
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em;
+  }
+  .app-modal-overlay { background: var(--app-overlay); }
+  .app-modal-panel {
+    background: var(--app-surface-strong);
+    border: 1px solid var(--app-border);
+    box-shadow: var(--app-shadow);
+  }
+  ::selection { background: rgba(92,184,255,0.28); color: #f8fbff; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(124,148,173,0.4) transparent; }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(124,148,173,0.3);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+  .hidden-init { display: none !important; }
+
+  /* Demo tips */
+  .demo-tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    vertical-align: middle;
+  }
+  .demo-tip-overlay {
+    position: absolute;
+    z-index: 30;
+    gap: 0;
+  }
+  .demo-tip-overlay.demo-tip-active { z-index: 45; }
+  .demo-tip-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 9999px;
+    border: 1px dashed rgba(234, 255, 0, 0.75);
+    background: rgba(234, 255, 0, 0.16);
+    color: #eaff00;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+    text-shadow: 0 0 6px rgba(234, 255, 0, 0.7);
+  }
+  .demo-tip-btn:hover {
+    transform: scale(1.08);
+    background: rgba(234, 255, 0, 0.32);
+    border-color: rgba(234, 255, 0, 1);
+  }
+  .demo-tip-btn[aria-expanded="true"] {
+    background: rgba(234, 255, 0, 0.4);
+    border-style: solid;
+    color: #ffffff;
+  }
+  .demo-tip-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 40;
+    width: 340px;
+    max-width: calc(100vw - 2rem);
+    padding: 0.85rem 0.9rem 0.75rem 0.9rem;
+    border-radius: 10px;
+    border: 1px dashed rgba(234, 255, 0, 0.6);
+    background: rgba(24, 24, 10, 0.98);
+    color: #fff9c4;
+    font-size: 11.5px;
+    line-height: 1.5;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(234, 255, 0, 0.08);
+  }
+  .demo-tip-popover::before {
+    content: "DEMO TIP";
+    display: inline-block;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    font-weight: 700;
+    color: #eaff00;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(234, 255, 0, 0.5);
+    background: rgba(234, 255, 0, 0.12);
+    margin-bottom: 8px;
+  }
+  .demo-tip-popover.demo-tip-popover-right {
+    left: auto;
+    right: 0;
+  }
+  .demo-tip-popover p { margin: 0; }
+  .demo-tip-popover p + p { margin-top: 0.5rem; }
+  .demo-tip-popover ol {
+    margin: 0.35rem 0 0 1.15rem;
+    padding: 0;
+    list-style: decimal;
+  }
+  .demo-tip-popover ol li { margin-top: 0.25rem; }
+  .demo-tip-popover ol li:first-child { margin-top: 0; }
+  .demo-tip-popover strong { color: #faff9e; font-weight: 600; }
+  .demo-tip-close {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: rgba(234, 255, 0, 0.75);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .demo-tip-close:hover {
+    background: rgba(234, 255, 0, 0.2);
+    color: #ffffff;
+  }
+</style>
+</head>
+<body class="min-h-screen">
+
+<div class="mx-auto max-w-7xl px-6 py-8 space-y-6">
+
+  <div>
+    <h2 class="text-xl font-semibold text-[var(--app-text)]">Quality Assurance</h2>
+    <p class="mt-1 text-sm text-[var(--app-text-muted)]">Manage dataset QA workflows, inter-annotator agreement, and performance metrics.</p>
+  </div>
+
+  <div class="flex gap-1 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-soft)] p-1">
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path></svg>
+      Pipeline
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors bg-[rgba(92,184,255,0.12)] text-[var(--app-text)] ring-1 ring-[rgba(182,223,255,0.22)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+      Flags Queue
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"></path><path d="M14 9.3V1.99"></path><path d="M8.5 2h7"></path><path d="M14 9.3a6.5 6.5 0 1 1-4 0"></path></svg>
+      QA Sampling
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"></circle><circle cx="6" cy="6" r="3"></circle><path d="M13 6h3a2 2 0 0 1 2 2v7"></path><line x1="6" y1="9" x2="6" y2="21"></line></svg>
+      Discrepancies
+    </button>
+    <button class="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors text-[var(--app-text-muted)] hover:text-[var(--app-text)]">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+      Performance Metrics
+    </button>
+  </div>
+
+  <div class="app-panel p-4 flex items-start gap-3">
+    <span class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/10 text-amber-300">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+    </span>
+    <div class="text-xs text-[var(--app-text-muted)]">
+      <p class="text-sm text-[var(--app-text)]">This mockup focuses on the <strong class="text-[var(--app-text)]">flag resolution modal</strong> — the modal that opens when a QA reviewer clicks a row in the Flags Queue.</p>
+      <p class="mt-1">Open a flag from the queue below to see the editable resolution flow, or open a resolved flag to see the read-only diff view.</p>
+    </div>
+  </div>
+
+  <div class="flex justify-end">
+    <select class="app-select px-2 py-1 text-[11px]" style="width: 120px;">
+      <option value="10">10 / page</option>
+      <option value="25">25 / page</option>
+      <option value="50">50 / page</option>
+    </select>
+  </div>
+
+  <div class="app-card overflow-hidden relative">
+    <div class="demo-tip demo-tip-overlay" style="top: 8px; right: 8px;">
+      <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+      <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog">
+        <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+        <p>Flags are raised by annotators or reviewers when an image needs a second look. Click any row to open the <strong>resolution modal</strong> — the focus of this mockup.</p>
+        <p>Try each of the three sample flags to see how the modal handles different flag reasons and taxonomies.</p>
+      </div>
+    </div>
+    <div class="flex items-center justify-between px-4 py-3">
+      <button id="openToggle" class="flex items-center gap-2 text-left hover:opacity-80">
+        <svg id="openCaret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-[var(--app-text-subtle)]"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        <span class="text-sm font-medium text-[var(--app-text)]">Open Flags</span>
+        <span class="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-300" id="openCount">3</span>
+      </button>
+    </div>
+    <div id="openBody" class="border-t border-[var(--app-border)]">
+      <div id="openList"></div>
+      <div id="openPager" class="hidden-init flex items-center justify-between px-4 py-2 border-t border-[var(--app-border)] bg-[var(--app-surface-soft)]">
+        <span class="text-[11px] text-[var(--app-text-subtle)]">Page <span id="openPageNum">1</span> of <span id="openPageTotal">1</span></span>
+        <div class="flex gap-1">
+          <button class="app-btn app-btn-subtle px-2 py-1 text-xs" disabled>Prev</button>
+          <button class="app-btn app-btn-subtle px-2 py-1 text-xs" disabled>Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-card overflow-hidden relative">
+    <div class="demo-tip demo-tip-overlay" style="top: 8px; right: 8px;">
+      <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+      <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog">
+        <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+        <p>Resolved flags land here. Click a row to reopen it <strong>read-only</strong>, with a before / after diff showing what changed on resolve — label edits, attribute edits, and the reviewer's note.</p>
+      </div>
+    </div>
+    <button id="resolvedToggle" class="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-[var(--app-table-row-hover)]">
+      <svg id="resolvedCaret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-[var(--app-text-subtle)]" style="transform: rotate(-90deg);"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      <span class="text-sm font-medium text-[var(--app-text)]">Resolved Flags</span>
+      <span class="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-300" id="resolvedCount">2</span>
+    </button>
+    <div id="resolvedListWrap" class="hidden-init border-t border-[var(--app-border)]">
+      <div id="resolvedList"></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="toastBar" style="display:none; position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 60; padding: 10px 14px; border-radius: 8px; background: rgba(29, 108, 83, 0.96); border: 1px solid rgba(78, 208, 168, 0.34); color: #ecfffa; font-size: 13px; box-shadow: 0 8px 20px rgba(0,0,0,0.4);"></div>
+
+<!-- RESOLUTION MODAL (edit) -->
+<div id="resolveModal" class="hidden-init fixed inset-0 z-50 flex items-start justify-center overflow-y-auto app-modal-overlay p-3 md:p-6">
+  <button class="absolute inset-0" data-close-resolve aria-label="Close preview"></button>
+  <div class="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto" role="dialog" aria-modal="true">
+    <div class="mb-3 flex items-center justify-between">
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-subtle)]">Image Preview</div>
+        <div class="mt-1 text-xs text-gray-400">
+          Flag Review · <span id="rm_idx">1</span>/<span id="rm_total">3</span> · <span id="rm_subtitle"></span>
+        </div>
+      </div>
+      <button class="app-btn app-btn-primary px-3 py-1.5 text-xs" data-close-resolve>Close</button>
+    </div>
+
+    <div class="grid gap-x-3 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr]">
+      <div class="flex items-center justify-center gap-2 mb-2 lg:col-start-1 lg:row-start-1">
+        <button class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Zoom -</button>
+        <button class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Zoom +</button>
+        <button class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Reset</button>
+        <button id="rm_prev" class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Prev</button>
+        <button id="rm_next" class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Next</button>
+      </div>
+
+      <div class="flex h-[52vh] items-center justify-center overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 lg:h-[70vh] lg:col-start-1 lg:row-start-2">
+        <img id="rm_img" src="" alt="" class="max-h-[calc(52vh-1rem)] w-full origin-center select-none rounded object-contain lg:max-h-[calc(70vh-1rem)]" draggable="false" />
+      </div>
+
+      <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-xs lg:col-start-2 lg:row-start-2">
+        <div class="space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Image ID</div>
+              <p class="mt-1 text-xs font-mono text-gray-200" id="rm_imgId"></p>
+            </div>
+            <div class="text-right max-w-[50%] min-w-0">
+              <p class="text-xs font-medium text-gray-100 truncate" id="rm_annotator"></p>
+              <p class="text-[11px] text-gray-500 truncate" id="rm_dataset"></p>
+            </div>
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4">
+            <div class="border-l-2 border-amber-500 bg-amber-500/[0.06] rounded-r-md pl-3 pr-3 py-2.5">
+              <div class="flex items-center gap-2 mb-1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-amber-400"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+                <span class="text-[11px] uppercase tracking-[0.14em] font-semibold text-amber-400">Flag Reason</span>
+              </div>
+              <p class="text-xs text-gray-200" id="rm_reason"></p>
+              <p class="text-[11px] text-amber-200/50 mt-1" id="rm_flaggedAt"></p>
+            </div>
+          </div>
+
+          <div id="rm_predictionSection" class="border-t border-white/[0.07] pt-4 space-y-2 hidden-init">
+            <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Model Prediction</div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-gray-400">Decision</span>
+              <span id="rm_decision" class="text-xs font-semibold"></span>
+            </div>
+            <div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-400">Evidence</span>
+                <span class="text-xs text-gray-300">
+                  <span class="text-gray-500 mr-1">Confidence</span>
+                  <span id="rm_confidence" class="tabular-nums text-gray-200"></span>
+                </span>
+              </div>
+              <p id="rm_evidence" class="mt-1 text-xs text-gray-300 whitespace-pre-wrap"></p>
+            </div>
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4 space-y-2 relative">
+            <div class="demo-tip demo-tip-overlay" style="top: 12px; right: 4px;">
+              <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+              <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog">
+                <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+                <p>The flag resolution modal has two editable inputs — <strong>Ground Truth Label</strong> and <strong>Attributes</strong> — and one auto-derived output — <strong>Reviewer Assessment</strong>.</p>
+                <p><strong>How it works:</strong></p>
+                <ol>
+                  <li>Leave both untouched → assessment locks to <strong>Accepted</strong></li>
+                  <li>Change the label only → <strong>Label Corrected</strong></li>
+                  <li>Toggle an attribute chip only → <strong>Attributes Corrected</strong></li>
+                  <li>Change both → <strong>Label &amp; Attributes Corrected</strong></li>
+                </ol>
+                <p>The highlighted row under Reviewer Assessment updates in real time as you edit. Add a note back to the annotator, click <strong>Resolve</strong>, and the flag moves to the Resolved list — where the diff you just made is preserved.</p>
+              </div>
+            </div>
+            <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Ground Truth Label</div>
+            <div class="flex items-center gap-3 flex-wrap">
+              <button data-gt="DETECTED" class="gt-btn px-3 py-1.5 rounded text-xs border">DETECTED</button>
+              <button data-gt="NOT_DETECTED" class="gt-btn px-3 py-1.5 rounded text-xs border">NOT_DETECTED</button>
+              <button data-gt="UNSET" class="gt-btn px-3 py-1.5 rounded text-xs border">UNSET</button>
+            </div>
+          </div>
+
+          <div id="rm_attrsSection" class="border-t border-white/[0.07] pt-4 space-y-2">
+            <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Attributes</div>
+            <div id="rm_attrs" class="flex flex-wrap gap-2"></div>
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4 space-y-2">
+            <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Reviewer Assessment</div>
+            <p class="text-[11px] text-gray-500">Set automatically from your label &amp; attribute edits</p>
+            <div id="rm_assess" class="space-y-1.5"></div>
+            <input id="rm_note" class="app-input w-full px-2 py-1.5 text-sm mt-2" placeholder="Note (optional)..." />
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4">
+            <button id="rm_resolve" class="app-btn app-btn-primary text-xs w-full py-2.5">Resolve</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- VIEW MODAL (read-only diff) -->
+<div id="viewModal" class="hidden-init fixed inset-0 z-50 flex items-start justify-center overflow-y-auto app-modal-overlay p-3 md:p-6">
+  <button class="absolute inset-0" data-close-view aria-label="Close preview"></button>
+  <div class="relative z-10 w-full max-w-7xl max-h-[calc(100vh-3rem)] overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg p-4 my-auto" role="dialog" aria-modal="true">
+    <div class="mb-3 flex items-center justify-between">
+      <div class="min-w-0">
+        <div class="text-[11px] uppercase tracking-[0.16em] text-[var(--app-text-subtle)]">Image Preview</div>
+        <div class="mt-1 text-xs text-gray-400">
+          Resolved Flag · <span id="vm_idx">1</span>/<span id="vm_total">2</span> · <span id="vm_subtitle"></span>
+        </div>
+      </div>
+      <button class="app-btn app-btn-primary px-3 py-1.5 text-xs" data-close-view>Close</button>
+    </div>
+
+    <div class="grid gap-x-3 lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-[auto_1fr]">
+      <div class="flex items-center justify-center gap-2 mb-2 lg:col-start-1 lg:row-start-1">
+        <button class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Zoom -</button>
+        <button class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Zoom +</button>
+        <button class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Reset</button>
+        <button id="vm_prev" class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Prev</button>
+        <button id="vm_next" class="app-btn app-btn-subtle px-3 py-1.5 text-xs">Next</button>
+      </div>
+      <div class="flex h-[52vh] items-center justify-center overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-2 lg:h-[70vh] lg:col-start-1 lg:row-start-2">
+        <img id="vm_img" src="" alt="" class="max-h-[calc(52vh-1rem)] w-full origin-center select-none rounded object-contain lg:max-h-[calc(70vh-1rem)]" draggable="false" />
+      </div>
+      <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-bg)] p-3 text-xs lg:col-start-2 lg:row-start-2">
+        <div class="space-y-4">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Image ID</div>
+              <p id="vm_imgId" class="mt-1 text-xs font-mono text-gray-200"></p>
+            </div>
+            <div class="text-right max-w-[50%] min-w-0">
+              <p id="vm_annotator" class="text-xs font-medium text-gray-100 truncate"></p>
+              <p id="vm_dataset" class="text-[11px] text-gray-500 truncate"></p>
+            </div>
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4">
+            <div class="border-l-2 border-amber-500 bg-amber-500/[0.06] rounded-r-md pl-3 pr-3 py-2.5">
+              <div class="flex items-center gap-2 mb-1">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-amber-400"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>
+                <span class="text-[11px] uppercase tracking-[0.14em] font-semibold text-amber-400">Flag Reason</span>
+              </div>
+              <p class="text-xs text-gray-200" id="vm_reason"></p>
+              <p class="text-[11px] text-amber-200/50 mt-1" id="vm_flaggedAt"></p>
+            </div>
+          </div>
+
+          <div id="vm_predictionSection" class="border-t border-white/[0.07] pt-4 space-y-2 hidden-init">
+            <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Model Prediction</div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs text-gray-400">Decision</span>
+              <span id="vm_decision" class="text-xs font-semibold"></span>
+            </div>
+            <div>
+              <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-400">Evidence</span>
+                <span class="text-xs text-gray-300">
+                  <span class="text-gray-500 mr-1">Confidence</span>
+                  <span id="vm_confidence" class="tabular-nums text-gray-200"></span>
+                </span>
+              </div>
+              <p id="vm_evidence" class="mt-1 text-xs text-gray-300 whitespace-pre-wrap"></p>
+            </div>
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4 space-y-2 relative">
+            <div class="demo-tip demo-tip-overlay" style="top: 12px; right: 4px;">
+              <button type="button" class="demo-tip-btn" data-demo-tip aria-expanded="false" aria-label="Open demo tip">i</button>
+              <div class="demo-tip-popover demo-tip-popover-right hidden-init" role="dialog">
+                <button type="button" class="demo-tip-close" data-demo-tip-close aria-label="Close demo tip">&times;</button>
+                <p>Every resolve captures a <strong>before / after snapshot</strong> so the record stays auditable — even if the underlying image gets re-edited later.</p>
+                <p><strong>How the diff renders:</strong></p>
+                <ol>
+                  <li>Label change → <span style="color: #f87171; text-decoration: line-through;">PREV</span> → <span style="color: #6ee7b7;">NEW</span></li>
+                  <li>Attribute added → green chip with <code style="color: #6ee7b7;">+</code> prefix</li>
+                  <li>Attribute removed → red strikethrough chip with <code style="color: #f87171;">−</code> prefix</li>
+                  <li>Attribute kept → neutral sky chip</li>
+                </ol>
+                <p>Every control is read-only in this view — reviewers can't accidentally re-edit an already-resolved flag.</p>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Ground Truth Label</div>
+              <span id="vm_label_diffTag" class="hidden-init text-[11px] text-gray-500">Updated on resolve</span>
+            </div>
+            <div id="vm_label_body"></div>
+          </div>
+
+          <div id="vm_attrs_section" class="border-t border-white/[0.07] pt-4 space-y-2">
+            <div class="flex items-center justify-between">
+              <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Attributes</div>
+              <span id="vm_attr_diffTag" class="hidden-init text-[11px] text-gray-500">Updated on resolve</span>
+            </div>
+            <div id="vm_attrs_body" class="flex flex-wrap gap-1.5"></div>
+            <div id="vm_attrs_legend" class="hidden-init flex items-center gap-3 text-[10px] text-gray-500 mt-1">
+              <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm bg-emerald-500/60"></span>Added</span>
+              <span class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm bg-red-500/60"></span>Removed</span>
+            </div>
+          </div>
+
+          <div class="border-t border-white/[0.07] pt-4 space-y-2">
+            <div class="text-[11px] uppercase tracking-[0.14em] text-gray-500 font-medium">Resolution</div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium bg-emerald-500/10 text-emerald-300">
+                <span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                Resolved
+              </span>
+              <span id="vm_action" class="text-xs text-gray-200"></span>
+            </div>
+            <p id="vm_resolvedMeta" class="text-[11px] text-gray-500"></p>
+            <p id="vm_resolvedNote" class="text-xs text-gray-300 whitespace-pre-wrap"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const ATTRIBUTE_TAXONOMY = [
+  "Baseline",
+  "Blurry_image",
+  "Occluded_view",
+  "Distant",
+  "No_plumbing",
+  "Rusting",
+  "Oxidation",
+  "Mold",
+  "Dust",
+  "Grime",
+  "Staining",
+  "Sealant",
+  "Paint",
+  "Leak",
+  "Color_confuser",
+  "Excluded_hardware",
+  "Mineral_buildup",
+  "Minor_corrosion",
+  "Borderline",
+  "Severity_0",
+  "Severity_1",
+  "Severity_2",
+  "Severity_3",
+  "Severity_4",
+];
+
+const OPEN_FLAGS = [
+  {
+    flag_id: "f_001",
+    image_id: "MCT_AI_014",
+    image_uri: "https://picsum.photos/seed/mct014/640/420",
+    reason: "Annotator uncertain — bowl obstructed by cleaning supplies, hard to see rim staining pattern.",
+    created_at: "2026-06-30T14:12:00Z",
+    annotator: "Sarah M.",
+    dataset_name: "MC - Toilet V1",
+    ground_truth_label: "DETECTED",
+    segment_tags: ["Staining", "Severity_2"],
+    prediction: {
+      decision: "NOT_DETECTED",
+      confidence: 0.612,
+      evidence: "Some minor discoloration near the rim but no clear pitting or structural degradation observed.",
+    },
+  },
+  {
+    flag_id: "f_002",
+    image_id: "MCL_007",
+    image_uri: "https://picsum.photos/seed/mcl007/640/420",
+    reason: "Reviewer flagged during sampling — annotator label appears inconsistent with the visible plumbing.",
+    created_at: "2026-07-01T09:44:00Z",
+    annotator: null,
+    dataset_name: "MC - Laundry V1",
+    ground_truth_label: "NOT_DETECTED",
+    segment_tags: ["No_plumbing"],
+    prediction: null,
+  },
+  {
+    flag_id: "f_003",
+    image_id: "MC2_0022",
+    image_uri: "https://picsum.photos/seed/mc22/640/420",
+    reason: "Model prediction and annotator label disagree — needs a second reviewer.",
+    created_at: "2026-07-02T08:15:00Z",
+    annotator: "Priya D.",
+    dataset_name: "MC2 TEST",
+    ground_truth_label: "DETECTED",
+    segment_tags: ["Rusting", "Oxidation", "Severity_3"],
+    prediction: {
+      decision: "DETECTED",
+      confidence: 0.918,
+      evidence: "Widespread surface oxidation with visible discoloration across the pipe joints.",
+    },
+  },
+];
+
+const RESOLVED_FLAGS = [
+  {
+    flag_id: "rf_001",
+    image_id: "MCL_001",
+    image_uri: "https://picsum.photos/seed/mcl001/640/420",
+    reason: "Annotator wasn't sure whether waterline staining qualified as corrosion or just mineral buildup.",
+    created_at: "2026-06-28T10:20:00Z",
+    annotator: "Sarah M.",
+    dataset_name: "MC - Laundry V1",
+    prediction: {
+      decision: "NOT_DETECTED",
+      confidence: 0.732,
+      evidence: "Mineral deposits present but no clear structural degradation observed.",
+    },
+    previous_ground_truth_label: "DETECTED",
+    new_ground_truth_label: "NOT_DETECTED",
+    previous_attributes: ["Baseline", "Severity_3", "Mold", "Grime", "Oxidation"],
+    new_attributes: ["Baseline", "Mold", "Grime", "Oxidation", "Severity_1", "Minor_corrosion", "Dust"],
+    resolution_action: "both_corrected",
+    resolution_note: "Confirmed with spec — mineral buildup does not qualify as corrosion. Lowered severity and flipped to NOT_DETECTED.",
+    resolved_by: "Delaney F.",
+    resolved_at: "2026-06-29T15:04:00Z",
+  },
+  {
+    flag_id: "rf_002",
+    image_id: "MC2_0008",
+    image_uri: "https://picsum.photos/seed/mc0008/640/420",
+    reason: "Annotator flagged for a sanity check — oxidation pattern looked textbook but wanted confirmation.",
+    created_at: "2026-06-27T11:00:00Z",
+    annotator: "Priya D.",
+    dataset_name: "MC2 TEST",
+    prediction: {
+      decision: "DETECTED",
+      confidence: 0.964,
+      evidence: "Deep surface oxidation with visible pitting across the entire joint.",
+    },
+    previous_ground_truth_label: "DETECTED",
+    new_ground_truth_label: "DETECTED",
+    previous_attributes: ["Oxidation", "Severity_2"],
+    new_attributes: ["Oxidation", "Severity_2"],
+    resolution_action: "accepted",
+    resolution_note: "Annotator was correct — clean DETECTED with the expected attributes. Nothing to change.",
+    resolved_by: "Delaney F.",
+    resolved_at: "2026-06-27T14:32:00Z",
+  },
+];
+
+const ASSESSMENT_OPTIONS = [
+  { value: "accepted", label: "Accepted" },
+  { value: "label_corrected", label: "Label Corrected" },
+  { value: "attributes_corrected", label: "Attributes Corrected" },
+  { value: "both_corrected", label: "Label & Attributes Corrected" },
+];
+
+const state = {
+  openFlags: OPEN_FLAGS.map((f) => ({ ...f, segment_tags: f.segment_tags.slice() })),
+  resolvedFlags: RESOLVED_FLAGS.map((f) => ({ ...f })),
+  openCollapsed: false,
+  resolvedCollapsed: true,
+  activeIndex: null,
+  editedLabel: undefined,
+  editedTags: undefined,
+  viewIndex: null,
+};
+
+const $ = (id) => document.getElementById(id);
+
+function show(el, display) { if (!el) return; el.classList.remove("hidden-init"); el.style.display = display || "block"; }
+function hide(el) { if (!el) return; el.classList.add("hidden-init"); el.style.display = ""; }
+
+function attrsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort(); const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
+}
+
+function localDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
+function localDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const date = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+  let hours = d.getHours();
+  const mins = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12 || 12;
+  return `${date}, ${hours}:${mins} ${ampm}`;
+}
+
+function deriveAssessment(origLabel, newLabel, origAttrs, newAttrs) {
+  const labelChanged = origLabel !== newLabel;
+  const attrsChanged = !attrsEqual(origAttrs, newAttrs);
+  if (labelChanged && attrsChanged) return "both_corrected";
+  if (labelChanged) return "label_corrected";
+  if (attrsChanged) return "attributes_corrected";
+  return "accepted";
+}
+
+function humanizeAction(v) {
+  return (ASSESSMENT_OPTIONS.find((o) => o.value === v) || { label: v }).label;
+}
+
+function labelColorClass(v) {
+  if (v === "DETECTED") return "text-[var(--app-purple)]";
+  if (v === "NOT_DETECTED") return "text-[var(--app-not-detected)]";
+  return "text-gray-500";
+}
+
+function toast(msg) {
+  const bar = $("toastBar");
+  bar.textContent = msg;
+  bar.style.display = "block";
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (bar.style.display = "none"), 2600);
+}
+
+function renderOpenList() {
+  $("openCount").textContent = String(state.openFlags.length);
+  const body = $("openBody");
+  const caret = $("openCaret");
+  if (state.openCollapsed) {
+    hide(body);
+    caret.innerHTML = '<polyline points="9 18 15 12 9 6"></polyline>';
+    return;
+  }
+  show(body, "block");
+  caret.innerHTML = '<polyline points="6 9 12 15 18 9"></polyline>';
+  const wrap = $("openList");
+  if (state.openFlags.length === 0) {
+    wrap.innerHTML = `<p class="px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">No open flags.</p>`;
+    hide($("openPager"));
+    return;
+  }
+  wrap.innerHTML = state.openFlags.map((flag, idx) => `
+    <div class="flex items-center gap-4 px-4 py-3 cursor-pointer border-b border-[var(--app-border)] last:border-b-0 hover:bg-[var(--app-table-row-hover)]" data-open-idx="${idx}">
+      <img src="${flag.image_uri}" alt="${flag.image_id}" class="h-10 w-10 rounded object-cover border border-[var(--app-border)] shrink-0" />
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <p class="text-xs font-mono text-[var(--app-text-subtle)] truncate">${flag.image_id}</p>
+          <span class="text-[10px] text-[var(--app-text-muted)] truncate">${flag.annotator ? `${flag.annotator} · ${flag.dataset_name}` : flag.dataset_name}</span>
+        </div>
+        <p class="mt-1 text-sm text-[var(--app-text)]">${flag.reason}</p>
+        <p class="mt-1 text-[11px] text-[var(--app-text-subtle)]">Flagged ${localDate(flag.created_at)}</p>
+      </div>
+      <span class="text-xs text-[var(--app-text-subtle)]">Click to review</span>
+    </div>
+  `).join("");
+  wrap.querySelectorAll("[data-open-idx]").forEach((row) => {
+    row.addEventListener("click", () => openResolveModal(parseInt(row.getAttribute("data-open-idx"), 10)));
+  });
+  hide($("openPager"));
+}
+
+function renderResolvedList() {
+  const wrap = $("resolvedList");
+  $("resolvedCount").textContent = String(state.resolvedFlags.length);
+  if (state.resolvedFlags.length === 0) {
+    wrap.innerHTML = `<p class="px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">No resolved flags yet.</p>`;
+    return;
+  }
+  wrap.innerHTML = state.resolvedFlags.map((flag, idx) => `
+    <div class="flex items-center gap-4 px-4 py-3 border-b border-[var(--app-border)] last:border-b-0 cursor-pointer hover:bg-[var(--app-table-row-hover)]" data-resolved-idx="${idx}">
+      <img src="${flag.image_uri}" alt="${flag.image_id}" class="h-10 w-10 rounded object-cover border border-[var(--app-border)] shrink-0" />
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <p class="text-xs font-mono text-[var(--app-text-subtle)] truncate">${flag.image_id}</p>
+          <span class="text-[10px] text-[var(--app-text-muted)] truncate">${flag.annotator ? `${flag.annotator} · ${flag.dataset_name}` : flag.dataset_name}</span>
+        </div>
+        <p class="mt-1 text-sm text-[var(--app-text)]">${flag.reason}</p>
+        <div class="mt-1 flex items-center gap-3 text-[11px] text-[var(--app-text-subtle)]">
+          <span class="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">${flag.resolution_action.replace(/_/g, " ")}</span>
+          <span>by ${flag.resolved_by}</span>
+          <span class="truncate max-w-[220px]">${flag.resolution_note || ""}</span>
+          <span>${localDate(flag.resolved_at)}</span>
+        </div>
+      </div>
+      <span class="text-[10px] font-medium rounded-full px-2 py-0.5 bg-emerald-500/20 text-emerald-300">resolved</span>
+    </div>
+  `).join("");
+  wrap.querySelectorAll("[data-resolved-idx]").forEach((row) => {
+    row.addEventListener("click", () => openViewModal(parseInt(row.getAttribute("data-resolved-idx"), 10)));
+  });
+}
+
+function openResolveModal(idx) {
+  state.activeIndex = idx;
+  state.editedLabel = undefined;
+  state.editedTags = undefined;
+  $("rm_note").value = "";
+  renderResolveModal();
+  show($("resolveModal"), "flex");
+}
+
+function closeResolveModal() {
+  hide($("resolveModal"));
+  state.activeIndex = null;
+}
+
+function renderResolveModal() {
+  if (state.activeIndex == null) return;
+  const flag = state.openFlags[state.activeIndex];
+  if (!flag) return;
+
+  $("rm_idx").textContent = String(state.activeIndex + 1);
+  $("rm_total").textContent = String(state.openFlags.length);
+  $("rm_subtitle").textContent = flag.image_id;
+  $("rm_imgId").textContent = flag.image_id;
+  $("rm_annotator").textContent = flag.annotator || "";
+  $("rm_dataset").textContent = flag.dataset_name;
+  $("rm_img").src = flag.image_uri;
+  $("rm_reason").textContent = flag.reason;
+  $("rm_flaggedAt").textContent = "Flagged " + localDate(flag.created_at);
+
+  if (flag.prediction) {
+    show($("rm_predictionSection"), "block");
+    const decEl = $("rm_decision");
+    decEl.textContent = flag.prediction.decision;
+    decEl.style.color = flag.prediction.decision === "DETECTED" ? "var(--app-purple)" : "var(--app-not-detected)";
+    $("rm_confidence").textContent = flag.prediction.confidence.toFixed(3);
+    $("rm_evidence").textContent = flag.prediction.evidence;
+  } else {
+    hide($("rm_predictionSection"));
+  }
+
+  const displayLabel = state.editedLabel !== undefined ? state.editedLabel : flag.ground_truth_label;
+  document.querySelectorAll("#resolveModal .gt-btn").forEach((btn) => {
+    const val = btn.getAttribute("data-gt");
+    const isDetected = val === "DETECTED";
+    const isNotDetected = val === "NOT_DETECTED";
+    const isUnset = val === "UNSET";
+    const active =
+      (isDetected && displayLabel === "DETECTED") ||
+      (isNotDetected && displayLabel === "NOT_DETECTED") ||
+      (isUnset && !displayLabel);
+    btn.className = "gt-btn px-3 py-1.5 rounded text-xs border";
+    if (active) {
+      if (isDetected) btn.className += " bg-[var(--app-purple-soft)] text-[var(--app-purple)] border-[color:color-mix(in_srgb,var(--app-purple)_36%,transparent)]";
+      else if (isNotDetected) btn.className += " bg-[var(--app-not-detected-soft)] text-[var(--app-not-detected)] border-[color:color-mix(in_srgb,var(--app-not-detected)_36%,transparent)]";
+      else btn.className += " bg-gray-800 text-gray-100 border-gray-500";
+    } else {
+      btn.className += " bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800";
+    }
+  });
+
+  const displayTags = state.editedTags !== undefined ? state.editedTags : flag.segment_tags.slice();
+  const taxonomy = ATTRIBUTE_TAXONOMY;
+  const attrsEl = $("rm_attrs");
+  attrsEl.innerHTML = taxonomy.map((tag) => {
+    const sel = displayTags.includes(tag);
+    const cls = sel
+      ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
+      : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]";
+    return `<button type="button" class="attr-chip px-2.5 py-1 text-[11px] transition ${cls}" data-attr="${tag}">${tag}</button>`;
+  }).join("");
+  attrsEl.querySelectorAll(".attr-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tag = btn.getAttribute("data-attr");
+      const cur = state.editedTags !== undefined ? state.editedTags.slice() : flag.segment_tags.slice();
+      state.editedTags = cur.includes(tag) ? cur.filter((v) => v !== tag) : [...cur, tag];
+      renderResolveModal();
+    });
+  });
+
+  const origLabel = flag.ground_truth_label ?? null;
+  const origAttrs = flag.segment_tags.slice();
+  const finalLabel = state.editedLabel !== undefined ? state.editedLabel : origLabel;
+  const finalAttrs = state.editedTags !== undefined ? state.editedTags : origAttrs;
+  const derivedAction = deriveAssessment(origLabel, finalLabel, origAttrs, finalAttrs);
+  const assessEl = $("rm_assess");
+  assessEl.innerHTML = ASSESSMENT_OPTIONS.map((opt) => {
+    const active = derivedAction === opt.value;
+    const cls = active ? "border-sky-400/70 bg-sky-500/10 text-sky-100" : "border-white/[0.08] text-gray-500";
+    const dotBorder = active ? "border-sky-300" : "border-gray-600";
+    const dotInner = active ? '<span class="h-1.5 w-1.5 rounded-full bg-sky-300"></span>' : "";
+    return `<div class="flex items-center gap-3 px-3 py-2.5 rounded-md border text-xs ${cls}">
+      <span class="flex-shrink-0 h-3.5 w-3.5 rounded-full border flex items-center justify-center ${dotBorder}">${dotInner}</span>
+      <span>${opt.label}</span>
+    </div>`;
+  }).join("");
+}
+
+function resolveActiveFlag() {
+  if (state.activeIndex == null) return;
+  const flag = state.openFlags[state.activeIndex];
+  if (!flag) return;
+  const origLabel = flag.ground_truth_label ?? null;
+  const origAttrs = flag.segment_tags.slice();
+  const finalLabel = state.editedLabel !== undefined ? state.editedLabel : origLabel;
+  const finalAttrs = state.editedTags !== undefined ? state.editedTags : origAttrs;
+  const action = deriveAssessment(origLabel, finalLabel, origAttrs, finalAttrs);
+  const note = ($("rm_note").value || "").trim();
+
+  const resolved = {
+    ...flag,
+    previous_ground_truth_label: origLabel,
+    new_ground_truth_label: finalLabel,
+    previous_attributes: origAttrs,
+    new_attributes: finalAttrs,
+    resolution_action: action,
+    resolution_note: note || null,
+    resolved_by: "Delaney F.",
+    resolved_at: new Date().toISOString(),
+  };
+
+  state.resolvedFlags = [resolved, ...state.resolvedFlags];
+  state.openFlags = state.openFlags.filter((_, i) => i !== state.activeIndex);
+  closeResolveModal();
+  renderOpenList();
+  renderResolvedList();
+  if (state.resolvedCollapsed) toggleResolved();
+  toast(`Flag resolved · ${humanizeAction(action)}`);
+}
+
+function openViewModal(idx) {
+  state.viewIndex = idx;
+  renderViewModal();
+  show($("viewModal"), "flex");
+}
+
+function closeViewModal() {
+  hide($("viewModal"));
+  state.viewIndex = null;
+}
+
+function renderViewModal() {
+  if (state.viewIndex == null) return;
+  const f = state.resolvedFlags[state.viewIndex];
+  if (!f) return;
+
+  $("vm_idx").textContent = String(state.viewIndex + 1);
+  $("vm_total").textContent = String(state.resolvedFlags.length);
+  $("vm_subtitle").textContent = f.image_id;
+  $("vm_imgId").textContent = f.image_id;
+  $("vm_annotator").textContent = f.annotator || "";
+  $("vm_dataset").textContent = f.dataset_name;
+  $("vm_img").src = f.image_uri;
+  $("vm_reason").textContent = f.reason;
+  $("vm_flaggedAt").textContent = "Flagged " + localDate(f.created_at);
+
+  if (f.prediction) {
+    show($("vm_predictionSection"), "block");
+    const decEl = $("vm_decision");
+    decEl.textContent = f.prediction.decision;
+    decEl.style.color = f.prediction.decision === "DETECTED" ? "var(--app-purple)" : "var(--app-not-detected)";
+    $("vm_confidence").textContent = f.prediction.confidence.toFixed(3);
+    $("vm_evidence").textContent = f.prediction.evidence;
+  } else {
+    hide($("vm_predictionSection"));
+  }
+
+  const prevLabel = f.previous_ground_truth_label ?? null;
+  const newLabel = f.new_ground_truth_label ?? null;
+  const hasLabelDiff = prevLabel !== null && newLabel !== null && prevLabel !== newLabel;
+  if (hasLabelDiff) show($("vm_label_diffTag"), "inline"); else hide($("vm_label_diffTag"));
+  const labelBody = $("vm_label_body");
+  if (hasLabelDiff) {
+    labelBody.innerHTML = `
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs font-medium line-through text-red-400">${prevLabel}</span>
+        <span class="text-xs text-gray-500">→</span>
+        <span class="text-xs font-medium px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">${newLabel}</span>
+      </div>`;
+  } else {
+    const v = newLabel ?? prevLabel ?? "UNSET";
+    labelBody.innerHTML = `<p class="text-xs font-medium ${labelColorClass(v)}">${v}</p>`;
+  }
+
+  const prevAttrs = Array.isArray(f.previous_attributes) ? f.previous_attributes : [];
+  const newAttrs = Array.isArray(f.new_attributes) ? f.new_attributes : [];
+  const prevSet = new Set(prevAttrs);
+  const newSet = new Set(newAttrs);
+  const attrsChanged = !attrsEqual(prevAttrs, newAttrs);
+  const unionOrdered = [];
+  for (const t of prevAttrs) if (!unionOrdered.includes(t)) unionOrdered.push(t);
+  for (const t of newAttrs) if (!unionOrdered.includes(t)) unionOrdered.push(t);
+
+  if (attrsChanged) show($("vm_attr_diffTag"), "inline"); else hide($("vm_attr_diffTag"));
+  const body = $("vm_attrs_body");
+  if (unionOrdered.length === 0) {
+    body.innerHTML = `<span class="text-xs text-gray-500">None</span>`;
+    hide($("vm_attrs_legend"));
+  } else {
+    body.innerHTML = unionOrdered.map((tag) => {
+      const inPrev = prevSet.has(tag);
+      const inNew = newSet.has(tag);
+      if (inPrev && inNew) return `<span class="rounded-md border border-sky-400/50 bg-sky-500/12 px-2 py-0.5 text-[11px] text-sky-100">${tag}</span>`;
+      if (inNew) return `<span class="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] text-emerald-200">+ ${tag}</span>`;
+      return `<span class="rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] text-red-300 line-through">− ${tag}</span>`;
+    }).join("");
+    if (attrsChanged) show($("vm_attrs_legend"), "flex"); else hide($("vm_attrs_legend"));
+  }
+
+  $("vm_action").textContent = humanizeAction(f.resolution_action);
+  $("vm_resolvedMeta").textContent = `Resolved by ${f.resolved_by} · ${localDateTime(f.resolved_at)}`;
+  $("vm_resolvedNote").textContent = f.resolution_note || "";
+}
+
+function toggleResolved() {
+  state.resolvedCollapsed = !state.resolvedCollapsed;
+  const wrap = $("resolvedListWrap");
+  const caret = $("resolvedCaret");
+  if (state.resolvedCollapsed) {
+    hide(wrap);
+    caret.style.transform = "rotate(-90deg)";
+  } else {
+    show(wrap, "block");
+    caret.style.transform = "rotate(0deg)";
+  }
+}
+
+function closeAllDemoTips(exceptBtn) {
+  document.querySelectorAll("[data-demo-tip]").forEach((btn) => {
+    if (btn === exceptBtn) return;
+    btn.setAttribute("aria-expanded", "false");
+    const pop = btn.parentElement.querySelector("[role='dialog']");
+    if (pop) pop.classList.add("hidden-init");
+    const overlay = btn.closest(".demo-tip-overlay");
+    if (overlay) overlay.classList.remove("demo-tip-active");
+  });
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-demo-tip]");
+  const closeBtn = e.target.closest("[data-demo-tip-close]");
+  if (btn) {
+    e.stopPropagation();
+    const expanded = btn.getAttribute("aria-expanded") === "true";
+    closeAllDemoTips(btn);
+    const pop = btn.parentElement.querySelector("[role='dialog']");
+    const overlay = btn.closest(".demo-tip-overlay");
+    if (expanded) {
+      btn.setAttribute("aria-expanded", "false");
+      if (pop) pop.classList.add("hidden-init");
+      if (overlay) overlay.classList.remove("demo-tip-active");
+    } else {
+      btn.setAttribute("aria-expanded", "true");
+      if (pop) pop.classList.remove("hidden-init");
+      if (overlay) overlay.classList.add("demo-tip-active");
+    }
+    return;
+  }
+  if (closeBtn) {
+    e.stopPropagation();
+    const container = closeBtn.closest(".demo-tip");
+    const parentBtn = container ? container.querySelector("[data-demo-tip]") : null;
+    if (parentBtn) parentBtn.setAttribute("aria-expanded", "false");
+    const pop = closeBtn.closest("[role='dialog']");
+    if (pop) pop.classList.add("hidden-init");
+    const overlay = closeBtn.closest(".demo-tip-overlay");
+    if (overlay) overlay.classList.remove("demo-tip-active");
+    return;
+  }
+  if (!e.target.closest(".demo-tip")) closeAllDemoTips();
+});
+
+$("resolvedToggle").addEventListener("click", toggleResolved);
+$("openToggle").addEventListener("click", () => {
+  state.openCollapsed = !state.openCollapsed;
+  renderOpenList();
+});
+
+document.querySelectorAll("#resolveModal .gt-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const val = btn.getAttribute("data-gt");
+    state.editedLabel = val === "UNSET" ? null : val;
+    renderResolveModal();
+  });
+});
+$("rm_resolve").addEventListener("click", resolveActiveFlag);
+document.querySelectorAll("[data-close-resolve]").forEach((el) => el.addEventListener("click", closeResolveModal));
+
+$("rm_prev").addEventListener("click", () => {
+  if (state.activeIndex == null) return;
+  if (state.activeIndex > 0) openResolveModal(state.activeIndex - 1);
+});
+$("rm_next").addEventListener("click", () => {
+  if (state.activeIndex == null) return;
+  if (state.activeIndex < state.openFlags.length - 1) openResolveModal(state.activeIndex + 1);
+});
+
+document.querySelectorAll("[data-close-view]").forEach((el) => el.addEventListener("click", closeViewModal));
+$("vm_prev").addEventListener("click", () => {
+  if (state.viewIndex == null) return;
+  if (state.viewIndex > 0) openViewModal(state.viewIndex - 1);
+});
+$("vm_next").addEventListener("click", () => {
+  if (state.viewIndex == null) return;
+  if (state.viewIndex < state.resolvedFlags.length - 1) openViewModal(state.viewIndex + 1);
+});
+
+document.addEventListener("keydown", (e) => {
+  if (state.activeIndex != null) {
+    if (e.key === "Escape") closeResolveModal();
+    else if (e.key === "ArrowLeft" && state.activeIndex > 0) openResolveModal(state.activeIndex - 1);
+    else if (e.key === "ArrowRight" && state.activeIndex < state.openFlags.length - 1) openResolveModal(state.activeIndex + 1);
+  } else if (state.viewIndex != null) {
+    if (e.key === "Escape") closeViewModal();
+    else if (e.key === "ArrowLeft" && state.viewIndex > 0) openViewModal(state.viewIndex - 1);
+    else if (e.key === "ArrowRight" && state.viewIndex < state.resolvedFlags.length - 1) openViewModal(state.viewIndex + 1);
+  }
+});
+
+renderOpenList();
+renderResolvedList();
+</script>
+
+</body>
+</html>

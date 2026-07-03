@@ -1,0 +1,2 @@
+imageId,imageUrl,groundTruthLabel,attributes
+img_001,https://example.com/img_001.jpg,DETECTED,"[""daytime"",""clear""]"

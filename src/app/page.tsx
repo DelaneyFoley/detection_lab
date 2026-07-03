@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { KeyRound, Sparkles } from "lucide-react";
 import { useAppStore } from "@/lib/store";
-import { GEMINI_MODELS } from "@/lib/geminiModels";
+import { AVAILABLE_MODELS } from "@/lib/models";
 import type { Detection } from "@/types";
 import { DetectionSetup } from "@/components/DetectionSetup";
 import { BuildDataset } from "@/components/BuildDataset";
@@ -14,6 +14,8 @@ import { HeldOutEval } from "@/components/HeldOutEval";
 import { DetectionDashboard } from "@/components/DetectionDashboard";
 import { SavedDatasets } from "@/components/SavedDatasets";
 import { AdminPrompts } from "@/components/AdminPrompts";
+import { QualityAssurance } from "@/components/QualityAssurance";
+import { Annotation } from "@/components/MyWork";
 
 const TABS = [
   { label: "Detection Setup", id: 0, step: "1", description: "Configure detection and prompt versions" },
@@ -22,9 +24,11 @@ const TABS = [
   { label: "Prompt Feedback", id: 3, step: "4", description: "Generate, accept, and save prompt improvements" },
   { label: "Prompt Compare", id: 4, step: "5", description: "Compare metrics across existing prompt runs" },
   { label: "Held-Out Eval", id: 5, step: "6", description: "Run final evaluation and regression checks" },
-  { label: "Detections & Logs", id: 6, step: "", description: "Manage detections and inspect run logs" },
+  { label: "Annotation", id: 10, step: "", description: "Your assigned datasets and annotation progress" },
+  { label: "Quality Assurance", id: 8, step: "", description: "QA workflows, sampling, and annotator metrics" },
   { label: "Datasets", id: 7, step: "", description: "Manage datasets, items, and labels" },
-  { label: "Admin", id: 8, step: "", description: "Manage Prompt Assist and Prompt Feedback templates" },
+  { label: "Detections & Logs", id: 6, step: "", description: "Manage detections and inspect run logs" },
+  { label: "Admin", id: 9, step: "", description: "Manage Prompt Assist and Prompt Feedback templates" },
 ];
 
 export default function Home() {
@@ -41,8 +45,7 @@ export default function Home() {
   } = useAppStore();
   const [detections, setDetections] = useState<Detection[]>([]);
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [modelOptions, setModelOptions] = useState<string[]>(GEMINI_MODELS as unknown as string[]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelOptions] = useState<string[]>(AVAILABLE_MODELS as unknown as string[]);
   const [hasStarted, setHasStarted] = useState(false);
   const [createTrigger, setCreateTrigger] = useState(0);
 
@@ -55,40 +58,6 @@ export default function Home() {
   useEffect(() => {
     loadDetections();
   }, [loadDetections, refreshCounter]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadModels = async () => {
-      setModelsLoading(true);
-      try {
-        const res = await fetch("/api/gemini/models", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_key: apiKey }),
-        });
-        const data = await res.json();
-        const discovered = Array.isArray(data.models) ? data.models : [];
-        const merged = Array.from(new Set([...(GEMINI_MODELS as unknown as string[]), ...discovered]));
-        if (!cancelled) {
-          setModelOptions(merged);
-        }
-      } catch {
-        if (!cancelled) {
-          setModelOptions(GEMINI_MODELS as unknown as string[]);
-        }
-      } finally {
-        if (!cancelled) {
-          setModelsLoading(false);
-        }
-      }
-    };
-
-    loadModels();
-    return () => {
-      cancelled = true;
-    };
-  }, [apiKey]);
 
   useEffect(() => {
     if (modelOptions.length > 0 && !modelOptions.includes(selectedModel)) {
@@ -219,16 +188,16 @@ export default function Home() {
               </div>
               {showApiKeyInput && (
                 <div className="app-card-strong mt-3 max-w-sm p-4">
-                  <label className="app-label mb-1 block">Gemini API Key (Optional)</label>
+                  <label className="app-label mb-1 block">Session API Key (Optional)</label>
                   <input
                     type="password"
                     className="app-input px-3 py-2 text-sm"
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="AIza..."
+                    placeholder="sk-... or AIza..."
                   />
                   <p className="mt-2 text-[11px] text-[var(--app-text-subtle)]">
-                    Stored in memory only. If blank, the server uses `GEMINI_API_KEY` from the environment.
+                    Stored in memory only. If blank, the server uses the appropriate key from the environment based on model provider.
                   </p>
                   <button
                     onClick={() => setShowApiKeyInput(false)}
@@ -264,7 +233,7 @@ export default function Home() {
                 </select>
               </div>
               <div className="min-w-[220px]">
-                <label className="app-label mb-1 block">Gemini Model</label>
+                <label className="app-label mb-1 block">Model</label>
                 <select
                   className="app-select px-3 py-2 text-sm"
                   value={selectedModel}
@@ -276,16 +245,13 @@ export default function Home() {
                     </option>
                   ))}
                 </select>
-                {modelsLoading && (
-                  <div className="mt-1 text-[11px] text-[var(--app-text-subtle)]">Refreshing model list...</div>
-                )}
               </div>
             </div>
           </div>
         </div>
 
         <div className="px-4 py-6 md:px-6">
-          {!hasStarted && activeTab !== 1 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
+          {!hasStarted && activeTab !== 1 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 && activeTab !== 9 && activeTab !== 10 ? (
             <div className="mx-auto max-w-4xl pt-12">
               <div className="app-card-strong p-10 text-center">
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-[var(--app-border-strong)] bg-[var(--app-surface-soft)]">
@@ -310,7 +276,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          ) : !selectedDetectionId && activeTab !== 0 && activeTab !== 1 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 ? (
+          ) : !selectedDetectionId && activeTab !== 0 && activeTab !== 1 && activeTab !== 6 && activeTab !== 7 && activeTab !== 8 && activeTab !== 9 && activeTab !== 10 ? (
             <div className="app-card mx-auto max-w-3xl px-6 py-14 text-center">
               <p className="text-lg font-medium text-white">Select a detection to continue</p>
               <p className="mt-2 text-sm text-[var(--app-text-muted)]">
@@ -357,7 +323,13 @@ export default function Home() {
                 <SavedDatasets detections={detections} />
               </div>
               <div className={activeTab === 8 ? "block" : "hidden"}>
+                <QualityAssurance detections={detections} />
+              </div>
+              <div className={activeTab === 9 ? "block" : "hidden"}>
                 <AdminPrompts />
+              </div>
+              <div className={activeTab === 10 ? "block" : "hidden"}>
+                <Annotation detections={detections} />
               </div>
             </>
           )}

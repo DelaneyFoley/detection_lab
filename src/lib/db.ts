@@ -154,6 +154,77 @@ function initSchema(db: Database.Database) {
       value TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS review_flags (
+      flag_id TEXT PRIMARY KEY,
+      prediction_id TEXT,
+      dataset_item_id TEXT,
+      detection_id TEXT NOT NULL,
+      image_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+      resolution_action TEXT CHECK(resolution_action IN ('accepted','label_confirmed','label_corrected','attributes_corrected','both_corrected','image_removed','needs_discussion','correct','incorrect_both','incorrect_attributes','incorrect_label','ambiguous')),
+      resolution_note TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id),
+      FOREIGN KEY (dataset_item_id) REFERENCES dataset_items(item_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_review_flags_detection ON review_flags(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_review_flags_status ON review_flags(status);
+    CREATE INDEX IF NOT EXISTS idx_review_flags_prediction ON review_flags(prediction_id);
+    CREATE INDEX IF NOT EXISTS idx_review_flags_dataset_item ON review_flags(dataset_item_id);
+
+    CREATE TABLE IF NOT EXISTS qa_samples (
+      sample_id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      sample_method TEXT NOT NULL CHECK(sample_method IN ('random','stratified','flagged','discrepancy')),
+      reviewer TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','reviewed','skipped','accepted')),
+      outcome TEXT CHECK(outcome IN ('accepted','label_corrected','attributes_corrected','both_corrected')),
+      note TEXT,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id),
+      FOREIGN KEY (item_id) REFERENCES dataset_items(item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_qa_samples_dataset ON qa_samples(dataset_id);
+    CREATE INDEX IF NOT EXISTS idx_qa_samples_status ON qa_samples(status);
+
+    CREATE TABLE IF NOT EXISTS qa_logs (
+      log_id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      actor TEXT,
+      details TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_qa_logs_dataset ON qa_logs(dataset_id);
+    CREATE INDEX IF NOT EXISTS idx_qa_logs_action ON qa_logs(action);
+    CREATE INDEX IF NOT EXISTS idx_qa_logs_created_at ON qa_logs(created_at);
+
+    CREATE TABLE IF NOT EXISTS groundtruth_corrections (
+      correction_id TEXT PRIMARY KEY,
+      prediction_id TEXT NOT NULL,
+      run_id TEXT NOT NULL,
+      dataset_id TEXT NOT NULL,
+      image_id TEXT NOT NULL,
+      old_label TEXT,
+      new_label TEXT,
+      predicted_decision TEXT,
+      ai_matches_new_gt INTEGER,
+      reason TEXT,
+      actor TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id),
+      FOREIGN KEY (run_id) REFERENCES runs(run_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gt_corrections_run ON groundtruth_corrections(run_id);
+    CREATE INDEX IF NOT EXISTS idx_gt_corrections_prediction ON groundtruth_corrections(prediction_id);
+    CREATE INDEX IF NOT EXISTS idx_gt_corrections_created_at ON groundtruth_corrections(created_at);
   `);
 
   ensureDatasetItemColumns(db);
@@ -163,6 +234,28 @@ function initSchema(db: Database.Database) {
   ensureRunsColumns(db);
   ensurePredictionParseColumns(db);
   ensurePredictionRuntimeColumns(db);
+  ensureDatasetQaColumns(db);
+  ensureReviewFlagResolutionActions(db);
+  ensureReviewFlagResolvedBy(db);
+  ensureReviewFlagResolutionSnapshot(db);
+  ensureItemStatusColumn(db);
+  ensureDatasetProgressColumns(db);
+  ensureAnnotatorsTable(db);
+  ensureQaSamplesAttemptColumn(db);
+  ensureQaSamplesCorrectionColumns(db);
+  ensureMetricsSnapshotsTable(db);
+  migrateQaSamplesConstraints(db);
+  migrateLinkedDatasetsToParentChild(db);
+  syncReviewerNotesToImageDescription(db);
+  ensureNotificationsTable(db);
+  ensurePromptVersionNotesColumn(db);
+}
+
+function ensurePromptVersionNotesColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(prompt_versions)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "version_notes")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN version_notes TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 function ensureDatasetTableShape(db: Database.Database) {
@@ -370,4 +463,287 @@ function ensurePredictionRuntimeColumns(db: Database.Database) {
   if (!hasRetryCount) {
     db.exec("ALTER TABLE predictions ADD COLUMN parse_retry_count INTEGER NOT NULL DEFAULT 0");
   }
+}
+
+function ensureDatasetQaColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "qa_status")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN qa_status TEXT NOT NULL DEFAULT 'draft'");
+  }
+  if (!columns.some((c) => c.name === "assigned_to")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN assigned_to TEXT");
+  }
+  if (!columns.some((c) => c.name === "linked_dataset_id")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN linked_dataset_id TEXT");
+  }
+  if (!columns.some((c) => c.name === "qa_notes")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN qa_notes TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.some((c) => c.name === "segment_taxonomy")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN segment_taxonomy TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
+function ensureReviewFlagResolutionActions(db: Database.Database) {
+  const tableSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'review_flags'")
+    .get() as { sql?: string } | undefined;
+  const sql = String(tableSqlRow?.sql || "");
+  if (sql.includes("'accepted'")) return;
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN TRANSACTION;
+
+    CREATE TABLE review_flags_new (
+      flag_id TEXT PRIMARY KEY,
+      prediction_id TEXT,
+      dataset_item_id TEXT,
+      detection_id TEXT NOT NULL,
+      image_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+      resolution_action TEXT CHECK(resolution_action IN ('accepted','label_confirmed','label_corrected','attributes_corrected','both_corrected','image_removed','needs_discussion','correct','incorrect_both','incorrect_attributes','incorrect_label','ambiguous')),
+      resolution_note TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT,
+      FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id),
+      FOREIGN KEY (dataset_item_id) REFERENCES dataset_items(item_id)
+    );
+
+    INSERT INTO review_flags_new SELECT * FROM review_flags;
+    DROP TABLE review_flags;
+    ALTER TABLE review_flags_new RENAME TO review_flags;
+
+    CREATE INDEX IF NOT EXISTS idx_review_flags_detection ON review_flags(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_review_flags_status ON review_flags(status);
+    CREATE INDEX IF NOT EXISTS idx_review_flags_prediction ON review_flags(prediction_id);
+    CREATE INDEX IF NOT EXISTS idx_review_flags_dataset_item ON review_flags(dataset_item_id);
+
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function ensureReviewFlagResolvedBy(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(review_flags)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "resolved_by")) {
+    db.exec("ALTER TABLE review_flags ADD COLUMN resolved_by TEXT");
+  }
+}
+
+function ensureReviewFlagResolutionSnapshot(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(review_flags)").all() as Array<{ name: string }>;
+  const names = new Set(columns.map((c) => c.name));
+  if (!names.has("previous_ground_truth_label")) {
+    db.exec("ALTER TABLE review_flags ADD COLUMN previous_ground_truth_label TEXT");
+  }
+  if (!names.has("new_ground_truth_label")) {
+    db.exec("ALTER TABLE review_flags ADD COLUMN new_ground_truth_label TEXT");
+  }
+  if (!names.has("previous_attributes")) {
+    db.exec("ALTER TABLE review_flags ADD COLUMN previous_attributes TEXT");
+  }
+  if (!names.has("new_attributes")) {
+    db.exec("ALTER TABLE review_flags ADD COLUMN new_attributes TEXT");
+  }
+}
+
+function ensureItemStatusColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(dataset_items)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "item_status")) {
+    db.exec("ALTER TABLE dataset_items ADD COLUMN item_status TEXT NOT NULL DEFAULT 'unlabeled'");
+    db.exec(`
+      UPDATE dataset_items SET item_status = 'labeled'
+      WHERE ground_truth_label IS NOT NULL
+    `);
+  }
+}
+
+function ensureDatasetProgressColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "items_labeled")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN items_labeled INTEGER NOT NULL DEFAULT 0");
+    db.exec(`
+      UPDATE datasets SET items_labeled = (
+        SELECT COUNT(*) FROM dataset_items
+        WHERE dataset_items.dataset_id = datasets.dataset_id
+          AND dataset_items.ground_truth_label IS NOT NULL
+      )
+    `);
+  }
+  if (!columns.some((c) => c.name === "revision_note")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN revision_note TEXT");
+  }
+}
+
+function ensureAnnotatorsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS annotators (
+      name TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL
+    )
+  `);
+  const count = db.prepare("SELECT COUNT(*) as c FROM annotators").get() as { c: number };
+  if (count.c === 0) {
+    const existing = db.prepare(
+      "SELECT DISTINCT assigned_to FROM datasets WHERE assigned_to IS NOT NULL AND assigned_to != ''"
+    ).all() as Array<{ assigned_to: string }>;
+    const insert = db.prepare("INSERT OR IGNORE INTO annotators (name, created_at) VALUES (?, ?)");
+    const now = new Date().toISOString();
+    for (const row of existing) {
+      insert.run(row.assigned_to, now);
+    }
+  }
+}
+
+function ensureQaSamplesAttemptColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(qa_samples)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "attempt_number")) {
+    db.exec("ALTER TABLE qa_samples ADD COLUMN attempt_number INTEGER NOT NULL DEFAULT 1");
+  }
+}
+
+function ensureQaSamplesCorrectionColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(qa_samples)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "original_label")) {
+    db.exec("ALTER TABLE qa_samples ADD COLUMN original_label TEXT");
+    db.exec("ALTER TABLE qa_samples ADD COLUMN original_tags TEXT");
+    db.exec("ALTER TABLE qa_samples ADD COLUMN corrected_label TEXT");
+    db.exec("ALTER TABLE qa_samples ADD COLUMN corrected_tags TEXT");
+  }
+}
+
+function ensureMetricsSnapshotsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metrics_snapshots (
+      snapshot_id TEXT PRIMARY KEY,
+      annotator TEXT NOT NULL,
+      period_start TEXT NOT NULL,
+      period_end TEXT NOT NULL,
+      period_type TEXT NOT NULL DEFAULT 'week',
+      datasets_assigned INTEGER NOT NULL DEFAULT 0,
+      datasets_completed INTEGER NOT NULL DEFAULT 0,
+      items_labeled INTEGER NOT NULL DEFAULT 0,
+      flag_rate REAL,
+      attribute_error REAL,
+      label_error REAL,
+      accuracy REAL,
+      correction REAL,
+      created_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_snapshots_unique
+      ON metrics_snapshots(annotator, period_start, period_type);
+
+    CREATE TABLE IF NOT EXISTS dataset_metrics (
+      id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL,
+      dataset_name TEXT NOT NULL,
+      annotator TEXT NOT NULL,
+      items_labeled INTEGER NOT NULL DEFAULT 0,
+      flag_rate REAL,
+      attribute_error REAL,
+      label_error REAL,
+      accuracy REAL,
+      correction REAL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      updated_at TEXT NOT NULL DEFAULT ''
+    );
+  `);
+}
+
+function migrateQaSamplesConstraints(db: Database.Database) {
+  const info = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='qa_samples'").get() as { sql: string } | undefined;
+  if (!info?.sql) return;
+  if (info.sql.includes("label_corrected")) return;
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE qa_samples_new (
+      sample_id TEXT PRIMARY KEY,
+      dataset_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      sample_method TEXT NOT NULL CHECK(sample_method IN ('random','stratified','flagged','discrepancy')),
+      reviewer TEXT,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','reviewed','skipped','accepted')),
+      outcome TEXT CHECK(outcome IN ('accepted','label_corrected','attributes_corrected','both_corrected')),
+      note TEXT,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id),
+      FOREIGN KEY (item_id) REFERENCES dataset_items(item_id)
+    );
+    INSERT INTO qa_samples_new (sample_id, dataset_id, item_id, sample_method, reviewer, status, outcome, note, created_at, reviewed_at)
+      SELECT sample_id, dataset_id, item_id, sample_method, reviewer, status, NULL, note, created_at, reviewed_at FROM qa_samples;
+    DROP TABLE qa_samples;
+    ALTER TABLE qa_samples_new RENAME TO qa_samples;
+    CREATE INDEX IF NOT EXISTS idx_qa_samples_dataset ON qa_samples(dataset_id);
+    CREATE INDEX IF NOT EXISTS idx_qa_samples_status ON qa_samples(status);
+    PRAGMA foreign_keys = ON;
+  `);
+}
+
+function migrateLinkedDatasetsToParentChild(db: Database.Database) {
+  const indexExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_datasets_linked_dataset_id'")
+    .get();
+  if (indexExists) return;
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_datasets_linked_dataset_id ON datasets(linked_dataset_id)`);
+
+  const pairs = db.prepare(`
+    SELECT a.dataset_id AS a_id, b.dataset_id AS b_id, a.created_at AS a_created, b.created_at AS b_created
+    FROM datasets a
+    JOIN datasets b ON a.linked_dataset_id = b.dataset_id AND b.linked_dataset_id = a.dataset_id
+    WHERE a.dataset_id < b.dataset_id
+  `).all() as Array<{ a_id: string; b_id: string; a_created: string; b_created: string }>;
+
+  const clearLink = db.prepare("UPDATE datasets SET linked_dataset_id = NULL WHERE dataset_id = ?");
+  for (const pair of pairs) {
+    const parentId = pair.a_created <= pair.b_created ? pair.a_id : pair.b_id;
+    clearLink.run(parentId);
+  }
+}
+
+function syncReviewerNotesToImageDescription(db: Database.Database) {
+  db.exec(`
+    UPDATE dataset_items
+    SET image_description = (
+      SELECT p.reviewer_note
+      FROM predictions p
+      JOIN runs r ON p.run_id = r.run_id
+      WHERE r.dataset_id = dataset_items.dataset_id
+        AND p.image_id = dataset_items.image_id
+        AND p.reviewer_note IS NOT NULL
+        AND p.reviewer_note != ''
+      ORDER BY p.corrected_at DESC
+      LIMIT 1
+    )
+    WHERE (image_description IS NULL OR image_description = '')
+      AND EXISTS (
+        SELECT 1 FROM predictions p
+        JOIN runs r ON p.run_id = r.run_id
+        WHERE r.dataset_id = dataset_items.dataset_id
+          AND p.image_id = dataset_items.image_id
+          AND p.reviewer_note IS NOT NULL
+          AND p.reviewer_note != ''
+      )
+  `);
+}
+
+function ensureNotificationsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      notification_id TEXT PRIMARY KEY,
+      recipient TEXT NOT NULL,
+      type TEXT NOT NULL,
+      dataset_id TEXT,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL DEFAULT '',
+      dismissed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_recipient ON notifications(recipient);
+    CREATE INDEX IF NOT EXISTS idx_notifications_dismissed ON notifications(recipient, dismissed);
+  `);
 }

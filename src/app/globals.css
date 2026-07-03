@@ -28,6 +28,20 @@
   --app-warning-soft: rgba(100, 66, 19, 0.68);
   --app-danger: #ff7b88;
   --app-danger-soft: rgba(85, 24, 31, 0.68);
+  --app-blue-light: #8ed8ff;
+  --app-blue-light-soft: rgba(14, 78, 130, 0.50);
+  --app-blue-deep: #4090e8;
+  --app-blue-deep-soft: rgba(20, 52, 120, 0.85);
+  --app-amber-light: #ffd750;
+  --app-amber-light-soft: rgba(130, 95, 12, 0.45);
+  --app-amber-deep: #d4880f;
+  --app-amber-deep-soft: rgba(100, 66, 19, 0.85);
+  --app-green-light: #64f0be;
+  --app-green-light-soft: rgba(12, 82, 60, 0.42);
+  --app-green-deep: #0fad7a;
+  --app-green-deep-soft: rgba(6, 78, 55, 0.85);
+  --app-archived: #94a3b8;
+  --app-archived-soft: rgba(51, 65, 85, 0.48);
   --app-shadow: 0 22px 60px rgba(0, 0, 0, 0.42);
   --app-overlay: rgba(4, 10, 16, 0.72);
   --app-table-head: #22344d;
@@ -67,6 +81,20 @@ html {
   --app-warning-soft: rgba(194, 128, 34, 0.14);
   --app-danger: #c54b58;
   --app-danger-soft: rgba(197, 75, 88, 0.12);
+  --app-blue-light: #0ea5e9;
+  --app-blue-light-soft: rgba(14, 165, 233, 0.14);
+  --app-blue-deep: #1d4ed8;
+  --app-blue-deep-soft: rgba(29, 78, 216, 0.16);
+  --app-amber-light: #d97706;
+  --app-amber-light-soft: rgba(217, 119, 6, 0.14);
+  --app-amber-deep: #92400e;
+  --app-amber-deep-soft: rgba(146, 64, 14, 0.16);
+  --app-green-light: #059669;
+  --app-green-light-soft: rgba(5, 150, 105, 0.14);
+  --app-green-deep: #065f46;
+  --app-green-deep-soft: rgba(6, 95, 70, 0.16);
+  --app-archived: #64748b;
+  --app-archived-soft: rgba(100, 116, 139, 0.12);
   --app-shadow: 0 18px 44px rgba(17, 35, 54, 0.12);
   --app-overlay: rgba(16, 24, 32, 0.38);
   --app-table-head: #d9e6f4;
@@ -571,42 +599,84 @@ select optgroup {
   letter-spacing: 0.01em;
 }
 
-.app-badge-accent {
+.app-badge.app-badge-accent {
   border-color: color-mix(in srgb, var(--app-not-detected) 64%, transparent);
   background: var(--app-not-detected-soft);
   color: var(--app-not-detected);
   box-shadow: 0 0 16px rgba(127, 209, 255, 0.12);
 }
 
-.app-badge-success {
+.app-badge.app-badge-success {
   border-color: color-mix(in srgb, var(--app-success) 36%, transparent);
   background: var(--app-success-soft);
   color: var(--app-success);
 }
 
-.app-badge-purple {
+.app-badge.app-badge-purple {
   border-color: color-mix(in srgb, var(--app-purple) 64%, transparent);
   background: var(--app-purple-soft);
   color: var(--app-purple);
   box-shadow: 0 0 16px rgba(178, 105, 255, 0.12);
 }
 
-.app-badge-warning {
+.app-badge.app-badge-warning {
   border-color: color-mix(in srgb, var(--app-warning) 36%, transparent);
   background: var(--app-warning-soft);
   color: var(--app-warning);
 }
 
-.app-badge-muted {
+.app-badge.app-badge-muted {
   border-color: var(--app-border);
   background: color-mix(in srgb, var(--app-badge-bg) 86%, transparent);
   color: var(--app-text-subtle);
 }
 
-.app-badge-danger {
+.app-badge.app-badge-danger {
   border-color: color-mix(in srgb, var(--app-danger) 36%, transparent);
   background: var(--app-danger-soft);
   color: var(--app-danger);
+}
+
+.app-badge.app-badge-blue-light {
+  border-color: color-mix(in srgb, var(--app-blue-light) 50%, transparent);
+  background: var(--app-blue-light-soft);
+  color: var(--app-blue-light);
+}
+
+.app-badge.app-badge-blue-deep {
+  border-color: color-mix(in srgb, var(--app-blue-deep) 40%, transparent);
+  background: var(--app-blue-deep-soft);
+  color: var(--app-blue-deep);
+}
+
+.app-badge.app-badge-amber-light {
+  border-color: color-mix(in srgb, var(--app-amber-light) 50%, transparent);
+  background: var(--app-amber-light-soft);
+  color: var(--app-amber-light);
+}
+
+.app-badge.app-badge-amber-deep {
+  border-color: color-mix(in srgb, var(--app-amber-deep) 40%, transparent);
+  background: var(--app-amber-deep-soft);
+  color: var(--app-amber-deep);
+}
+
+.app-badge.app-badge-green-light {
+  border-color: color-mix(in srgb, var(--app-green-light) 50%, transparent);
+  background: var(--app-green-light-soft);
+  color: var(--app-green-light);
+}
+
+.app-badge.app-badge-green-deep {
+  border-color: color-mix(in srgb, var(--app-green-deep) 40%, transparent);
+  background: var(--app-green-deep-soft);
+  color: var(--app-green-deep);
+}
+
+.app-badge.app-badge-archived {
+  border-color: color-mix(in srgb, var(--app-archived) 28%, transparent);
+  background: var(--app-archived-soft);
+  color: var(--app-archived);
 }
 
 .app-status-ok,

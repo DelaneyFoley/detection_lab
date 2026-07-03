@@ -1,5 +1,6 @@
 "use client";
 
+import ExcelJS from "exceljs";
 import { useState, useEffect, useCallback, useMemo, useRef, type ChangeEvent } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
@@ -15,6 +16,7 @@ import {
   DETECTION_CATEGORY_LABELS,
   DETECTION_CATEGORY_OPTIONS,
 } from "@/lib/detectionPrompts";
+import { parseCompiledPrompt } from "@/lib/promptParser";
 
 type AdminPromptSettings = {
   incorrect_capture_system_prompt: string;
@@ -71,10 +73,12 @@ export function DetectionSetup({
   });
   const [editVersionName, setEditVersionName] = useState("");
   const [editPromptSource, setEditPromptSource] = useState<PromptVersion | null>(null);
-  const [createMode, setCreateMode] = useState<"blank" | "assist">("blank");
+  const [createMode, setCreateMode] = useState<"blank" | "assist" | "import">("blank");
   const [assistInput, setAssistInput] = useState("");
   const [assistLoading, setAssistLoading] = useState(false);
   const [assistError, setAssistError] = useState<string | null>(null);
+  const [importInput, setImportInput] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
   const [createVersionName, setCreateVersionName] = useState("Detection baseline");
   const [lastHandledCreateTrigger, setLastHandledCreateTrigger] = useState(0);
   const [adminPromptSettings, setAdminPromptSettings] = useState<AdminPromptSettings>({
@@ -340,6 +344,28 @@ export function DetectionSetup({
     } finally {
       setAssistLoading(false);
     }
+  };
+
+  const handleImportFromPrompt = () => {
+    if (!importInput.trim()) {
+      setImportError("Paste a compiled prompt to import.");
+      return;
+    }
+    setImportError(null);
+    const parsed = parseCompiledPrompt(importInput.trim());
+    if (!parsed.label_policy_detected && !parsed.label_policy_not_detected && !parsed.user_prompt_addendum) {
+      setImportError("Could not find Decision Policy or Detection-Specific Addendum sections. Check the format and try again.");
+      return;
+    }
+    setForm((prev) => ({
+      ...prev,
+      label_policy: composeLabelPolicySections({ detected: parsed.label_policy_detected, notDetected: parsed.label_policy_not_detected }),
+      user_prompt_addendum: parsed.user_prompt_addendum || prev.user_prompt_addendum,
+      decision_rubric: parsed.decision_rubric.length > 0 ? parsed.decision_rubric : prev.decision_rubric,
+      segment_taxonomy: parsed.segment_taxonomy.length > 0 ? parsed.segment_taxonomy : prev.segment_taxonomy,
+    }));
+    setFormLabelPolicySections({ detected: parsed.label_policy_detected, notDetected: parsed.label_policy_not_detected });
+    notify({ message: "Prompt imported successfully. Review and edit the fields below.", tone: "success" });
   };
 
   const handleUpdateDetection = async () => {
@@ -610,6 +636,73 @@ export function DetectionSetup({
       setQuickTestProgress("");
       setQuickTesting(false);
     }
+  };
+
+  const exportQuickTestToExcel = async () => {
+    if (quickTestResults.length === 0) return;
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Quick Test Results");
+
+    sheet.columns = [
+      { header: "Image", key: "image", width: 22 },
+      { header: "Image ID", key: "image_id", width: 28 },
+      { header: "Predicted Label", key: "predicted_label", width: 18 },
+      { header: "Confidence", key: "confidence", width: 12 },
+      { header: "Evidence", key: "evidence", width: 60 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.alignment = { vertical: "middle", horizontal: "center" };
+
+    for (let i = 0; i < quickTestResults.length; i++) {
+      const result = quickTestResults[i];
+      const rowIndex = i + 2;
+
+      sheet.addRow({
+        image: "",
+        image_id: result.image_name,
+        predicted_label: result.predicted_decision || "N/A",
+        confidence: result.confidence != null ? Math.round(result.confidence * 100) / 100 : "",
+        evidence: result.evidence || "",
+      });
+
+      const row = sheet.getRow(rowIndex);
+      row.height = 90;
+      row.alignment = { vertical: "middle", wrapText: true };
+
+      const matchingFile = quickTestFiles.find((f) => f.file.name === result.image_name);
+      if (matchingFile) {
+        try {
+          const buffer = await matchingFile.file.arrayBuffer();
+          const ext = matchingFile.file.type.includes("png") ? "png" : "jpeg";
+          const imageId = workbook.addImage({
+            buffer,
+            extension: ext,
+          });
+          sheet.addImage(imageId, {
+            tl: { col: 0, row: rowIndex - 1 },
+            ext: { width: 120, height: 90 },
+          });
+        } catch {
+          // Skip image embedding on failure
+        }
+      }
+    }
+
+    const xlsxBuffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([xlsxBuffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `quick_test_${selectedDetection?.detection_code || "export"}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const approvalEligibilityByPrompt = useMemo(() => {
@@ -901,7 +994,7 @@ export function DetectionSetup({
           {mode === "create" && (
             <div className="app-card space-y-3 p-4">
               <div className="app-label">Creation mode</div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <button
                   type="button"
                   onClick={() => setCreateMode("blank")}
@@ -925,6 +1018,18 @@ export function DetectionSetup({
                 >
                   <div className="text-sm font-medium">Prompt Assist</div>
                   <div className="mt-1 text-xs text-[var(--app-text-subtle)]">Generate underwriting-grade defaults with Gemini.</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateMode("import")}
+                  className={`text-left rounded-2xl border px-3 py-3 ${
+                    createMode === "import"
+                      ? "border-[rgba(92,184,255,0.3)] bg-[rgba(35,74,108,0.36)] text-blue-100"
+                      : "border-white/8 bg-[rgba(6,13,20,0.68)] text-gray-300 hover:bg-[rgba(10,20,31,0.94)]"
+                  }`}
+                >
+                  <div className="text-sm font-medium">Import from Prompt</div>
+                  <div className="mt-1 text-xs text-[var(--app-text-subtle)]">Paste a compiled prompt to parse into fields.</div>
                 </button>
               </div>
 
@@ -950,6 +1055,33 @@ export function DetectionSetup({
                     </button>
                     {assistError && <span className="text-xs text-red-400">{assistError}</span>}
                   </div>
+                </div>
+              )}
+
+              {createMode === "import" && (
+                <div className="rounded-2xl border border-white/8 bg-[rgba(6,13,20,0.68)] p-4 space-y-3">
+                  <label className="app-label block">
+                    Paste compiled prompt text
+                  </label>
+                  <textarea
+                    className="app-textarea h-48 px-3 py-2 text-sm font-mono"
+                    value={importInput}
+                    onChange={(e) => { setImportInput(e.target.value); setImportError(null); }}
+                    placeholder={"Paste your compiled prompt here...\n\nExpected sections:\n- Detection-Specific Addendum:\n- Decision Policy:\n- Decision Rubric:\n- Attributes:"}
+                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleImportFromPrompt}
+                      className="app-btn app-btn-primary px-3 py-2 text-xs"
+                    >
+                      Parse &amp; Load
+                    </button>
+                    {importError && <span className="text-xs text-red-400">{importError}</span>}
+                  </div>
+                  <p className="text-xs text-[var(--app-text-subtle)]">
+                    Select the Detection Category below before or after parsing. The system and user prompt templates will load based on your category selection.
+                  </p>
                 </div>
               )}
             </div>
@@ -1036,9 +1168,14 @@ export function DetectionSetup({
           <div>
             <label className="text-xs text-gray-400 block mb-1">User Prompt Addendum</label>
             <textarea
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm h-24"
+              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm min-h-[6rem] resize-none overflow-hidden"
               value={form.user_prompt_addendum}
-              onChange={(e) => setForm({ ...form, user_prompt_addendum: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, user_prompt_addendum: e.target.value });
+                e.target.style.height = "auto";
+                e.target.style.height = e.target.scrollHeight + "px";
+              }}
+              ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
               placeholder="Optional detection-specific guidance appended to the category user prompt."
             />
           </div>
@@ -1294,6 +1431,15 @@ export function DetectionSetup({
                   </p>
                 </div>
 
+                {selectedPrompt && (
+                  <PromptVersionNotesEditor
+                    key={selectedPrompt.prompt_version_id}
+                    promptVersionId={selectedPrompt.prompt_version_id}
+                    initialNotes={selectedPrompt.version_notes || ""}
+                    onSaved={loadRelated}
+                  />
+                )}
+
                 <details className="rounded-lg px-1 py-1">
                   <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
                     <span className="inline-flex items-center gap-2">
@@ -1511,8 +1657,16 @@ export function DetectionSetup({
 
               {quickTestResults.length > 0 && (
                 <div className="space-y-2">
-                  <div className="text-xs text-[var(--app-text-muted)]">
-                    Quick Test Results ({quickTestResults.length})
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs text-[var(--app-text-muted)]">
+                      Quick Test Results ({quickTestResults.length})
+                    </div>
+                    <button
+                      onClick={exportQuickTestToExcel}
+                      className="app-btn app-btn-subtle app-btn-md text-xs"
+                    >
+                      Export to Excel
+                    </button>
                   </div>
                   <div className="app-table-wrap max-h-[420px] overflow-auto">
                     <table className="app-table app-table-fixed text-xs">
@@ -1740,6 +1894,14 @@ export function DetectionSetup({
                     {eligibility?.reason || "Needs a completed EVAL run."}
                   </div>
                   {p.change_notes && <p className="text-xs text-gray-400 mt-1">{summarizePromptChangeNotes(p.change_notes)}</p>}
+                  {p.version_notes && (
+                    <details className="mt-1">
+                      <summary className="cursor-pointer text-[11px] text-blue-300 hover:text-blue-200">
+                        Version Notes
+                      </summary>
+                      <p className="mt-1 text-xs whitespace-pre-wrap text-[var(--app-text)]">{p.version_notes}</p>
+                    </details>
+                  )}
                   <details className="mt-2">
                     <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
                       View Decision Policy & Decision Rubric Snapshot
@@ -1884,6 +2046,71 @@ function formatQuickModelOutput(raw: string): string {
   }
 }
 
+function PromptVersionNotesEditor({
+  promptVersionId,
+  initialNotes,
+  onSaved,
+}: {
+  promptVersionId: string;
+  initialNotes: string;
+  onSaved?: () => void;
+}) {
+  const [notes, setNotes] = useState(initialNotes);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    setNotes(initialNotes);
+    setSavedAt(null);
+  }, [promptVersionId, initialNotes]);
+
+  const dirty = notes !== initialNotes;
+
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/prompts", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_version_id: promptVersionId, version_notes: notes }),
+      });
+      if (res.ok) {
+        setSavedAt(Date.now());
+        onSaved?.();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-field-bg)] px-3 py-2">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--app-text-subtle)]">
+          Version Notes / Observations
+        </div>
+        <div className="flex items-center gap-2">
+          {savedAt && !dirty && <span className="text-[10px] text-emerald-400">Saved</span>}
+          <button
+            onClick={save}
+            disabled={!dirty || saving}
+            className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-40"
+          >
+            {saving ? "Saving..." : "Save Notes"}
+          </button>
+        </div>
+      </div>
+      <textarea
+        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs min-h-24"
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Log observations about how this prompt version performs. Update as you iterate."
+      />
+    </div>
+  );
+}
+
 function PromptForm({
   detectionId,
   detectionCode,
@@ -1926,6 +2153,7 @@ function PromptForm({
     top_p: initialData?.top_p ?? 1,
     max_output_tokens: initialData?.max_output_tokens ?? 1024,
     change_notes: initialData?.change_notes || "",
+    version_notes: initialData?.version_notes || "",
     created_by: "user",
   });
   const [labelPolicyParts, setLabelPolicyParts] = useState(() =>
@@ -2104,6 +2332,16 @@ function PromptForm({
           className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm"
           value={form.change_notes}
           onChange={(e) => setForm({ ...form, change_notes: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-400 block mb-1">Version Notes / Observations</label>
+        <textarea
+          className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm h-24"
+          value={form.version_notes}
+          onChange={(e) => setForm({ ...form, version_notes: e.target.value })}
+          placeholder="What changed in this version and why? You can keep updating these notes as you observe how it performs."
         />
       </div>
 
