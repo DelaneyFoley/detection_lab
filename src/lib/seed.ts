@@ -36,6 +36,30 @@ const SEED_ATTRIBUTE_TAXONOMY = [
 type SeedDatasetItem = { image_id: string; image_uri: string };
 type SeedDataset = { name: string; items: SeedDatasetItem[] };
 
+// Annotator names created on first run so datasets can be assigned right away.
+const DEFAULT_ANNOTATORS = ["Mike", "Dan"];
+
+function seedDefaultAnnotators(db: ReturnType<typeof getDb>) {
+  const done = db
+    .prepare("SELECT value FROM app_meta WHERE key = 'annotators_seeded'")
+    .get() as { value: string } | undefined;
+  if (done?.value === "1") {
+    return;
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS annotators (
+      name TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL
+    )
+  `);
+  const now = new Date().toISOString();
+  const insert = db.prepare("INSERT OR IGNORE INTO annotators (name, created_at) VALUES (?, ?)");
+  for (const name of DEFAULT_ANNOTATORS) {
+    insert.run(name, now);
+  }
+  db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('annotators_seeded', '1')").run();
+}
+
 export function seedDefaultData() {
   const db = getDb();
   const now = new Date().toISOString();
@@ -319,6 +343,8 @@ export function seedBundledDatasets() {
       value TEXT NOT NULL
     );
   `);
+
+  seedDefaultAnnotators(db);
 
   const seeded = db
     .prepare("SELECT value FROM app_meta WHERE key = 'datasets_seeded'")

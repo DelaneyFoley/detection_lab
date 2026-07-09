@@ -61,6 +61,7 @@ interface MyWorkDataset {
   revision_note: string | null;
   updated_at: string;
   assigned_at: string | null;
+  segment_taxonomy?: string | string[] | null;
 }
 
 interface DatasetItemRow {
@@ -807,7 +808,24 @@ function AnnotationView({
   const currentItem = items[currentIndex] || null;
   useEffect(() => { currentItemRef.current = currentItem; }, [currentItem]);
   const currentCorrection = currentItem ? correctionMap?.get(currentItem.image_id) ?? null : null;
-  const segmentOptions = detection?.segment_taxonomy || [];
+  // Attribute options come from the assigned detection's taxonomy. When a dataset
+  // has no detection (e.g. the bundled/unassigned datasets), fall back to the
+  // dataset's own attribute taxonomy so labelers still see the attribute list.
+  const segmentOptions = useMemo<string[]>(() => {
+    const fromDetection = detection?.segment_taxonomy;
+    if (Array.isArray(fromDetection) && fromDetection.length > 0) return fromDetection;
+    const raw = dataset.segment_taxonomy;
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "string" && raw.trim()) {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }, [detection?.segment_taxonomy, dataset.segment_taxonomy]);
   const labeledCount = items.filter((i) => i.ground_truth_label !== null).length;
 
   const resetZoom = useCallback(() => {
