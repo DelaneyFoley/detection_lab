@@ -8,7 +8,7 @@ import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import { InfoTip } from "@/components/shared/InfoTip";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
-import type { Detection, DetectionCategory, PromptVersion } from "@/types";
+import type { Detection, DetectionCategory, PromptVersion, VersionNoteEntry, VersionNoteEntryOrigin } from "@/types";
 import {
   buildUserPromptTemplate,
   DEFAULT_CATEGORY_PROMPT_TEMPLATES,
@@ -17,6 +17,7 @@ import {
   DETECTION_CATEGORY_OPTIONS,
 } from "@/lib/detectionPrompts";
 import { parseCompiledPrompt } from "@/lib/promptParser";
+import { localDateTime } from "@/lib/dateFmt";
 
 type AdminPromptSettings = {
   incorrect_capture_system_prompt: string;
@@ -39,6 +40,7 @@ export function DetectionSetup({
   const { apiKey, selectedModel, refreshCounter, triggerRefresh, setSelectedDetectionId } = useAppStore();
   const { notify, confirm } = useAppFeedback();
   const [mode, setMode] = useState<"view" | "create" | "edit">("view");
+  const [savingPrompt, setSavingPrompt] = useState(false);
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState("");
@@ -116,6 +118,7 @@ export function DetectionSetup({
     detection_category: DEFAULT_DETECTION_CATEGORY as DetectionCategory,
     label_policy: "",
     user_prompt_addendum: "",
+    fixed_guidance: "",
     decision_rubric: [""],
     segment_taxonomy: [""],
     metric_thresholds: { primary_metric: "f1" as const, min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
@@ -236,6 +239,8 @@ export function DetectionSetup({
     }
     const cleanedRubric = form.decision_rubric.filter((r) => r.trim());
     const cleanedSegmentTaxonomy = form.segment_taxonomy.map((s) => s.trim()).filter(Boolean);
+    setSavingPrompt(true);
+    try {
     const res = await fetch("/api/detections", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -263,6 +268,7 @@ export function DetectionSetup({
           label_policy: form.label_policy,
           decision_rubric: decisionRubricText,
           user_prompt_addendum: form.user_prompt_addendum,
+          fixed_guidance: form.fixed_guidance,
           output_schema: `{"detection_code":"${form.detection_code}","decision":"DETECTED|NOT_DETECTED","confidence":0.0,"evidence":"short phrase"}`,
           examples: "",
         },
@@ -286,6 +292,9 @@ export function DetectionSetup({
     setMode("view");
     onRefresh();
     triggerRefresh();
+    } finally {
+      setSavingPrompt(false);
+    }
   };
 
   const generateWithPromptAssist = async () => {
@@ -370,6 +379,8 @@ export function DetectionSetup({
 
   const handleUpdateDetection = async () => {
     if (!selectedDetection) return;
+    setSavingPrompt(true);
+    try {
     await fetch("/api/detections", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -399,9 +410,12 @@ export function DetectionSetup({
       const addendumChanged =
         form.user_prompt_addendum.trim() !==
         (((editPromptSource.prompt_structure as any)?.user_prompt_addendum || selectedDetection.user_prompt_addendum || "").trim());
+      const fixedGuidanceChanged =
+        form.fixed_guidance.trim() !==
+        (((editPromptSource.prompt_structure as any)?.fixed_guidance || "").trim());
       const versionChanged = nextVersionName.length > 0 && nextVersionName !== editPromptSource.version_label;
 
-      if (labelPolicyChanged || rubricChanged || addendumChanged || versionChanged) {
+      if (labelPolicyChanged || rubricChanged || addendumChanged || fixedGuidanceChanged || versionChanged) {
         const promptRes = await fetch("/api/prompts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -412,6 +426,7 @@ export function DetectionSetup({
               ...(editPromptSource.prompt_structure || {}),
               label_policy: form.label_policy,
               user_prompt_addendum: form.user_prompt_addendum,
+              fixed_guidance: form.fixed_guidance,
               decision_rubric: form.decision_rubric
                 .filter((r) => r.trim())
                 .map((r, i) => `${i + 1}. ${r}`)
@@ -423,6 +438,7 @@ export function DetectionSetup({
             max_output_tokens: editPromptSource.max_output_tokens,
             change_notes: "Edited via detection form",
             created_by: "user",
+            source_prompt_version_id: editPromptSource.prompt_version_id,
           }),
         });
         const promptData = await promptRes.json();
@@ -435,6 +451,9 @@ export function DetectionSetup({
     await loadRelated();
     onRefresh();
     triggerRefresh();
+    } finally {
+      setSavingPrompt(false);
+    }
   };
 
   const deletePromptVersion = async (promptVersionId: string) => {
@@ -474,15 +493,35 @@ export function DetectionSetup({
   const startEdit = () => {
     if (!selectedDetection) return;
     const sourcePrompt = prompts.find((p) => p.prompt_version_id === selectedPromptId) || prompts[0] || null;
-    const parsedLabelPolicy = parseLabelPolicySections(selectedDetection.label_policy || "");
+    // Populate the edit form from the SELECTED prompt version's snapshot so
+    // editing e.g. v1 shows v1's content — not the detection's current fields,
+    // which always reflect the most recently created version. Fall back to the
+    // detection fields when a (baseline) version has no stored snapshot.
+    const sourceStructure = (sourcePrompt?.prompt_structure as any) || {};
+    const versionLabelPolicy =
+      typeof sourceStructure.label_policy === "string" && sourceStructure.label_policy.trim()
+        ? sourceStructure.label_policy
+        : selectedDetection.label_policy || "";
+    const versionRubric =
+      typeof sourceStructure.decision_rubric === "string" && sourceStructure.decision_rubric.trim()
+        ? parseDecisionRubricCriteria(sourceStructure.decision_rubric)
+        : selectedDetection.decision_rubric;
+    const versionAddendum =
+      typeof sourceStructure.user_prompt_addendum === "string"
+        ? sourceStructure.user_prompt_addendum
+        : selectedDetection.user_prompt_addendum || "";
+    const versionFixedGuidance =
+      typeof sourceStructure.fixed_guidance === "string" ? sourceStructure.fixed_guidance : "";
+    const parsedLabelPolicy = parseLabelPolicySections(versionLabelPolicy);
     setForm({
       detection_code: selectedDetection.detection_code,
       display_name: selectedDetection.display_name,
       description: selectedDetection.description,
       detection_category: selectedDetection.detection_category,
-      label_policy: selectedDetection.label_policy,
-      user_prompt_addendum: selectedDetection.user_prompt_addendum || "",
-      decision_rubric: selectedDetection.decision_rubric.length > 0 ? selectedDetection.decision_rubric : [""],
+      label_policy: versionLabelPolicy,
+      user_prompt_addendum: versionAddendum,
+      fixed_guidance: versionFixedGuidance,
+      decision_rubric: versionRubric.length > 0 ? versionRubric : [""],
       segment_taxonomy:
         Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0
           ? selectedDetection.segment_taxonomy
@@ -503,6 +542,7 @@ export function DetectionSetup({
       detection_category: DEFAULT_DETECTION_CATEGORY,
       label_policy: "",
       user_prompt_addendum: "",
+      fixed_guidance: "",
       decision_rubric: [""],
       segment_taxonomy: [""],
       metric_thresholds: { primary_metric: "f1", min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
@@ -757,6 +797,230 @@ export function DetectionSetup({
     return approvalEligibilityByPrompt.get(selectedDetection.approved_prompt_version)?.eligible === true;
   }, [selectedDetection?.approved_prompt_version, approvalEligibilityByPrompt]);
 
+  // Best (max F1) run metrics per prompt version — used to mark the top performer
+  // within each iteration cycle/model and to show performance on each card.
+  const runBestByPrompt = useMemo(() => {
+    const m = new Map<string, { f1: number; precision: number; recall: number; total: number }>();
+    for (const r of runs as any[]) {
+      if (r.status !== "completed" || !r.metrics_summary) continue;
+      const f1 = Number(r.metrics_summary.f1 ?? 0);
+      if (!Number.isFinite(f1)) continue;
+      const prev = m.get(r.prompt_version_id);
+      if (prev == null || f1 > prev.f1) {
+        m.set(r.prompt_version_id, {
+          f1,
+          precision: Number(r.metrics_summary.precision ?? 0),
+          recall: Number(r.metrics_summary.recall ?? 0),
+          total: Number(r.metrics_summary.total ?? r.total_images ?? 0),
+        });
+      }
+    }
+    return m;
+  }, [runs]);
+
+  // Nest AI-iteration prompts (created_by === "system") under the human-authored
+  // prompt they descend from, grouped by iteration cycle (batch), with the best
+  // performer per cycle and per model surfaced.
+  const promptTree = useMemo(() => {
+    const byId = new Map(prompts.map((p) => [p.prompt_version_id, p as any]));
+    const isIteration = (p: any) => p?.created_by === "system";
+    const rootIdOf = (p: any): string => {
+      let cur = p;
+      const seen = new Set<string>();
+      while (
+        cur &&
+        isIteration(cur) &&
+        cur.source_prompt_version_id &&
+        byId.has(cur.source_prompt_version_id) &&
+        !seen.has(cur.prompt_version_id)
+      ) {
+        seen.add(cur.prompt_version_id);
+        cur = byId.get(cur.source_prompt_version_id);
+      }
+      return cur ? cur.prompt_version_id : p.prompt_version_id;
+    };
+    const childrenByRoot = new Map<string, any[]>();
+    const parents: any[] = [];
+    for (const p of prompts as any[]) {
+      if (isIteration(p)) {
+        const rootId = rootIdOf(p);
+        const rootPrompt = byId.get(rootId);
+        if (rootId !== p.prompt_version_id && rootPrompt && !isIteration(rootPrompt)) {
+          const arr = childrenByRoot.get(rootId) || [];
+          arr.push(p);
+          childrenByRoot.set(rootId, arr);
+          continue;
+        }
+      }
+      parents.push(p);
+    }
+
+    const f1Of = (pid: string): number | null => (runBestByPrompt.has(pid) ? runBestByPrompt.get(pid)!.f1 : null);
+    const batchOf = (label: string): number => {
+      const m = /-ai-(?:b(\d+)-)?r\d+/i.exec(label || "");
+      return m ? (m[1] ? Number(m[1]) : 1) : 1;
+    };
+
+    type Cycle = { key: number; children: any[]; bestId: string | null; bestF1: number | null };
+    const parentInfo = new Map<string, { cycles: Cycle[]; bestByModel: Array<{ model: string; label: string; f1: number }> }>();
+    for (const parent of parents) {
+      const kids = (childrenByRoot.get(parent.prompt_version_id) || [])
+        .slice()
+        .sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at));
+      const cyclesMap = new Map<number, any[]>();
+      const bestByModelMap = new Map<string, { label: string; f1: number }>();
+      for (const k of kids) {
+        const b = batchOf(k.version_label);
+        const arr = cyclesMap.get(b) || [];
+        arr.push(k);
+        cyclesMap.set(b, arr);
+        const f1 = f1Of(k.prompt_version_id);
+        if (f1 != null) {
+          const cur = bestByModelMap.get(k.model);
+          if (!cur || f1 > cur.f1) bestByModelMap.set(k.model, { label: k.version_label, f1 });
+        }
+      }
+      const cycles: Cycle[] = [...cyclesMap.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([key, cs]) => {
+          let bestId: string | null = null;
+          let bestF1 = -1;
+          for (const c of cs) {
+            const f = f1Of(c.prompt_version_id);
+            if (f != null && f > bestF1) {
+              bestF1 = f;
+              bestId = c.prompt_version_id;
+            }
+          }
+          return { key, children: cs, bestId, bestF1: bestF1 >= 0 ? bestF1 : null };
+        });
+      parentInfo.set(parent.prompt_version_id, {
+        cycles,
+        bestByModel: [...bestByModelMap.entries()].map(([model, v]) => ({ model, label: v.label, f1: v.f1 })),
+      });
+    }
+    return {
+      parents,
+      parentInfo,
+      childCount: (id: string) => (childrenByRoot.get(id) || []).length,
+    };
+  }, [prompts, runBestByPrompt]);
+
+  const renderPromptCard = (
+    p: any,
+    opts: { isChild?: boolean; rootLabel?: string; isBest?: boolean; childBadge?: number; bestByModelText?: string } = {}
+  ) => {
+    const { isChild = false, rootLabel = "", isBest = false, childBadge = 0, bestByModelText = "" } = opts;
+    const eligibility = approvalEligibilityByPrompt.get(p.prompt_version_id);
+    const isApproved = selectedDetection?.approved_prompt_version === p.prompt_version_id;
+    const showApproved = isApproved && !!eligibility?.eligible;
+    const perf = runBestByPrompt.get(p.prompt_version_id);
+    return (
+      <div
+        key={p.prompt_version_id}
+        className={`rounded-2xl border p-3 text-sm ${
+          showApproved ? "border-emerald-400/25 bg-emerald-500/10" : "border-white/10 bg-white/5"
+        } ${isBest ? "ring-1 ring-emerald-400/40" : ""}`}
+      >
+        {isChild && (
+          <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide">
+            <span className="text-blue-300/80">↳ AI iteration of {rootLabel}</span>
+            {isBest && <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-emerald-300">★ best in cycle</span>}
+          </div>
+        )}
+        <div className="flex justify-between items-start">
+          <div>
+            <span className="font-medium">{p.version_label}</span>
+            {childBadge > 0 && (
+              <span className="ml-2 rounded-full bg-blue-500/15 px-1.5 py-0.5 text-[10px] text-blue-200">
+                {childBadge} AI version{childBadge === 1 ? "" : "s"}
+              </span>
+            )}
+            <span className="text-xs text-gray-500 ml-2">{p.model} | temp={p.temperature}</span>
+            {p.prompt_version_id === selectedPromptId && <span className="ml-2 text-xs text-blue-300">SELECTED</span>}
+            {showApproved && <span className="ml-2 text-xs text-green-400">APPROVED</span>}
+            {isApproved && !showApproved && <span className="ml-2 text-xs text-yellow-400">APPROVAL_INVALID</span>}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">{new Date(p.created_at).toLocaleDateString()}</span>
+            <button onClick={() => setSelectedPromptId(p.prompt_version_id)} className="app-btn app-btn-subtle app-btn-sm text-xs">
+              Select
+            </button>
+            <button onClick={() => deletePromptVersion(p.prompt_version_id)} className="app-btn app-btn-danger app-btn-sm text-xs">
+              Delete
+            </button>
+            {isApproved ? (
+              <button onClick={() => setApprovedPrompt(null)} className="app-btn app-btn-subtle app-btn-sm text-xs">
+                Remove Approved
+              </button>
+            ) : (
+              <button
+                onClick={() => setApprovedPrompt(p.prompt_version_id)}
+                disabled={!eligibility?.eligible}
+                title={eligibility?.reason || "Not eligible"}
+                className="app-btn app-btn-success app-btn-sm text-xs disabled:opacity-40"
+              >
+                Mark Approved
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="mt-1 text-[11px] text-gray-500">{eligibility?.reason || "Needs a completed EVAL run."}</div>
+        {perf ? (
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]">
+            <span className="font-medium text-emerald-300">Best F1 {(perf.f1 * 100).toFixed(1)}%</span>
+            <span className="text-[var(--app-text-muted)]">P {(perf.precision * 100).toFixed(1)}%</span>
+            <span className="text-[var(--app-text-muted)]">R {(perf.recall * 100).toFixed(1)}%</span>
+            {perf.total > 0 && <span className="text-[var(--app-text-subtle)]">· {perf.total} imgs</span>}
+          </div>
+        ) : (
+          <div className="mt-1 text-[11px] text-[var(--app-text-subtle)]">No completed run yet</div>
+        )}
+        {p.change_notes && <p className="text-xs text-gray-400 mt-1">{summarizePromptChangeNotes(p.change_notes)}</p>}
+        {(p.version_notes || bestByModelText) && (
+          <details className="mt-1">
+            <summary className="cursor-pointer text-[11px] text-blue-300 hover:text-blue-200">Observations &amp; Notes</summary>
+            {bestByModelText && (
+              <div className="mt-1 rounded-lg border border-emerald-400/20 bg-emerald-500/[0.06] p-2 text-xs text-[var(--app-text)]">
+                <div className="mb-1 font-medium text-emerald-300">Best iteration version by model</div>
+                <pre className="whitespace-pre-wrap font-sans">{bestByModelText}</pre>
+              </div>
+            )}
+            {p.version_notes && (
+              <p className="mt-1 text-xs whitespace-pre-wrap text-[var(--app-text)]">{p.version_notes}</p>
+            )}
+          </details>
+        )}
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
+            View Decision Policy & Decision Rubric Snapshot
+          </summary>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="app-card p-3">
+              <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Policy</h4>
+              <p className="text-xs text-gray-300 whitespace-pre-wrap">
+                {p.prompt_structure?.label_policy || "No decision policy snapshot saved in this version."}
+              </p>
+            </div>
+            <div className="app-card p-3">
+              <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Rubric</h4>
+              <p className="text-xs text-gray-300 whitespace-pre-wrap">
+                {p.prompt_structure?.decision_rubric || "No decision rubric snapshot saved in this version."}
+              </p>
+            </div>
+          </div>
+        </details>
+        {p.golden_set_regression_result && (
+          <div className="mt-2 text-xs">
+            <span className={p.golden_set_regression_result.passed ? "text-green-400" : "text-red-400"}>
+              Regression: {p.golden_set_regression_result.passed ? "PASSED" : "FAILED"}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const setApprovedPrompt = async (promptVersionId: string | null) => {
     if (!selectedDetection) return;
     if (promptVersionId) {
@@ -868,17 +1132,20 @@ export function DetectionSetup({
     let userTemplate = "";
     let policy = "";
     let rubric = "";
+    let fixedGuidance = "";
 
     if (mode === "create") {
       systemPrompt = currentCategoryTemplates.system_prompt || "";
       userTemplate = buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, form.user_prompt_addendum);
       policy = (form.label_policy || "").trim();
       rubric = form.decision_rubric.filter((r) => r.trim()).map((r, i) => `${i + 1}. ${r.trim()}`).join("\n");
+      fixedGuidance = (form.fixed_guidance || "").trim();
     } else if (mode === "edit") {
       systemPrompt = currentCategoryTemplates.system_prompt || "";
       userTemplate = buildUserPromptTemplate(currentCategoryTemplates.user_prompt_template, form.user_prompt_addendum);
       policy = (form.label_policy || "").trim();
       rubric = form.decision_rubric.filter((r) => r.trim()).map((r, i) => `${i + 1}. ${r.trim()}`).join("\n");
+      fixedGuidance = (form.fixed_guidance || "").trim();
     } else {
       const promptForRun = selectedPrompt || activePromptForTopPanel;
       if (!promptForRun) return "";
@@ -886,10 +1153,16 @@ export function DetectionSetup({
       userTemplate = promptForRun.user_prompt_template || "";
       policy = ((promptForRun.prompt_structure as any)?.label_policy || activePromptPolicy || "").trim();
       rubric = ((promptForRun.prompt_structure as any)?.decision_rubric || activePromptRubricText || "").trim();
+      fixedGuidance = ((promptForRun.prompt_structure as any)?.fixed_guidance || "").trim();
     }
 
     const baseUserPrompt = userTemplate.replace("{{DETECTION_CODE}}", detectionCode);
-    const compiledUser = [baseUserPrompt.trim(), policy ? `Decision Policy:\n${policy}` : "", rubric ? `Decision Rubric:\n${rubric}` : ""]
+    const compiledUser = [
+      baseUserPrompt.trim(),
+      fixedGuidance ? `Detection Guidelines (fixed):\n${fixedGuidance}` : "",
+      policy ? `Decision Policy:\n${policy}` : "",
+      rubric ? `Decision Rubric:\n${rubric}` : "",
+    ]
       .filter(Boolean)
       .join("\n\n");
 
@@ -904,6 +1177,7 @@ export function DetectionSetup({
     form.detection_code,
     form.label_policy,
     form.user_prompt_addendum,
+    form.fixed_guidance,
     form.decision_rubric,
     selectedDetection,
     selectedPrompt,
@@ -1181,6 +1455,23 @@ export function DetectionSetup({
           </div>
 
           <div>
+            <label className="text-xs text-gray-400 block mb-1">
+              Fixed Guidance <span className="text-gray-500">(severity scale / general spec — always applied, never changed by prompt iteration)</span>
+            </label>
+            <textarea
+              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm min-h-[6rem] resize-none overflow-hidden"
+              value={form.fixed_guidance}
+              onChange={(e) => {
+                setForm({ ...form, fixed_guidance: e.target.value });
+                e.target.style.height = "auto";
+                e.target.style.height = e.target.scrollHeight + "px";
+              }}
+              ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
+              placeholder="Reusable rules the model must always apply and that AI prompt iteration cannot rewrite (e.g. the Severity 0–4 scale and shared detection-spec guidelines)."
+            />
+          </div>
+
+          <div>
             <label className="text-xs text-gray-400 block mb-2">Decision Policy</label>
             <div className="space-y-2">
               <div className="grid grid-cols-[140px,1fr] gap-2 items-start">
@@ -1339,12 +1630,23 @@ export function DetectionSetup({
             </div>
           )}
 
-          <button
-            onClick={mode === "create" ? handleCreateDetection : handleUpdateDetection}
-            className="app-btn app-btn-success app-btn-md text-sm"
-          >
-            {mode === "create" ? "Save Detection" : "Save Changes"}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={mode === "create" ? handleCreateDetection : handleUpdateDetection}
+              disabled={savingPrompt}
+              className="app-btn app-btn-success app-btn-md text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {savingPrompt
+                ? (mode === "create" ? "Saving…" : "Saving Changes…")
+                : (mode === "create" ? "Save Detection" : "Save Changes")}
+            </button>
+            {savingPrompt && (
+              <span className="flex items-center gap-2 text-xs text-[var(--app-text-muted)]">
+                <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                Generating AI change summary and adding to Version Notes…
+              </span>
+            )}
+          </div>
         </div>
       )}
 
@@ -1435,7 +1737,6 @@ export function DetectionSetup({
                   <PromptVersionNotesEditor
                     key={selectedPrompt.prompt_version_id}
                     promptVersionId={selectedPrompt.prompt_version_id}
-                    initialNotes={selectedPrompt.version_notes || ""}
                     onSaved={loadRelated}
                   />
                 )}
@@ -1830,106 +2131,50 @@ export function DetectionSetup({
             )}
 
             <div className="space-y-2">
-              {prompts.map((p) => {
-                  const eligibility = approvalEligibilityByPrompt.get(p.prompt_version_id);
-                  const isApproved = selectedDetection.approved_prompt_version === p.prompt_version_id;
-                  const showApproved = isApproved && !!eligibility?.eligible;
-                  return (
-                <div
-                  key={p.prompt_version_id}
-                  className={`rounded-2xl border p-3 text-sm ${
-                    showApproved
-                      ? "border-emerald-400/25 bg-emerald-500/10"
-                      : "border-white/10 bg-white/5"
-                  }`}
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="font-medium">{p.version_label}</span>
-                      <span className="text-xs text-gray-500 ml-2">{p.model} | temp={p.temperature}</span>
-                      {p.prompt_version_id === selectedPromptId && (
-                        <span className="ml-2 text-xs text-blue-300">SELECTED</span>
-                      )}
-                      {showApproved && (
-                        <span className="ml-2 text-xs text-green-400">APPROVED</span>
-                      )}
-                      {isApproved && !showApproved && (
-                        <span className="ml-2 text-xs text-yellow-400">APPROVAL_INVALID</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-500">{new Date(p.created_at).toLocaleDateString()}</span>
-                      <button
-                        onClick={() => setSelectedPromptId(p.prompt_version_id)}
-                        className="app-btn app-btn-subtle app-btn-sm text-xs"
-                      >
-                        Select
-                      </button>
-                      <button
-                        onClick={() => deletePromptVersion(p.prompt_version_id)}
-                        className="app-btn app-btn-danger app-btn-sm text-xs"
-                      >
-                        Delete
-                      </button>
-                      {isApproved ? (
-                        <button
-                          onClick={() => setApprovedPrompt(null)}
-                          className="app-btn app-btn-subtle app-btn-sm text-xs"
-                        >
-                          Remove Approved
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => setApprovedPrompt(p.prompt_version_id)}
-                          disabled={!eligibility?.eligible}
-                          title={eligibility?.reason || "Not eligible"}
-                          className="app-btn app-btn-success app-btn-sm text-xs disabled:opacity-40"
-                        >
-                          Mark Approved
-                        </button>
-                      )}
-                    </div>
+              {promptTree.parents.map((parent) => {
+                const info = promptTree.parentInfo.get(parent.prompt_version_id);
+                const childCount = promptTree.childCount(parent.prompt_version_id);
+                const bestByModelText =
+                  info && info.bestByModel.length > 0
+                    ? info.bestByModel
+                        .map((b) => `• ${b.model}: ${b.label} (F1 ${(b.f1 * 100).toFixed(1)}%)`)
+                        .join("\n")
+                    : "";
+                return (
+                  <div key={parent.prompt_version_id} className="space-y-2">
+                    {renderPromptCard(parent, { childBadge: childCount, bestByModelText })}
+                    {info && info.cycles.length > 0 && (
+                      <details className="ml-4 rounded-xl border border-blue-400/15 bg-blue-500/[0.03]">
+                        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-blue-200">
+                          AI iteration versions ({childCount}) · {info.cycles.length} cycle{info.cycles.length === 1 ? "" : "s"}
+                        </summary>
+                        <div className="space-y-2 p-2">
+                          {info.cycles.map((cycle) => (
+                            <details
+                              key={cycle.key}
+                              open={info.cycles.length === 1}
+                              className="rounded-lg border border-white/10 bg-white/[0.02]"
+                            >
+                              <summary className="cursor-pointer px-3 py-2 text-[11px] text-[var(--app-text-muted)]">
+                                Iteration cycle {cycle.key} · {cycle.children.length} version{cycle.children.length === 1 ? "" : "s"}
+                                {cycle.bestF1 != null ? ` · best F1 ${(cycle.bestF1 * 100).toFixed(1)}%` : ""}
+                              </summary>
+                              <div className="space-y-2 p-2">
+                                {cycle.children.map((c) =>
+                                  renderPromptCard(c, {
+                                    isChild: true,
+                                    rootLabel: parent.version_label,
+                                    isBest: c.prompt_version_id === cycle.bestId,
+                                  })
+                                )}
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                   </div>
-                  <div className="mt-1 text-[11px] text-gray-500">
-                    {eligibility?.reason || "Needs a completed EVAL run."}
-                  </div>
-                  {p.change_notes && <p className="text-xs text-gray-400 mt-1">{summarizePromptChangeNotes(p.change_notes)}</p>}
-                  {p.version_notes && (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer text-[11px] text-blue-300 hover:text-blue-200">
-                        Version Notes
-                      </summary>
-                      <p className="mt-1 text-xs whitespace-pre-wrap text-[var(--app-text)]">{p.version_notes}</p>
-                    </details>
-                  )}
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-xs text-blue-300 hover:text-blue-200">
-                      View Decision Policy & Decision Rubric Snapshot
-                    </summary>
-                    <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="app-card p-3">
-                        <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Policy</h4>
-                        <p className="text-xs text-gray-300 whitespace-pre-wrap">
-                          {p.prompt_structure?.label_policy || "No decision policy snapshot saved in this version."}
-                        </p>
-                      </div>
-                      <div className="app-card p-3">
-                        <h4 className="text-[11px] text-gray-500 uppercase tracking-wide mb-1">Decision Rubric</h4>
-                        <p className="text-xs text-gray-300 whitespace-pre-wrap">
-                          {p.prompt_structure?.decision_rubric || "No decision rubric snapshot saved in this version."}
-                        </p>
-                      </div>
-                    </div>
-                  </details>
-                  {p.golden_set_regression_result && (
-                    <div className="mt-2 text-xs">
-                      <span className={p.golden_set_regression_result.passed ? "text-green-400" : "text-red-400"}>
-                        Regression: {p.golden_set_regression_result.passed ? "PASSED" : "FAILED"}
-                      </span>
-                    </div>
-                  )}
-                </div>
-                  );
+                );
               })}
               {prompts.length === 0 && (
                 <p className="text-sm text-gray-500 text-center py-4">
@@ -2048,35 +2293,59 @@ function formatQuickModelOutput(raw: string): string {
 
 function PromptVersionNotesEditor({
   promptVersionId,
-  initialNotes,
   onSaved,
 }: {
   promptVersionId: string;
-  initialNotes: string;
   onSaved?: () => void;
 }) {
-  const [notes, setNotes] = useState(initialNotes);
+  const [entries, setEntries] = useState<VersionNoteEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingBody, setEditingBody] = useState("");
   const [saving, setSaving] = useState(false);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/version-note-entries?prompt_version_id=${encodeURIComponent(promptVersionId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setEntries(Array.isArray(data.entries) ? data.entries : []);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [promptVersionId]);
 
   useEffect(() => {
-    setNotes(initialNotes);
-    setSavedAt(null);
-  }, [promptVersionId, initialNotes]);
+    setEditingId(null);
+    setEditingBody("");
+    load();
+  }, [load]);
 
-  const dirty = notes !== initialNotes;
+  const beginEdit = (entry: VersionNoteEntry) => {
+    setEditingId(entry.entry_id);
+    setEditingBody(entry.body);
+  };
 
-  const save = async () => {
-    if (!dirty || saving) return;
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingBody("");
+  };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/prompts", {
+      const res = await fetch("/api/version-note-entries", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt_version_id: promptVersionId, version_notes: notes }),
+        body: JSON.stringify({ entry_id: editingId, body: editingBody }),
       });
       if (res.ok) {
-        setSavedAt(Date.now());
+        await load();
+        setEditingId(null);
+        setEditingBody("");
         onSaved?.();
       }
     } finally {
@@ -2084,30 +2353,150 @@ function PromptVersionNotesEditor({
     }
   };
 
+  const addNote = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/version-note-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_version_id: promptVersionId, body: "" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await load();
+        if (data?.entry?.entry_id) {
+          setEditingId(data.entry.entry_id);
+          setEditingBody("");
+        }
+        onSaved?.();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteEntry = async (entryId: string) => {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/version-note-entries?entry_id=${encodeURIComponent(entryId)}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        await load();
+        onSaved?.();
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const originStyles: Record<VersionNoteEntryOrigin, string> = {
+    auto_created: "bg-gray-700/60 text-gray-200",
+    auto_diff: "bg-blue-800/50 text-blue-100",
+    auto_hil: "bg-amber-800/50 text-amber-100",
+    user: "bg-slate-700/60 text-slate-200",
+  };
+  const originLabels: Record<VersionNoteEntryOrigin, string> = {
+    auto_created: "Auto · Created",
+    auto_diff: "Auto · Diff",
+    auto_hil: "Auto · HIL",
+    user: "User",
+  };
+
   return (
-    <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-field-bg)] px-3 py-2">
-      <div className="flex items-center justify-between mb-1">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--app-text-subtle)]">
-          Version Notes / Observations
-        </div>
-        <div className="flex items-center gap-2">
-          {savedAt && !dirty && <span className="text-[10px] text-emerald-400">Saved</span>}
+    <details className="rounded-lg px-1 py-1">
+      <summary className="cursor-pointer list-none text-xs text-blue-300 transition-colors hover:text-blue-200">
+        <span className="inline-flex items-center gap-2">
+          <span className="text-[10px] text-blue-300/80">▶</span>
+          <span>Version Notes / Observations</span>
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2">
+        <div className="flex items-center justify-end px-3">
           <button
-            onClick={save}
-            disabled={!dirty || saving}
+            onClick={addNote}
+            disabled={saving}
             className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-40"
           >
-            {saving ? "Saving..." : "Save Notes"}
+            + Add note
           </button>
         </div>
+        {loading ? (
+          <div className="px-3 py-2 text-xs text-[var(--app-text-muted)]">Loading…</div>
+        ) : entries.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-[var(--app-text-muted)]">No entries yet.</div>
+        ) : (
+          <ul className="space-y-2">
+            {entries.map((entry) => {
+              const isEditing = editingId === entry.entry_id;
+              return (
+                <li
+                  key={entry.entry_id}
+                  className="rounded-md border border-gray-700/60 bg-gray-900/40 px-3 py-2"
+                >
+                  <div className="flex items-center gap-2 text-[10px] mb-1">
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded ${originStyles[entry.origin]}`}>
+                      {originLabels[entry.origin]}
+                    </span>
+                    <span className="text-[var(--app-text-muted)]">{localDateTime(entry.created_at)}</span>
+                    <span className="text-[var(--app-text-muted)]">· {entry.created_by}</span>
+                    <span className="ml-auto flex items-center gap-2">
+                      {!isEditing && (
+                        <>
+                          <button
+                            onClick={() => beginEdit(entry)}
+                            className="text-xs text-blue-300 hover:text-blue-200"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => deleteEntry(entry.entry_id)}
+                            disabled={saving}
+                            className="text-xs text-red-300 hover:text-red-200 disabled:opacity-40"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <textarea
+                        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs min-h-24"
+                        value={editingBody}
+                        onChange={(e) => setEditingBody(e.target.value)}
+                        autoFocus
+                      />
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={cancelEdit}
+                          disabled={saving}
+                          className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-40"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={saveEdit}
+                          disabled={saving}
+                          className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-40"
+                        >
+                          {saving ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-sm text-[var(--app-text)]">
+                      {entry.body || <span className="text-[var(--app-text-muted)]">(empty note)</span>}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
-      <textarea
-        className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs min-h-24"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        placeholder="Log observations about how this prompt version performs. Update as you iterate."
-      />
-    </div>
+    </details>
   );
 }
 
@@ -2190,7 +2579,11 @@ function PromptForm({
     await fetch("/api/prompts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, detection_id: detectionId }),
+      body: JSON.stringify({
+        ...form,
+        detection_id: detectionId,
+        source_prompt_version_id: initialData?.prompt_version_id ?? null,
+      }),
     });
     onSaved();
   };

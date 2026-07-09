@@ -22,3 +22,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
+
+export async function POST(req: NextRequest) {
+  try {
+    const rateLimited = applyRateLimit(req, { key: "qa:metrics:snapshot", maxRequests: 10, windowMs: 60_000 });
+    if (rateLimited) return rateLimited;
+
+    const body = await req.json().catch(() => ({}));
+    const periodType = (body?.period_type === "month" ? "month" : "week") as "week" | "month";
+    const date = body?.date ? new Date(body.date) : undefined;
+    if (date && Number.isNaN(date.getTime())) {
+      return NextResponse.json({ error: "Invalid date" }, { status: 400 });
+    }
+
+    const result = qaRepository.generateMetricsSnapshot({ periodType, date });
+    return NextResponse.json({ ok: true, ...result });
+  } catch (error: unknown) {
+    const context = getRequestContext(req, "/api/qa/metrics/history");
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error("QA metrics snapshot generation failed", { ...context, error: errMsg });
+    return NextResponse.json({ error: errMsg }, { status: 500 });
+  }
+}

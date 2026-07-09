@@ -8,9 +8,11 @@ import { DatasetDeleteSchema, DatasetDuplicateSchema, DatasetAssignAnnotatorsSch
 import { isDatasetSplitType } from "@/lib/splitType";
 import { fileStore } from "@/lib/services";
 import { datasetRepository, qaRepository, notificationRepository } from "@/lib/repositories";
+import { seedBundledDatasets } from "@/lib/seed";
 
 export async function GET(req: NextRequest) {
   try {
+    seedBundledDatasets();
     const detectionId = req.nextUrl.searchParams.get("detection_id");
     const datasetId = req.nextUrl.searchParams.get("dataset_id");
     const childrenOf = req.nextUrl.searchParams.get("children_of");
@@ -675,11 +677,12 @@ export async function PUT(req: NextRequest) {
     if (!allApproved) {
       return NextResponse.json({ error: "All child datasets must be approved before finalizing" }, { status: 400 });
     }
-    const conflicts = datasetRepository.getMergeConflicts(data.parent_dataset_id);
+    const excludeAttributes = !!parent.exclude_attributes;
+    const conflicts = datasetRepository.getMergeConflicts(data.parent_dataset_id, excludeAttributes);
     if (conflicts.length > 0 && (!data.resolutions || data.resolutions.length === 0)) {
       return NextResponse.json({ conflicts });
     }
-    datasetRepository.mergeChildrenIntoParent(data.parent_dataset_id, data.resolutions || []);
+    datasetRepository.mergeChildrenIntoParent(data.parent_dataset_id, data.resolutions || [], excludeAttributes);
 
     for (const child of children) {
       if (child.assigned_to) {

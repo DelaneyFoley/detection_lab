@@ -225,6 +225,20 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_gt_corrections_run ON groundtruth_corrections(run_id);
     CREATE INDEX IF NOT EXISTS idx_gt_corrections_prediction ON groundtruth_corrections(prediction_id);
     CREATE INDEX IF NOT EXISTS idx_gt_corrections_created_at ON groundtruth_corrections(created_at);
+
+    CREATE TABLE IF NOT EXISTS version_note_entries (
+      entry_id TEXT PRIMARY KEY,
+      prompt_version_id TEXT NOT NULL,
+      origin TEXT NOT NULL CHECK(origin IN ('auto_created','auto_diff','auto_hil','user')),
+      event_type TEXT,
+      body TEXT NOT NULL,
+      metadata TEXT,
+      created_by TEXT NOT NULL DEFAULT 'system',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (prompt_version_id) REFERENCES prompt_versions(prompt_version_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_version_note_entries_version
+      ON version_note_entries(prompt_version_id, created_at DESC);
   `);
 
   ensureDatasetItemColumns(db);
@@ -249,12 +263,23 @@ function initSchema(db: Database.Database) {
   syncReviewerNotesToImageDescription(db);
   ensureNotificationsTable(db);
   ensurePromptVersionNotesColumn(db);
+  ensurePromptVersionSourceColumn(db);
+  ensureAttributePillLayoutsTable(db);
+  ensurePromptIterationJobsTable(db);
+  ensurePromptIterationJobColumns(db);
 }
 
 function ensurePromptVersionNotesColumn(db: Database.Database) {
   const columns = db.prepare("PRAGMA table_info(prompt_versions)").all() as Array<{ name: string }>;
   if (!columns.some((c) => c.name === "version_notes")) {
     db.exec("ALTER TABLE prompt_versions ADD COLUMN version_notes TEXT NOT NULL DEFAULT ''");
+  }
+}
+
+function ensurePromptVersionSourceColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(prompt_versions)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "source_prompt_version_id")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN source_prompt_version_id TEXT");
   }
 }
 
@@ -575,6 +600,9 @@ function ensureDatasetProgressColumns(db: Database.Database) {
   if (!columns.some((c) => c.name === "revision_note")) {
     db.exec("ALTER TABLE datasets ADD COLUMN revision_note TEXT");
   }
+  if (!columns.some((c) => c.name === "exclude_attributes")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN exclude_attributes INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 function ensureAnnotatorsTable(db: Database.Database) {
@@ -728,6 +756,70 @@ function syncReviewerNotesToImageDescription(db: Database.Database) {
           AND p.reviewer_note != ''
       )
   `);
+}
+
+function ensureAttributePillLayoutsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS attribute_pill_layouts (
+      user_key TEXT NOT NULL,
+      taxonomy_key TEXT NOT NULL,
+      layout TEXT NOT NULL DEFAULT '[]',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_key, taxonomy_key)
+    );
+  `);
+}
+
+function ensurePromptIterationJobsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_iteration_jobs (
+      job_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      detection_id TEXT NOT NULL,
+      source_prompt_version_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      phase TEXT,
+      progress REAL NOT NULL DEFAULT 0,
+      goal_f1 REAL,
+      max_rounds INTEGER NOT NULL DEFAULT 1,
+      precision_floor REAL,
+      lean_preference REAL,
+      fixed_guidance TEXT,
+      objective TEXT,
+      current_round INTEGER NOT NULL DEFAULT 0,
+      rounds TEXT NOT NULL DEFAULT '[]',
+      candidates_generated INTEGER NOT NULL DEFAULT 0,
+      candidates_evaluated INTEGER NOT NULL DEFAULT 0,
+      best_f1 REAL,
+      best_precision REAL,
+      best_recall REAL,
+      logs TEXT NOT NULL DEFAULT '[]',
+      baseline_metrics TEXT,
+      candidates TEXT,
+      report TEXT,
+      result_prompt_version_id TEXT,
+      result_run_id TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompt_iteration_jobs_run ON prompt_iteration_jobs(run_id);
+    CREATE INDEX IF NOT EXISTS idx_prompt_iteration_jobs_status ON prompt_iteration_jobs(status);
+  `);
+}
+
+function ensurePromptIterationJobColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(prompt_iteration_jobs)").all() as Array<{ name: string }>;
+  const has = (name: string) => columns.some((c) => c.name === name);
+  if (!has("max_rounds")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN max_rounds INTEGER NOT NULL DEFAULT 1");
+  if (!has("precision_floor")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN precision_floor REAL");
+  if (!has("lean_preference")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN lean_preference REAL");
+  if (!has("fixed_guidance")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN fixed_guidance TEXT");
+  if (!has("objective")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN objective TEXT");
+  if (!has("current_round")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN current_round INTEGER NOT NULL DEFAULT 0");
+  if (!has("rounds")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN rounds TEXT NOT NULL DEFAULT '[]'");
 }
 
 function ensureNotificationsTable(db: Database.Database) {

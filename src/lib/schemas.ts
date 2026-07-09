@@ -81,6 +81,7 @@ export const PromptCreateSchema = z.object({
   change_notes: z.string().optional(),
   version_notes: z.string().optional(),
   created_by: z.string().trim().min(1).optional(),
+  source_prompt_version_id: z.string().trim().min(1).nullable().optional(),
 });
 
 export const PromptUpdateSchema = z.object({
@@ -153,6 +154,7 @@ export const QaStatusUpdateSchema = z.object({
   new_status: z.enum(["draft", "assigned", "in_annotation", "submitted", "in_qa", "needs_revision", "approved", "finalized", "archived", "rejected"]),
   actor: z.string().trim().min(1).optional(),
   revision_note: z.string().optional(),
+  qa_override_reason: z.string().trim().min(1).optional(),
 });
 
 export const QaAssignSchema = z.object({

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { seedDefaultData, seedPipesRustingDetection } from "@/lib/seed";
 import { v4 as uuid } from "uuid";
 import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
@@ -12,8 +11,6 @@ import { normalizeDetectionCategory } from "@/lib/detectionPrompts";
 import { detectionRepository, promptRepository, runRepository } from "@/lib/repositories";
 
 export async function GET(req: NextRequest) {
-  seedDefaultData();
-  seedPipesRustingDetection();
   const search = parseSearch(req.nextUrl.searchParams.get("search"));
   const hasPagination = req.nextUrl.searchParams.has("page") || req.nextUrl.searchParams.has("page_size");
   if (hasPagination || search) {

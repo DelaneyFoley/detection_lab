@@ -7,6 +7,9 @@ import { computeMetricsWithSegments } from "@/lib/metrics";
 import { formatMetricValue } from "@/lib/ui/metrics";
 import { splitTypeLabel } from "@/lib/splitType";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
+import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
+import { AttributePills } from "@/components/shared/AttributePills";
+import { PromptIterationPanel } from "@/components/shared/PromptIterationPanel";
 
 const ERROR_TAGS: ErrorTag[] = [
   "MISSED_DETECTION",
@@ -35,9 +38,10 @@ const RESOLUTION_ACTIONS: { value: ResolutionAction; label: string }[] = [
 ];
 
 export function HilReview({ detection }: { detection: Detection }) {
-  const { selectedRunByDetection, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
+  const { selectedRunByDetection, setSelectedRunForDetection, triggerRefresh, refreshCounter, apiKey } = useAppStore();
   const [runs, setRuns] = useState<Run[]>([]);
   const [promptLabelById, setPromptLabelById] = useState<Record<string, string>>({});
+  const [promptLineageById, setPromptLineageById] = useState<Record<string, { rootLabel: string; isIteration: boolean }>>({});
   const selectedRunId = selectedRunByDetection[detection.detection_id] || "";
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [filter, setFilter] = useState<FilterType>("all");
@@ -86,6 +90,32 @@ export function HilReview({ detection }: { detection: Detection }) {
       }
     }
     setPromptLabelById(next);
+    // Trace each prompt up its lineage to the human-authored root so iteration
+    // runs can be grouped with the run they originated from.
+    const lineage: Record<string, { rootLabel: string; isIteration: boolean }> = {};
+    if (Array.isArray(prompts)) {
+      const byId = new Map(prompts.map((p: any) => [p.prompt_version_id, p]));
+      const isIteration = (p: any) => p?.created_by === "system";
+      for (const p of prompts as any[]) {
+        let cur: any = p;
+        const seen = new Set<string>();
+        while (
+          cur &&
+          isIteration(cur) &&
+          cur.source_prompt_version_id &&
+          byId.has(cur.source_prompt_version_id) &&
+          !seen.has(cur.prompt_version_id)
+        ) {
+          seen.add(cur.prompt_version_id);
+          cur = byId.get(cur.source_prompt_version_id);
+        }
+        lineage[p.prompt_version_id] = {
+          rootLabel: cur?.version_label || p.version_label || "",
+          isIteration: isIteration(p),
+        };
+      }
+    }
+    setPromptLineageById(lineage);
   }, [detection.detection_id]);
 
   useEffect(() => {
@@ -282,6 +312,54 @@ export function HilReview({ detection }: { detection: Detection }) {
   };
 
   const [exporting, setExporting] = useState(false);
+  const [finalized, setFinalized] = useState<boolean | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
+  const { notify } = useAppFeedback();
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedRunId) {
+      setFinalized(null);
+      return;
+    }
+    setFinalized(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/hil/finalize?run_id=${encodeURIComponent(selectedRunId)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setFinalized(Boolean(data?.finalized));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRunId]);
+
+  const finalizeHilReview = async () => {
+    if (!selectedRunId || finalizing || finalized) return;
+    setFinalizing(true);
+    try {
+      const res = await fetch("/api/hil/finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: selectedRunId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setFinalized(true);
+        notify({ tone: "success", message: "HIL review finalized — entry added to Version Notes." });
+      } else {
+        notify({ tone: "error", message: data?.error || "Failed to finalize HIL review" });
+      }
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "Failed to finalize HIL review" });
+    } finally {
+      setFinalizing(false);
+    }
+  };
 
   const exportRunToExcel = async () => {
     if (!selectedRunId || exporting) return;
@@ -443,11 +521,38 @@ export function HilReview({ detection }: { detection: Detection }) {
             }}
           >
             <option value="">Choose a run...</option>
-            {runs.map((r: any) => (
-              <option key={r.run_id} value={r.run_id}>
-                {formatRunOptionLabel(r, promptLabelById[r.prompt_version_id])}
-              </option>
-            ))}
+            {(() => {
+              // Group runs by the human-authored root prompt so iteration runs sit
+              // with the run they originated from; within a group, the original run
+              // comes first, then its AI-iteration runs (newest first).
+              const groups = new Map<string, any[]>();
+              for (const r of runs as any[]) {
+                const key = promptLineageById[r.prompt_version_id]?.rootLabel || promptLabelById[r.prompt_version_id] || "Other";
+                const arr = groups.get(key) || [];
+                arr.push(r);
+                groups.set(key, arr);
+              }
+              const renderOption = (r: any) => (
+                <option key={r.run_id} value={r.run_id}>
+                  {(promptLineageById[r.prompt_version_id]?.isIteration ? "↳ " : "") +
+                    formatRunOptionLabel(r, promptLabelById[r.prompt_version_id])}
+                </option>
+              );
+              return [...groups.entries()].map(([groupLabel, groupRuns]) => {
+                if (groupRuns.length <= 1) return groupRuns.map(renderOption);
+                const sorted = [...groupRuns].sort((a, b) => {
+                  const ai = promptLineageById[a.prompt_version_id]?.isIteration ? 1 : 0;
+                  const bi = promptLineageById[b.prompt_version_id]?.isIteration ? 1 : 0;
+                  if (ai !== bi) return ai - bi;
+                  return +new Date(b.created_at) - +new Date(a.created_at);
+                });
+                return (
+                  <optgroup key={groupLabel} label={groupLabel}>
+                    {sorted.map(renderOption)}
+                  </optgroup>
+                );
+              });
+            })()}
           </select>
           {predictions.length > 0 && (
             <button
@@ -456,6 +561,20 @@ export function HilReview({ detection }: { detection: Detection }) {
               className="app-btn app-btn-subtle app-btn-sm text-xs whitespace-nowrap"
             >
               {exporting ? "Exporting..." : "Export to Excel"}
+            </button>
+          )}
+          {selectedRunId && (
+            <button
+              onClick={finalizeHilReview}
+              disabled={finalizing || finalized === true || finalized === null}
+              title={finalized ? "Already finalized" : "Write a performance summary entry to Version Notes"}
+              className="app-btn app-btn-subtle app-btn-sm text-xs whitespace-nowrap disabled:opacity-40"
+            >
+              {finalizing
+                ? "Finalizing..."
+                : finalized
+                  ? "HIL Review Finalized"
+                  : "Finalize HIL Review"}
             </button>
           )}
         </div>
@@ -502,6 +621,20 @@ export function HilReview({ detection }: { detection: Detection }) {
           </div>
         )}
       </div>
+
+      {/* AI Prompt Iteration */}
+      {selectedRunId && (
+        <PromptIterationPanel
+          runId={selectedRunId}
+          finalized={finalized === true}
+          promptVersionLabel={
+            promptLabelById[runs.find((r) => r.run_id === selectedRunId)?.prompt_version_id || ""] || ""
+          }
+          promptVersionId={runs.find((r) => r.run_id === selectedRunId)?.prompt_version_id || ""}
+          predictions={predictions}
+          apiKey={apiKey}
+        />
+      )}
 
       {/* Table View */}
       {viewMode === "table" && predictions.length > 0 && (
@@ -1403,27 +1536,13 @@ function SegmentTagsEditor({
           ))}
         </div>
       )}
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => {
-          const selected = value.includes(option);
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() =>
-                onChange(selected ? value.filter((v) => v !== option) : [...value, option])
-              }
-              className={`px-2.5 py-1 text-[11px] transition ${
-                selected
-                  ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
-                  : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
-              }`}
-            >
-              {option}
-            </button>
-          );
-        })}
-      </div>
+      <AttributePills
+        options={options}
+        selected={value}
+        onToggle={(attr) =>
+          onChange(value.includes(attr) ? value.filter((v) => v !== attr) : [...value, attr])
+        }
+      />
       {options.length === 0 && value.length === 0 && (
         <p className="text-[11px] text-gray-500">No attributes configured for this detection.</p>
       )}

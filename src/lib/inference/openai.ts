@@ -1,6 +1,18 @@
 import type { PromptVersion, GeminiDetectionResponse } from "@/types";
 import { fetchImageAsBase64 } from "./shared";
 
+const STRICT_JSON_CONTRACT = [
+  'Return ONLY this JSON object and nothing else.',
+  '{',
+  '  "detection_code": "{{DETECTION_CODE}}",',
+  '  "decision": "DETECTED" or "NOT_DETECTED",',
+  '  "confidence": <float 0-1>,',
+  '  "evidence": "<short phrase describing visual basis>"',
+  '}',
+  'Do not wrap the JSON in markdown code fences.',
+  'Do not add any prose, comments, headings, or extra keys.',
+].join("\n");
+
 export async function runOpenAIInference(
   apiKey: string,
   prompt: PromptVersion,
@@ -22,14 +34,14 @@ export async function runOpenAIInference(
     /\{\{DETECTION_CODE\}\}/g,
     detectionCode
   );
-  const compiledUserPrompt = buildCompiledPrompt(prompt, userPrompt);
+  const compiledUserPrompt = buildCompiledPrompt(prompt, userPrompt, detectionCode);
 
   try {
     const { base64, mimeType } = await fetchImageAsBase64(imageUri);
     const dataUrl = `data:${mimeType};base64,${base64}`;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const messageText = attempt === 0 ? compiledUserPrompt : buildRetryText(compiledUserPrompt, attempt);
+      const messageText = attempt === 0 ? compiledUserPrompt : buildRetryText(compiledUserPrompt, attempt, detectionCode);
 
       const body = {
         model: prompt.model,
@@ -69,7 +81,7 @@ export async function runOpenAIInference(
       }
 
       const json = await resp.json();
-      const rawText: string = json.choices?.[0]?.message?.content || "";
+      const rawText: string = String(json.choices?.[0]?.message?.content || "").trim();
 
       const parseResult = parseResponse(rawText, detectionCode);
       if (parseResult.ok) {
@@ -112,27 +124,33 @@ export async function runOpenAIInference(
   }
 }
 
-function buildCompiledPrompt(prompt: PromptVersion, baseUserPrompt: string): string {
+function buildCompiledPrompt(prompt: PromptVersion, baseUserPrompt: string, detectionCode: string): string {
   const structure = (prompt.prompt_structure || {}) as any;
+  const fixedGuidance = typeof structure.fixed_guidance === "string" ? structure.fixed_guidance.trim() : "";
   const labelPolicy = typeof structure.label_policy === "string" ? structure.label_policy.trim() : "";
   const decisionRubric = typeof structure.decision_rubric === "string" ? structure.decision_rubric.trim() : "";
+  const schemaContract = STRICT_JSON_CONTRACT.replace(/\{\{DETECTION_CODE\}\}/g, detectionCode);
   const sections = [
     baseUserPrompt.trim(),
+    fixedGuidance ? `Detection Guidelines (fixed):\n${fixedGuidance}` : "",
     labelPolicy ? `Decision Policy:\n${labelPolicy}` : "",
     decisionRubric ? `Decision Rubric:\n${decisionRubric}` : "",
+    schemaContract,
   ].filter(Boolean);
   return sections.join("\n\n");
 }
 
-function buildRetryText(base: string, attempt: number): string {
-  return `${base}\n\nRetry attempt ${attempt}: previous response failed schema validation. Return only valid JSON with keys: detection_code, decision, confidence, evidence. No markdown or backticks.`;
+function buildRetryText(base: string, attempt: number, detectionCode: string): string {
+  return `${base}\n\nRetry attempt ${attempt}: previous response failed schema validation.\n${STRICT_JSON_CONTRACT.replace(/\{\{DETECTION_CODE\}\}/g, detectionCode)}`;
 }
 
 function parseResponse(raw: string, detectionCode: string): { ok: true; result: GeminiDetectionResponse } | { ok: false; reason: string; fix: string | null } {
   try {
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { ok: false, reason: "No JSON object found in response", fix: "Respond with only a JSON object." };
-    const parsed = JSON.parse(jsonMatch[0]);
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return { ok: false, reason: "Response is not a raw JSON object", fix: "Return only the raw JSON object. No markdown or extra text." };
+    }
+    const parsed = JSON.parse(trimmed);
     if (parsed.decision !== "DETECTED" && parsed.decision !== "NOT_DETECTED") {
       return { ok: false, reason: "Invalid decision value", fix: "decision must be DETECTED or NOT_DETECTED" };
     }

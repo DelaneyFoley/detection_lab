@@ -35,3 +35,17 @@ pnpm-debug.log*
 /data/*.db
 data/*.db-shm
 data/*.db-wal
+
+# Local working artifacts — code only in the repo, no docs/data/screenshots
+# Documents, specs, requirements, reference datasets
+/docs/
+# Screenshots and UI captures
+/screenshots/
+# HTML mockups / demos
+/HTML Demo Files/
+# Local datasets / detections / seed data (app recreates ./data on first run)
+/data/
+/public/dataset-manifest-example.csv
+# Stray/scratch files
+/cannot
+/open

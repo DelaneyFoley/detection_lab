@@ -5,6 +5,7 @@ import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection, SplitType, ReviewFlag } from "@/types";
 import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { AttributePills } from "@/components/shared/AttributePills";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { compareImageIds } from "@/lib/imageIdSort";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
@@ -758,12 +759,13 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const exportSelectedDatasetCsv = () => {
     if (!selectedDataset) return;
-    const headers = ["imageId", "imageUrl", "groundTruthLabel", "attributes"];
+    const headers = ["imageId", "imageUrl", "groundTruthLabel", "attributes", "imageDescription"];
     const rows = sortedDatasetItems.map((item) => [
       item.image_id || "",
       item.image_uri || "",
       item.ground_truth_label || "",
       JSON.stringify(normalizeSegmentTags(item.segment_tags).filter((t) => t !== "Baseline")),
+      item.image_description || "",
     ]);
     const csv = [headers, ...rows]
       .map((row) => row.map((value) => csvEscape(value)).join(","))
@@ -2490,29 +2492,13 @@ function SegmentTagsEditor({
   onChange: (next: string[]) => void;
 }) {
   return (
-    <div>
-      <div className="flex flex-wrap gap-2">
-        {options.map((option) => {
-          const selected = value.includes(option);
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() =>
-                onChange(selected ? value.filter((v) => v !== option) : [...value, option])
-              }
-              className={`px-2.5 py-1 text-[11px] transition ${
-                selected
-                  ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
-                  : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
-              }`}
-            >
-              {option}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <AttributePills
+      options={options}
+      selected={value}
+      onToggle={(attr) =>
+        onChange(value.includes(attr) ? value.filter((v) => v !== attr) : [...value, attr])
+      }
+    />
   );
 }
 

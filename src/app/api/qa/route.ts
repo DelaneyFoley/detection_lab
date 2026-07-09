@@ -78,7 +78,9 @@ export async function GET(req: NextRequest) {
       if (!parentId) {
         return NextResponse.json({ error: "parent_id required" }, { status: 400 });
       }
-      const conflicts = datasetRepository.getMergeConflicts(parentId);
+      const parentDataset = datasetRepository.getDatasetById(parentId);
+      const excludeAttributes = !!parentDataset?.exclude_attributes;
+      const conflicts = datasetRepository.getMergeConflicts(parentId, excludeAttributes);
       const children = datasetRepository.getChildDatasets(parentId);
       const parentSize = dataStore.get<{ c: number }>(
         "SELECT COUNT(*) as c FROM dataset_items WHERE dataset_id = ?",
@@ -105,6 +107,7 @@ export async function GET(req: NextRequest) {
         conflicts: enriched,
         children: children.map((c: any) => ({ dataset_id: c.dataset_id, name: c.name, assigned_to: c.assigned_to })),
         total_images: parentSize?.c || 0,
+        exclude_attributes: excludeAttributes,
       });
     }
 
@@ -117,13 +120,54 @@ export async function GET(req: NextRequest) {
         `SELECT * FROM qa_logs WHERE dataset_id = ? AND action = 'nway_discrepancy_resolved' ORDER BY created_at DESC`,
         parentId
       );
+      const children = datasetRepository.getChildDatasets(parentId);
+      const parseTagList = (raw: string | null | undefined): string[] => {
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed.map(String) : [];
+        } catch {
+          return [];
+        }
+      };
+      const tagsEqual = (a: string[], b: string[]): boolean => {
+        if (a.length !== b.length) return false;
+        const sortedA = [...a].sort();
+        const sortedB = [...b].sort();
+        return sortedA.every((v, i) => v === sortedB[i]);
+      };
       const resolved = logs.map((log: any) => {
         const details = JSON.parse(log.details || "{}");
         const item = dataStore.get<{ image_uri: string }>(
           "SELECT image_uri FROM dataset_items WHERE image_id = ? LIMIT 1",
           details.image_id
         );
-        return { ...details, image_uri: item?.image_uri || "", actor: log.actor, resolved_at: log.created_at, log_id: log.log_id };
+        const finalLabel: string | null = details.resolved_label ?? null;
+        const finalTags: string[] = Array.isArray(details.corrected_tags)
+          ? details.corrected_tags.map(String)
+          : parseTagList(details.corrected_tags);
+        const annotatorAnswers = children.map((child: any) => {
+          const childItem = dataStore.get<{ ground_truth_label: string | null; segment_tags: string | null }>(
+            "SELECT ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ? AND image_id = ?",
+            child.dataset_id,
+            details.image_id
+          );
+          const annotator = child.assigned_to || child.name;
+          const label = childItem?.ground_truth_label ?? null;
+          const tags = parseTagList(childItem?.segment_tags);
+          const labelMatches = finalLabel != null && label === finalLabel;
+          const tagsMatch = tagsEqual(tags, finalTags);
+          const accepted = labelMatches && tagsMatch;
+          return { annotator, label, tags, accepted };
+        });
+        return {
+          ...details,
+          image_uri: item?.image_uri || "",
+          actor: log.actor,
+          resolved_at: log.created_at,
+          log_id: log.log_id,
+          annotator_answers: annotatorAnswers,
+        };
       });
       return NextResponse.json({ resolved });
     }
@@ -154,7 +198,21 @@ export async function GET(req: NextRequest) {
       const history = maxAttempt > 0
         ? qaRepository.getSampleHistory(datasetId, isAwaitingNewSamples ? undefined : maxAttempt)
         : [];
-      return NextResponse.json({ samples, stats, history, currentAttempt, totalAttempts });
+
+      const overrideAttemptRows = dataStore.all<{ attempt_number: number | null }>(
+        `SELECT DISTINCT CAST(json_extract(details, '$.qa_attempt_number') AS INTEGER) as attempt_number
+         FROM qa_logs
+         WHERE dataset_id = ?
+           AND action = 'approved'
+           AND COALESCE(CAST(json_extract(details, '$.qa_override_applied') AS INTEGER), 0) = 1
+           AND json_extract(details, '$.qa_attempt_number') IS NOT NULL`,
+        datasetId
+      );
+      const overrideAttempts = overrideAttemptRows
+        .map((r) => r.attempt_number)
+        .filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0);
+
+      return NextResponse.json({ samples, stats, history, currentAttempt, totalAttempts, override_attempts: overrideAttempts });
     }
 
     if (action === "logs") {
@@ -380,6 +438,31 @@ export async function PUT(req: NextRequest) {
         );
       }
 
+      let approvalAccuracyPct: number | null = null;
+      const approvalThreshold = 90;
+      let approvalBelowThreshold = false;
+      let approvalAttemptNumber: number | null = null;
+
+      if (data.new_status === "approved") {
+        const maxAttempt = qaRepository.getMaxAttempt(data.dataset_id);
+        approvalAttemptNumber = maxAttempt > 0 ? maxAttempt : null;
+        if (maxAttempt > 0) {
+          const sampleStats = qaRepository.getSampleStats(data.dataset_id, maxAttempt);
+          const allReviewed = sampleStats.total > 0 && sampleStats.reviewed === sampleStats.total;
+          if (allReviewed && sampleStats.reviewed > 0) {
+            approvalAccuracyPct = Math.round((sampleStats.correct / sampleStats.reviewed) * 100);
+            approvalBelowThreshold = approvalAccuracyPct < approvalThreshold;
+          }
+        }
+
+        if (approvalBelowThreshold && !data.qa_override_reason?.trim()) {
+          return NextResponse.json(
+            { error: "QA override reason is required to approve a dataset below threshold." },
+            { status: 400 }
+          );
+        }
+      }
+
       qaRepository.updateQaStatus(data.dataset_id, data.new_status);
 
       if (data.new_status === "needs_revision" && data.revision_note) {
@@ -399,7 +482,16 @@ export async function PUT(req: NextRequest) {
         datasetId: data.dataset_id,
         action: logAction,
         actor: data.actor,
-        details: { from: oldStatus, to: data.new_status, revision_note: data.revision_note },
+        details: {
+          from: oldStatus,
+          to: data.new_status,
+          revision_note: data.revision_note,
+          qa_override_reason: data.qa_override_reason,
+          qa_accuracy_pct: approvalAccuracyPct,
+          qa_threshold_pct: data.new_status === "approved" ? approvalThreshold : null,
+          qa_override_applied: data.new_status === "approved" ? approvalBelowThreshold : false,
+          qa_attempt_number: data.new_status === "approved" ? approvalAttemptNumber : null,
+        },
       });
       return NextResponse.json({ ok: true });
     }
@@ -552,8 +644,14 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "No children found for parent" }, { status: 404 });
       }
 
+      // When attributes are excluded from the review, tags are not part of the
+      // resolution — the parent's tags are set to the union of the children on
+      // finalize instead.
+      const parentForResolve = datasetRepository.getDatasetById(data.parent_id);
+      const excludeAttributesResolve = !!parentForResolve?.exclude_attributes;
+
       let resolvedLabel: string | null = null;
-      let resolvedTags: string[] | null = data.corrected_tags || null;
+      let resolvedTags: string[] | null = excludeAttributesResolve ? null : (data.corrected_tags || null);
 
       if (data.accepted_annotator) {
         const child = children.find((c: any) => (c.assigned_to || c.name) === data.accepted_annotator);
@@ -567,7 +665,7 @@ export async function PUT(req: NextRequest) {
         );
         if (item) {
           resolvedLabel = item.ground_truth_label;
-          if (!resolvedTags) {
+          if (!resolvedTags && !excludeAttributesResolve) {
             resolvedTags = JSON.parse(item.segment_tags || "[]");
           }
         }
@@ -605,6 +703,19 @@ export async function PUT(req: NextRequest) {
       }
       dataStore.run("DELETE FROM qa_logs WHERE log_id = ?", log.log_id);
       return NextResponse.json({ ok: true });
+    }
+
+    if (action === "set_discrepancy_exclude_attributes") {
+      const { parent_id, exclude } = body;
+      if (!parent_id) {
+        return NextResponse.json({ error: "parent_id required" }, { status: 400 });
+      }
+      const parent = datasetRepository.getDatasetById(parent_id);
+      if (!parent) {
+        return NextResponse.json({ error: "Parent dataset not found" }, { status: 404 });
+      }
+      datasetRepository.setExcludeAttributes(parent_id, !!exclude);
+      return NextResponse.json({ ok: true, exclude_attributes: !!exclude });
     }
 
     if (action === "add_annotator") {

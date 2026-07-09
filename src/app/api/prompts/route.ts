@@ -3,8 +3,9 @@ import { v4 as uuid } from "uuid";
 import { buildUserPromptTemplate, CATEGORY_PROMPT_SETTING_KEYS, DEFAULT_CATEGORY_PROMPT_TEMPLATES, normalizeDetectionCategory } from "@/lib/detectionPrompts";
 import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
-import { detectionRepository, promptRepository, settingsRepository } from "@/lib/repositories";
+import { detectionRepository, promptRepository, settingsRepository, versionNoteEntryRepository } from "@/lib/repositories";
 import { PromptCreateSchema, PromptDeleteSchema, PromptUpdateSchema } from "@/lib/schemas";
+import { summarizePromptDiff } from "@/lib/versionNoteAI";
 
 export async function GET(req: NextRequest) {
   try {
@@ -76,7 +77,54 @@ export async function POST(req: NextRequest) {
       versionNotes: body.version_notes || "",
       createdBy: body.created_by || "user",
       createdAt: now,
+      sourcePromptVersionId: body.source_prompt_version_id ?? null,
     });
+
+    try {
+      const sourceVersionId = body.source_prompt_version_id ?? null;
+      const nextVersion = promptRepository.getFullPromptById(id);
+      if (sourceVersionId) {
+        const source = promptRepository.getFullPromptById(sourceVersionId);
+        if (source && nextVersion) {
+          const summary = await summarizePromptDiff({
+            source,
+            next: nextVersion,
+            changeNotes: body.change_notes || "",
+          });
+          versionNoteEntryRepository.createEntry({
+            entryId: uuid(),
+            promptVersionId: id,
+            origin: "auto_diff",
+            eventType: "version_edited_from",
+            body: summary,
+            metadata: { source_version_id: sourceVersionId, source_version_label: source.version_label },
+            createdBy: "system",
+            createdAt: now,
+          });
+        }
+      } else {
+        const parts = [
+          `Created new prompt version "${body.version_label}".`,
+        ];
+        if (body.change_notes && body.change_notes.trim()) {
+          parts.push(body.change_notes.trim());
+        }
+        versionNoteEntryRepository.createEntry({
+          entryId: uuid(),
+          promptVersionId: id,
+          origin: "auto_created",
+          eventType: "version_created",
+          body: parts.join(" "),
+          metadata: null,
+          createdBy: "system",
+          createdAt: now,
+        });
+      }
+    } catch (entryError) {
+      const context = getRequestContext(req, "/api/prompts");
+      const msg = entryError instanceof Error ? entryError.message : String(entryError);
+      logger.error("Failed to write auto version-note entry", { ...context, error: msg });
+    }
 
     return NextResponse.json({ prompt_version_id: id });
   } catch (error: unknown) {

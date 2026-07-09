@@ -1,5 +1,40 @@
+import crypto from "crypto";
 import { v4 as uuid } from "uuid";
 import { getDb } from "./db";
+import seedDatasetsData from "./seed-datasets.json";
+
+// Fixed attribute taxonomy applied to every bundled dataset. This is the set of
+// available attributes a labeler can choose from; the seeded items themselves
+// ship with no attribute tags assigned.
+const SEED_ATTRIBUTE_TAXONOMY = [
+  "Blurry_image",
+  "Dark_image",
+  "Occluded_view",
+  "Distant",
+  "No_plumbing",
+  "Rusting",
+  "Oxidation",
+  "Mold",
+  "Dust",
+  "Grime",
+  "Staining",
+  "Sealant",
+  "Paint",
+  "Leak",
+  "Color_confuser",
+  "Excluded_hardware",
+  "Mineral_buildup",
+  "Minor_corrosion",
+  "Borderline",
+  "Severity_0",
+  "Severity_1",
+  "Severity_2",
+  "Severity_3",
+  "Severity_4",
+];
+
+type SeedDatasetItem = { image_id: string; image_uri: string };
+type SeedDataset = { name: string; items: SeedDatasetItem[] };
 
 export function seedDefaultData() {
   const db = getDb();
@@ -266,4 +301,68 @@ export function seedPipesRustingDetection() {
   }
 
   db.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, '1')").run(metaKey);
+}
+
+// Loads the datasets bundled with the repository (src/lib/seed-datasets.json) so
+// they appear in the app on a fresh clone. Sanitized on purpose: only the
+// dataset name, image_id, and image_uri come from the file. Every seeded dataset
+// is unassigned (detection_id = NULL), split_type = CUSTOM, uses the fixed
+// attribute taxonomy, and every item ships with blank labels and no attribute
+// tags. One-time guarded; datasets that already exist by name are skipped.
+export function seedBundledDatasets() {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+
+  const seeded = db
+    .prepare("SELECT value FROM app_meta WHERE key = 'datasets_seeded'")
+    .get() as { value: string } | undefined;
+  if (seeded?.value === "1") {
+    return;
+  }
+
+  const datasets = (seedDatasetsData as { datasets: SeedDataset[] }).datasets || [];
+  const taxonomyJson = JSON.stringify(SEED_ATTRIBUTE_TAXONOMY);
+
+  const insertDataset = db.prepare(`
+    INSERT INTO datasets (
+      dataset_id, name, detection_id, split_type, dataset_hash, size,
+      created_at, updated_at, qa_status, assigned_to, linked_dataset_id,
+      qa_notes, items_labeled, revision_note, segment_taxonomy, exclude_attributes
+    ) VALUES (?, ?, NULL, 'CUSTOM', ?, ?, ?, ?, 'draft', NULL, NULL, '', 0, NULL, ?, 0)
+  `);
+  const insertItem = db.prepare(`
+    INSERT INTO dataset_items (
+      item_id, dataset_id, image_id, image_uri, image_description,
+      segment_tags, ai_assigned_label, ai_confidence, ground_truth_label
+    ) VALUES (?, ?, ?, ?, '', '[]', NULL, NULL, NULL)
+  `);
+  const findByName = db.prepare("SELECT dataset_id FROM datasets WHERE name = ?");
+
+  const tx = db.transaction(() => {
+    for (const ds of datasets) {
+      if (findByName.get(ds.name)) {
+        continue;
+      }
+      const hashContent = JSON.stringify(
+        ds.items.map((i) => ({ image_id: i.image_id, label: null, segment_tags: [] }))
+      );
+      const hash = crypto.createHash("sha256").update(hashContent).digest("hex").slice(0, 16);
+      const datasetId = uuid();
+      insertDataset.run(datasetId, ds.name, hash, ds.items.length, now, now, taxonomyJson);
+      for (const item of ds.items) {
+        insertItem.run(uuid(), datasetId, item.image_id, item.image_uri);
+      }
+    }
+    db.prepare(
+      "INSERT OR REPLACE INTO app_meta (key, value) VALUES ('datasets_seeded', '1')"
+    ).run();
+  });
+  tx();
 }

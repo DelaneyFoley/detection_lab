@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Detection, ReviewFlag, AnnotatorMetrics, DatasetMetric } from "@/types";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { AttributePills } from "@/components/shared/AttributePills";
 import { InfoTip } from "@/components/shared/InfoTip";
 import { useAppStore } from "@/lib/store";
 import FlagsQueue from "@/components/shared/FlagsQueue";
@@ -244,7 +245,34 @@ function DatasetListView({
   const paginatedItems = items.slice((page - 1) * pageSize, page * pageSize);
 
   const correctionCount = corrections?.size ?? 0;
-  const accuracy = items.length > 0 ? ((items.length - correctionCount) / items.length * 100).toFixed(1) : "—";
+
+  // Accuracy uses the same per-decision formula as the Performance Metrics tab:
+  // (correct label decisions + correct attribute decisions) ÷ (images × (1 + taxonomy size)).
+  // Each image contributes one label decision plus one apply/omit decision per
+  // attribute in the detection's taxonomy; correct applications AND correct
+  // omissions (true negatives) both count.
+  const accuracy = useMemo(() => {
+    if (items.length === 0) return "—";
+    const taxonomy: string[] = Array.isArray(detection?.segment_taxonomy) ? detection!.segment_taxonomy : [];
+    const perImage = 1 + taxonomy.length;
+    let correct = 0;
+    for (const item of items) {
+      const corr = corrections?.get(item.image_id);
+      if (!corr) {
+        // Accepted — annotator matched the master on the label and every attribute.
+        correct += perImage;
+        continue;
+      }
+      if (corr.childLabel === corr.parentLabel) correct += 1;
+      const childSet = new Set(corr.childTags || []);
+      const parentSet = new Set(corr.parentTags || []);
+      for (const attr of taxonomy) {
+        if (childSet.has(attr) === parentSet.has(attr)) correct += 1;
+      }
+    }
+    const total = items.length * perImage;
+    return total > 0 ? ((correct / total) * 100).toFixed(1) : "—";
+  }, [items, corrections, detection]);
 
   const correctionBreakdown = useMemo(() => {
     if (!corrections || corrections.size === 0) return { labelChanges: 0, attrChanges: 0 };
@@ -1190,22 +1218,12 @@ function AnnotationView({
           {segmentOptions.length > 0 && (
             <div className="app-card p-4">
               <h4 className="text-xs text-gray-500 font-medium mb-2">Attributes</h4>
-              <div className="flex flex-wrap gap-2">
-                {segmentOptions.map((option) => {
-                  const selected = currentItem.segment_tags.includes(option);
-                  return (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => handleTagToggle(option)}
-                      disabled={readOnly}
-                      className={`px-2.5 py-1 text-[11px] transition rounded-md border ${selected ? "border-sky-400/50 bg-sky-500/12 text-sky-100" : readOnly ? "border-white/5 bg-white/[0.02] text-gray-500 cursor-not-allowed" : "border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"}`}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
+              <AttributePills
+                options={segmentOptions}
+                selected={currentItem.segment_tags}
+                onToggle={handleTagToggle}
+                disabled={readOnly}
+              />
             </div>
           )}
 

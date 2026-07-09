@@ -521,11 +521,29 @@ export class QaRepository {
         let annotatorAttrCount = 0;
 
         for (const ds of linkedFinalized) {
-          const refStatus = dataStore.get<{ qa_status: string }>(
-            "SELECT qa_status FROM datasets WHERE dataset_id = ?",
+          const refStatus = dataStore.get<{ qa_status: string; exclude_attributes: number | null }>(
+            "SELECT qa_status, exclude_attributes FROM datasets WHERE dataset_id = ?",
             ds.linked_dataset_id!
           );
           if (!refStatus || refStatus.qa_status !== "finalized") continue;
+
+          // When the parent's discrepancy review excluded attribute tags, they
+          // do not count for or against the annotator — only labels are scored.
+          const excludeAttributes = !!refStatus.exclude_attributes;
+
+          // Full attribute taxonomy for this dataset's detection. Every compared
+          // image contributes one apply/omit decision per taxonomy attribute, so
+          // the attribute denominator is (compared images × taxonomy size) and
+          // both correct applications (true positives) and correct omissions
+          // (true negatives) count toward accuracy.
+          const detRow = dataStore.get<{ segment_taxonomy: string | null }>(
+            `SELECT det.segment_taxonomy AS segment_taxonomy
+             FROM datasets d
+             JOIN detections det ON det.detection_id = d.detection_id
+             WHERE d.dataset_id = ?`,
+            ds.dataset_id
+          );
+          const taxonomy = parseTags(detRow?.segment_taxonomy ?? null);
 
           const pairs = dataStore.all<{
             ann_label: string | null;
@@ -546,19 +564,22 @@ export class QaRepository {
           );
 
           for (const pair of pairs) {
-            if (pair.ref_label) {
-              annotatorLabelsCompared++;
-              if (pair.ann_label === pair.ref_label) {
-                annotatorLabelMatches++;
-              }
+            // Only score images that were actually annotated in the finalized reference.
+            if (!pair.ref_label) continue;
+
+            annotatorLabelsCompared++;
+            if (pair.ann_label === pair.ref_label) {
+              annotatorLabelMatches++;
             }
 
-            const refTags = parseTags(pair.ref_tags);
-            const annTags = parseTags(pair.ann_tags);
-            if (refTags.length > 0) {
-              annotatorAttrCount += refTags.length;
-              for (const tag of refTags) {
-                if (annTags.includes(tag)) {
+            if (taxonomy.length > 0 && !excludeAttributes) {
+              const refTags = parseTags(pair.ref_tags);
+              const annTags = parseTags(pair.ann_tags);
+              annotatorAttrCount += taxonomy.length;
+              for (const attr of taxonomy) {
+                // Correct when the annotator's apply/omit decision matches the
+                // reference — a correct application or a correct omission.
+                if (refTags.includes(attr) === annTags.includes(attr)) {
                   annotatorAttrMatches++;
                 }
               }
@@ -614,6 +635,63 @@ export class QaRepository {
     };
 
     return { metrics, totals };
+  }
+
+  /**
+   * Persist a point-in-time metrics snapshot for every known annotator.
+   *
+   * This is the production snapshot-generation path. It delegates all metric
+   * math to {@link getAnnotatorMetrics} so the trend chart (which reads
+   * `metrics_snapshots`) and the live performance table share a single source
+   * of truth. Snapshots are written at weekly granularity by default; the
+   * monthly chart view rolls these weekly rows up in {@link getMetricsHistory}.
+   */
+  generateMetricsSnapshot(options: { periodType?: "week" | "month"; date?: Date } = {}): {
+    period_start: string;
+    period_end: string;
+    period_type: "week" | "month";
+    count: number;
+  } {
+    const periodType = options.periodType || "week";
+    const { periodStart, periodEnd } = getPeriodBounds(options.date || new Date(), periodType);
+
+    // Single source of truth: current metric values per annotator.
+    const { metrics } = this.getAnnotatorMetrics({});
+    const now = new Date().toISOString();
+
+    for (const m of metrics) {
+      // Upsert on (annotator, period_start, period_type): re-running the job for
+      // the same period overwrites the prior snapshot rather than duplicating it.
+      dataStore.run(
+        "DELETE FROM metrics_snapshots WHERE annotator = ? AND period_start = ? AND period_type = ?",
+        m.annotator,
+        periodStart,
+        periodType
+      );
+      dataStore.run(
+        `INSERT INTO metrics_snapshots
+          (snapshot_id, annotator, period_start, period_end, period_type,
+           datasets_assigned, datasets_completed, items_labeled,
+           flag_rate, attribute_error, label_error, accuracy, correction, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        crypto.randomUUID(),
+        m.annotator,
+        periodStart,
+        periodEnd,
+        periodType,
+        m.datasets_assigned,
+        m.datasets_completed,
+        m.items_labeled,
+        m.flag_rate,
+        m.attribute_error,
+        m.label_error,
+        m.accuracy,
+        m.correction,
+        now
+      );
+    }
+
+    return { period_start: periodStart, period_end: periodEnd, period_type: periodType, count: metrics.length };
   }
 
   getMetricsHistory(filters: {
@@ -675,12 +753,23 @@ export class QaRepository {
     for (const [key, snapshots] of grouped) {
       const [annotator, month] = key.split("|");
       const last = snapshots[snapshots.length - 1];
-      const avgOrNull = (field: keyof MetricsSnapshot) => {
-        const vals = snapshots.map((s) => s[field] as number | null).filter((v) => v !== null) as number[];
-        return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-      };
       const sumField = (field: keyof MetricsSnapshot) =>
         snapshots.reduce((sum, s) => sum + ((s[field] as number) || 0), 0);
+      // Rate metrics roll up weighted by items labeled so a low-volume week does
+      // not count the same as a high-volume one.
+      const weightedByItems = (field: keyof MetricsSnapshot) => {
+        let num = 0;
+        let den = 0;
+        for (const s of snapshots) {
+          const v = s[field] as number | null;
+          const w = (s.items_labeled as number) || 0;
+          if (v !== null && v !== undefined && w > 0) {
+            num += v * w;
+            den += w;
+          }
+        }
+        return den > 0 ? num / den : null;
+      };
       results.push({
         snapshot_id: last.snapshot_id,
         annotator,
@@ -690,11 +779,11 @@ export class QaRepository {
         datasets_assigned: sumField("datasets_assigned"),
         datasets_completed: sumField("datasets_completed"),
         items_labeled: sumField("items_labeled"),
-        flag_rate: avgOrNull("flag_rate"),
-        attribute_error: avgOrNull("attribute_error"),
-        label_error: avgOrNull("label_error"),
-        accuracy: avgOrNull("accuracy"),
-        correction: avgOrNull("correction"),
+        flag_rate: weightedByItems("flag_rate"),
+        attribute_error: weightedByItems("attribute_error"),
+        label_error: weightedByItems("label_error"),
+        accuracy: weightedByItems("accuracy"),
+        correction: weightedByItems("correction"),
       });
     }
 
@@ -748,6 +837,34 @@ function parseTags(value: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Period boundaries for a snapshot. Weeks run Monday–Sunday; months run from
+ * the 1st to the last day. Dates are returned as YYYY-MM-DD (local).
+ */
+function getPeriodBounds(date: Date, periodType: "week" | "month"): { periodStart: string; periodEnd: string } {
+  const fmt = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  if (periodType === "month") {
+    const start = new Date(date.getFullYear(), date.getMonth(), 1);
+    const end = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    return { periodStart: fmt(start), periodEnd: fmt(end) };
+  }
+
+  // Week: Monday–Sunday containing `date`.
+  const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const dow = base.getDay();
+  const monday = new Date(base);
+  monday.setDate(base.getDate() - (dow === 0 ? 6 : dow - 1));
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  return { periodStart: fmt(monday), periodEnd: fmt(sunday) };
 }
 
 export const qaRepository = new QaRepository();

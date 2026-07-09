@@ -66,6 +66,26 @@ export interface PromptVersion {
   created_by: string;
   created_at: string;
   golden_set_regression_result: RegressionResult | null;
+  source_prompt_version_id?: string | null;
+}
+
+export type VersionNoteEntryOrigin = "auto_created" | "auto_diff" | "auto_hil" | "user";
+export type VersionNoteEntryEventType =
+  | "version_created"
+  | "version_edited_from"
+  | "hil_finalized"
+  | "ai_prompt_iteration"
+  | null;
+
+export interface VersionNoteEntry {
+  entry_id: string;
+  prompt_version_id: string;
+  origin: VersionNoteEntryOrigin;
+  event_type: VersionNoteEntryEventType;
+  body: string;
+  metadata: Record<string, unknown> | null;
+  created_by: string;
+  created_at: string;
 }
 
 export interface RegressionResult {

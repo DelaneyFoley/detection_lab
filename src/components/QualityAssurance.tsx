@@ -18,9 +18,11 @@ import {
   RefreshCw,
   LayoutGrid,
   List,
+  Download,
 } from "lucide-react";
 import type { Detection, QaSample, AnnotatorMetrics, ReviewFlag, Prediction } from "@/types";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { AttributePills } from "@/components/shared/AttributePills";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { InfoTip } from "@/components/shared/InfoTip";
 import FlagsQueue from "@/components/shared/FlagsQueue";
@@ -40,6 +42,9 @@ import {
   Legend,
   LabelList,
 } from "recharts";
+
+// Matches the "Quality Assurance" tab id in the top-level page navigation.
+const QA_TAB_ID = 8;
 
 type SubView = "overview" | "discrepancy" | "flags" | "sampling" | "logs" | "finalized";
 
@@ -98,6 +103,7 @@ function formatTags(raw: string | null | undefined): string {
 
 export function QualityAssurance({ detections }: { detections: Detection[] }) {
   const { pendingSubView, setPendingSubView } = useAppStore();
+  const activeTab = useAppStore((s) => s.activeTab);
   const [subView, setSubView] = useState<SubView>("overview");
   const [datasets, setDatasets] = useState<DatasetQa[]>([]);
   const [loading, setLoading] = useState(false);
@@ -129,6 +135,17 @@ export function QualityAssurance({ detections }: { detections: Detection[] }) {
     loadDatasets();
     loadAnnotators();
   }, [loadDatasets, loadAnnotators]);
+
+  // The QA tab stays mounted (tabs toggle via CSS), so reload whenever it
+  // becomes active again so newly-submitted datasets appear in the dropdowns
+  // without needing a full app refresh.
+  useEffect(() => {
+    if (activeTab === QA_TAB_ID) {
+      loadDatasets();
+      loadAnnotators();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   useEffect(() => {
     if (pendingSubView) {
@@ -639,6 +656,7 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
   const [loading, setLoading] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [correctedTags, setCorrectedTags] = useState<string[] | undefined>(undefined);
+  const [excludeAttributes, setExcludeAttributes] = useState(false);
 
   const [resolvedCollapsed, setResolvedCollapsed] = useState(true);
   const [resolvedPreviewIndex, setResolvedPreviewIndex] = useState<number | null>(null);
@@ -662,9 +680,21 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
     setConflicts(conflictData.conflicts || []);
     setChildren(conflictData.children || []);
     setTotalImages(conflictData.total_images || 0);
+    setExcludeAttributes(!!conflictData.exclude_attributes);
     const resolvedData = await resolvedRes.json();
     setResolvedConflicts(resolvedData.resolved || []);
     setLoading(false);
+  }
+
+  async function toggleExcludeAttributes(next: boolean) {
+    if (!selectedParent) return;
+    setExcludeAttributes(next);
+    await fetch("/api/qa", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "set_discrepancy_exclude_attributes", parent_id: selectedParent, exclude: next }),
+    });
+    await loadConflicts(selectedParent);
   }
 
   async function resolveConflict(imageId: string, label: string) {
@@ -780,6 +810,20 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
             ))}
           </select>
         </div>
+        {selectedParent && (
+          <label className="flex items-center gap-2 pb-1.5 text-xs text-[var(--app-text-muted)] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="h-3.5 w-3.5 accent-[var(--app-purple)]"
+              checked={excludeAttributes}
+              onChange={(e) => toggleExcludeAttributes(e.target.checked)}
+            />
+            <span>
+              Exclude attribute tags from review
+              <InfoTip>When excluded, attribute-tag differences are ignored (only label disagreements are surfaced), attributes do not count for or against annotator metrics, and on finalize the master&apos;s attributes become the union of every annotator&apos;s tags.</InfoTip>
+            </span>
+          </label>
+        )}
       </div>
 
       {!selectedParent && !loading && (
@@ -901,6 +945,25 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
                       )}
                       {rd.actor && <span>by {rd.actor}</span>}
                     </div>
+                    {Array.isArray(rd.annotator_answers) && rd.annotator_answers.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        {rd.annotator_answers.map((a: any, aIdx: number) => (
+                          <span
+                            key={`${a.annotator}-${aIdx}`}
+                            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${
+                              a.accepted
+                                ? "bg-emerald-500/10 text-emerald-300"
+                                : "bg-amber-500/10 text-amber-300"
+                            }`}
+                          >
+                            {a.accepted
+                              ? <CheckCircle2 className="h-2.5 w-2.5" />
+                              : <XCircle className="h-2.5 w-2.5" />}
+                            {a.annotator}: {a.accepted ? "accepted" : "corrected"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -939,7 +1002,7 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
                       {l.label || "UNSET"}
                     </span>
                   </div>
-                  {tags.length > 0 && (
+                  {!excludeAttributes && tags.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1">
                       {tags.map((t) => (
                         <span key={t} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-gray-300">{t}</span>
@@ -950,35 +1013,21 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
               );
             })}
 
-            {(segmentOptions.length > 0 || currentConflict.labels.some((l) => { try { return JSON.parse(l.tags || "[]").length > 0; } catch { return false; } })) && (
+            {!excludeAttributes && (segmentOptions.length > 0 || currentConflict.labels.some((l) => { try { return JSON.parse(l.tags || "[]").length > 0; } catch { return false; } })) && (
               <div className="border-t border-[var(--app-border)] pt-3">
                 <p className="text-xs font-medium text-[var(--app-text)] mb-2">Attributes</p>
-                <div className="flex flex-wrap gap-2">
-                  {(segmentOptions.length > 0 ? segmentOptions : (() => {
+                <AttributePills
+                  options={segmentOptions.length > 0 ? segmentOptions : (() => {
                     const allTags = new Set<string>();
                     currentConflict.labels.forEach((l) => { try { JSON.parse(l.tags || "[]").forEach((t: string) => allTags.add(t)); } catch {} });
                     return [...allTags].filter(Boolean);
-                  })()).map((option) => {
-                    const selected = displayTags.includes(option);
-                    return (
-                      <button
-                        key={option}
-                        type="button"
-                        onClick={() => {
-                          const next = selected ? displayTags.filter((v) => v !== option) : [...displayTags, option];
-                          setCorrectedTags(next);
-                        }}
-                        className={`px-2.5 py-1 text-[11px] transition ${
-                          selected
-                            ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
-                            : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
-                        }`}
-                      >
-                        {option}
-                      </button>
-                    );
-                  })}
-                </div>
+                  })()}
+                  selected={displayTags}
+                  onToggle={(attr) => {
+                    const next = displayTags.includes(attr) ? displayTags.filter((v) => v !== attr) : [...displayTags, attr];
+                    setCorrectedTags(next);
+                  }}
+                />
               </div>
             )}
 
@@ -1027,6 +1076,83 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
                     {rd.accepted_annotator ? `Accepted ${rd.accepted_annotator}` : "Override"}
                   </span>
                 </div>
+                {Array.isArray(rd.annotator_answers) && rd.annotator_answers.length > 0 && (() => {
+                  const finalLabel: string | null = rd.resolved_label ?? null;
+                  const finalTags: string[] = Array.isArray(rd.corrected_tags)
+                    ? rd.corrected_tags.map(String)
+                    : (() => { try { return JSON.parse(rd.corrected_tags || "[]"); } catch { return []; } })();
+                  return (
+                    <div className="border-t border-[var(--app-border)] pt-3">
+                      <label className="text-xs text-gray-400 block mb-2">Annotator Answers</label>
+                      <div className="space-y-1.5">
+                        {rd.annotator_answers.map((a: any, aIdx: number) => {
+                          const answerTags: string[] = Array.isArray(a.tags) ? a.tags : [];
+                          const labelChanged = finalLabel != null && a.label !== finalLabel;
+                          const addedTags = finalTags.filter((t: string) => !answerTags.includes(t));
+                          const removedTags = answerTags.filter((t: string) => !finalTags.includes(t));
+                          return (
+                            <div
+                              key={`${a.annotator}-${aIdx}`}
+                              className="rounded-md border border-[var(--app-border)] bg-white/[0.02] px-2 py-1.5"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-xs font-medium text-[var(--app-text)] truncate">{a.annotator}</p>
+                                <span className={`shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  a.accepted
+                                    ? "bg-emerald-500/10 text-emerald-300"
+                                    : "bg-amber-500/10 text-amber-300"
+                                }`}>
+                                  {a.accepted
+                                    ? <CheckCircle2 className="h-3 w-3" />
+                                    : <XCircle className="h-3 w-3" />}
+                                  {a.accepted ? "Accepted" : "Corrected"}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                                <span className={`text-[11px] font-medium ${a.label === "DETECTED" ? "text-[var(--app-purple)]" : a.label === "NOT_DETECTED" ? "text-[var(--app-not-detected)]" : "text-gray-500"}`}>
+                                  {a.label || "UNSET"}
+                                </span>
+                                {answerTags.map((t: string) => (
+                                  <span key={t} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-gray-300">{t}</span>
+                                ))}
+                              </div>
+                              {a.accepted ? (
+                                <p className="mt-1 text-[10px] text-emerald-300/80">Matched the final answer — no changes.</p>
+                              ) : (
+                                <div className="mt-1 space-y-0.5">
+                                  {labelChanged && (
+                                    <p className="text-[10px] text-[var(--app-text)]">
+                                      Label: <span className="line-through text-red-300">{a.label || "UNSET"}</span>
+                                      {" → "}
+                                      <span className="text-emerald-300">{finalLabel}</span>
+                                    </p>
+                                  )}
+                                  {addedTags.length > 0 && (
+                                    <p className="text-[10px] text-[var(--app-text)]">
+                                      Added: {addedTags.map((t: string) => (
+                                        <span key={t} className="inline-block rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] text-emerald-300 mr-1">+{t}</span>
+                                      ))}
+                                    </p>
+                                  )}
+                                  {removedTags.length > 0 && (
+                                    <p className="text-[10px] text-[var(--app-text)]">
+                                      Removed: {removedTags.map((t: string) => (
+                                        <span key={t} className="inline-block rounded bg-red-500/10 px-1 py-0.5 text-[10px] text-red-300 line-through mr-1">−{t}</span>
+                                      ))}
+                                    </p>
+                                  )}
+                                  {!labelChanged && addedTags.length === 0 && removedTags.length === 0 && (
+                                    <p className="text-[10px] text-gray-500">Corrected</p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {rd.resolved_label && (
                   <div>
                     <label className="text-xs text-gray-400 block mb-1">Final Label</label>
@@ -1459,28 +1585,14 @@ function FlagsQueueView({ detections }: { detections: Detection[] }) {
                 <div className={SECTION_LABEL_CLASS}>Attributes</div>
                 {currentDetails?.item_id ? (
                   segmentOptions.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {segmentOptions.map((option) => {
-                        const selected = displayTags.includes(option);
-                        return (
-                          <button
-                            key={option}
-                            type="button"
-                            onClick={() => {
-                              const next = selected ? displayTags.filter((v) => v !== option) : [...displayTags, option];
-                              setEditedTags(next);
-                            }}
-                            className={`px-2.5 py-1 text-[11px] transition ${
-                              selected
-                                ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
-                                : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
-                            }`}
-                          >
-                            {option}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <AttributePills
+                      options={segmentOptions}
+                      selected={displayTags}
+                      onToggle={(attr) => {
+                        const next = displayTags.includes(attr) ? displayTags.filter((v) => v !== attr) : [...displayTags, attr];
+                        setEditedTags(next);
+                      }}
+                    />
                   ) : (
                     <p className="text-xs text-gray-500">No taxonomy defined for this detection.</p>
                   )
@@ -1783,6 +1895,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
   const [reviewNote, setReviewNote] = useState("");
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [historySamples, setHistorySamples] = useState<any[]>([]);
+  const [overrideAttempts, setOverrideAttempts] = useState<number[]>([]);
   const [currentAttempt, setCurrentAttempt] = useState(0);
   const [totalAttempts, setTotalAttempts] = useState(0);
   const [prevAttemptsCollapsed, setPrevAttemptsCollapsed] = useState(true);
@@ -1793,6 +1906,8 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
   const [editedTags, setEditedTags] = useState<string[] | undefined>(undefined);
   const [showRevisionForm, setShowRevisionForm] = useState(false);
   const [revisionNote, setRevisionNote] = useState("");
+  const [showOverrideForm, setShowOverrideForm] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
@@ -1809,6 +1924,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
     setSamples(data.samples || []);
     setStats(data.stats || null);
     setHistorySamples(data.history || []);
+    setOverrideAttempts(Array.isArray(data.override_attempts) ? data.override_attempts : []);
     setCurrentAttempt(data.currentAttempt || 0);
     setTotalAttempts(data.totalAttempts || 0);
     return data.samples || [];
@@ -2108,15 +2224,17 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                         </div>
                         <button
                           onClick={async () => {
-                            await fetch("/api/qa", {
+                            const res = await fetch("/api/qa", {
                               method: "PUT",
                               headers: { "Content-Type": "application/json" },
                               body: JSON.stringify({
                                 action: "update_status",
                                 dataset_id: selectedDataset,
                                 new_status: "approved",
+                                actor: FLAG_RESOLVER_NAME,
                               }),
                             });
+                            if (!res.ok) return;
                             setSelectedDataset("");
                             setSamples([]);
                             setStats(null);
@@ -2128,19 +2246,33 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                         </button>
                       </div>
                     )}
-                    {!meetsThreshold && !showRevisionForm && (
+                    {!meetsThreshold && !showRevisionForm && !showOverrideForm && (
                       <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
                         <AlertCircle className="h-5 w-5 text-amber-400 shrink-0" />
                         <div className="flex-1">
                           <p className="text-xs font-medium text-amber-300">Below Threshold</p>
                           <p className="text-[11px] text-[var(--app-text-subtle)]">{stats.incorrect} of {stats.total} samples required corrections.</p>
                         </div>
-                        <button
-                          onClick={() => setShowRevisionForm(true)}
-                          className="app-btn app-btn-warning app-btn-sm text-xs shrink-0"
-                        >
-                          Return for Revision
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => {
+                              setShowOverrideForm(false);
+                              setShowRevisionForm(true);
+                            }}
+                            className="app-btn app-btn-warning app-btn-sm text-xs"
+                          >
+                            Return for Revision
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowRevisionForm(false);
+                              setShowOverrideForm(true);
+                            }}
+                            className="app-btn app-btn-subtle app-btn-sm text-xs"
+                          >
+                            Override & Approve
+                          </button>
+                        </div>
                       </div>
                     )}
                     {showRevisionForm && (
@@ -2162,7 +2294,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                                 `QA accuracy ${accuracyPct}% (threshold ${threshold}%). ${stats.incorrect} corrections made.`,
                                 revisionNote,
                               ].filter(Boolean).join("\n\n");
-                              await fetch("/api/qa", {
+                              const res = await fetch("/api/qa", {
                                 method: "PUT",
                                 headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({
@@ -2170,10 +2302,14 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                                   dataset_id: selectedDataset,
                                   new_status: "needs_revision",
                                   revision_note: note,
+                                  actor: FLAG_RESOLVER_NAME,
                                 }),
                               });
+                              if (!res.ok) return;
                               setShowRevisionForm(false);
                               setRevisionNote("");
+                              setShowOverrideForm(false);
+                              setOverrideReason("");
                               setSelectedDataset("");
                               setSamples([]);
                               setStats(null);
@@ -2184,6 +2320,58 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                             Submit & Return for Revision
                           </button>
                           <button onClick={() => setShowRevisionForm(false)} className="app-btn app-btn-subtle app-btn-sm text-xs">Cancel</button>
+                        </div>
+                      </div>
+                    )}
+                    {showOverrideForm && (
+                      <div className="p-3 rounded-lg bg-sky-500/5 border border-sky-500/20 space-y-3">
+                        <p className="text-xs font-medium text-sky-300">Override Threshold and Approve</p>
+                        <p className="text-[11px] text-[var(--app-text-subtle)]">
+                          Approval override requires a QA manager reason. Accuracy is {accuracyPct}% (threshold {threshold}%).
+                        </p>
+                        <textarea
+                          className="app-input w-full px-3 py-2 text-sm min-h-[80px]"
+                          placeholder="Required: explain why this dataset should be accepted despite missing threshold..."
+                          value={overrideReason}
+                          onChange={(e) => setOverrideReason(e.target.value)}
+                        />
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={async () => {
+                              const reason = overrideReason.trim();
+                              if (!reason) return;
+                              const res = await fetch("/api/qa", {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  action: "update_status",
+                                  dataset_id: selectedDataset,
+                                  new_status: "approved",
+                                  actor: FLAG_RESOLVER_NAME,
+                                  qa_override_reason: reason,
+                                }),
+                              });
+                              if (!res.ok) return;
+                              setShowRevisionForm(false);
+                              setRevisionNote("");
+                              setShowOverrideForm(false);
+                              setOverrideReason("");
+                              setSelectedDataset("");
+                              setSamples([]);
+                              setStats(null);
+                              onRefresh();
+                            }}
+                            disabled={!overrideReason.trim()}
+                            className="app-btn app-btn-primary app-btn-sm text-xs"
+                          >
+                            Submit Override & Approve
+                          </button>
+                          <button
+                            onClick={() => setShowOverrideForm(false)}
+                            className="app-btn app-btn-subtle app-btn-sm text-xs"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       </div>
                     )}
@@ -2421,6 +2609,11 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                     <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
                     Reviewed
                   </span>
+                  {overrideAttempts.includes(Number(historySample.attempt_number || 0)) && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-200">
+                      Manager Override
+                    </span>
+                  )}
                   {historySample.outcome && (
                     <span className="text-xs text-gray-200">{humanizeFlagAction(historySample.outcome)}</span>
                   )}
@@ -2469,12 +2662,18 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                   const incorrect = total - correct;
                   const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
                   const date = attemptSamples[0]?.created_at ? new Date(attemptSamples[0].created_at).toLocaleDateString() : "";
+                  const isOverrideAttempt = overrideAttempts.includes(attemptNum);
                   return (
                     <div key={attemptNum} className="px-4 py-3 space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <span className="text-xs font-medium text-[var(--app-text)]">Attempt {attemptNum}</span>
                           {date && <span className="text-[11px] text-[var(--app-text-subtle)]">{date}</span>}
+                          {isOverrideAttempt && (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-sky-400/40 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-200">
+                              Manager Override
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-3 text-[11px]">
                           <span className="text-[var(--app-text-subtle)]">{total} samples</span>
@@ -2626,28 +2825,14 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                 <div className={SECTION_LABEL_CLASS}>Attributes</div>
                 {currentSample.item_id ? (
                   segmentOptions.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                      {segmentOptions.map((option) => {
-                        const selected = displayTags.includes(option);
-                        return (
-                          <button
-                            key={option}
-                            type="button"
-                            onClick={() => {
-                              const next = selected ? displayTags.filter((v) => v !== option) : [...displayTags, option];
-                              setEditedTags(next);
-                            }}
-                            className={`px-2.5 py-1 text-[11px] transition ${
-                              selected
-                                ? "rounded-md border border-sky-400/50 bg-sky-500/12 text-sky-100"
-                                : "rounded-md border border-white/10 bg-white/[0.03] text-gray-300 hover:bg-white/[0.06]"
-                            }`}
-                          >
-                            {option}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <AttributePills
+                      options={segmentOptions}
+                      selected={displayTags}
+                      onToggle={(attr) => {
+                        const next = displayTags.includes(attr) ? displayTags.filter((v) => v !== attr) : [...displayTags, attr];
+                        setEditedTags(next);
+                      }}
+                    />
                   ) : (
                     <p className="text-xs text-gray-500">No taxonomy defined for this detection.</p>
                   )
@@ -2977,39 +3162,56 @@ function LogsView({ datasets, detections, onNavigate }: { datasets: DatasetQa[];
     }
 
     const data: AnnotatorMetrics[] = [];
-    let tAssigned = 0, tCompleted = 0, tItems = 0, tFlagRates: number[] = [], tAttrRates: number[] = [], tLabelRates: number[] = [], tAccRates: number[] = [], tCorrRates: number[] = [];
+    let tAssigned = 0, tCompleted = 0, tItems = 0;
+    // Totals weight each annotator's rate by that annotator's total items labeled.
+    const totalsWeighted: Record<string, { num: number; den: number }> = {
+      flag_rate: { num: 0, den: 0 },
+      attribute_error: { num: 0, den: 0 },
+      label_error: { num: 0, den: 0 },
+      accuracy: { num: 0, den: 0 },
+      correction: { num: 0, den: 0 },
+    };
 
     for (const [annotator, snapshots] of byAnnotator) {
       const sumField = (f: string) => snapshots.reduce((s: number, r: any) => s + (r[f] || 0), 0);
-      const avgField = (f: string) => {
-        const vals = snapshots.map((r: any) => r[f]).filter((v: any) => v !== null && v !== undefined) as number[];
-        return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      // Rate metrics are weighted by each snapshot's items labeled so low-volume
+      // periods don't skew the average.
+      const weightedField = (f: string) => {
+        let num = 0, den = 0;
+        for (const r of snapshots) {
+          const v = r[f]; const w = r.items_labeled || 0;
+          if (v !== null && v !== undefined && w > 0) { num += v * w; den += w; }
+        }
+        return den > 0 ? num / den : null;
       };
       const assigned = sumField("datasets_assigned");
       const completed = sumField("datasets_completed");
       const items = sumField("items_labeled");
-      const flagRate = avgField("flag_rate");
-      const attrError = avgField("attribute_error");
-      const labelError = avgField("label_error");
-      const accuracy = avgField("accuracy");
-      const correction = avgField("correction");
+      const flagRate = weightedField("flag_rate");
+      const attrError = weightedField("attribute_error");
+      const labelError = weightedField("label_error");
+      const accuracy = weightedField("accuracy");
+      const correction = weightedField("correction");
 
       tAssigned += assigned; tCompleted += completed; tItems += items;
-      if (flagRate !== null) tFlagRates.push(flagRate);
-      if (attrError !== null) tAttrRates.push(attrError);
-      if (labelError !== null) tLabelRates.push(labelError);
-      if (accuracy !== null) tAccRates.push(accuracy);
-      if (correction !== null) tCorrRates.push(correction);
+      const addToTotals = (key: string, v: number | null) => {
+        if (v !== null && items > 0) { totalsWeighted[key].num += v * items; totalsWeighted[key].den += items; }
+      };
+      addToTotals("flag_rate", flagRate);
+      addToTotals("attribute_error", attrError);
+      addToTotals("label_error", labelError);
+      addToTotals("accuracy", accuracy);
+      addToTotals("correction", correction);
 
       data.push({ annotator, datasets_assigned: assigned, datasets_completed: completed, items_labeled: items, flag_rate: flagRate, attribute_error: attrError, label_error: labelError, accuracy, correction });
     }
 
-    const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+    const weightedAvg = (w: { num: number; den: number }) => w.den > 0 ? w.num / w.den : null;
     const totalsRow: AnnotatorMetrics = {
       annotator: "Total",
       datasets_assigned: tAssigned, datasets_completed: tCompleted, items_labeled: tItems,
-      flag_rate: avg(tFlagRates), attribute_error: avg(tAttrRates), label_error: avg(tLabelRates),
-      accuracy: avg(tAccRates), correction: avg(tCorrRates),
+      flag_rate: weightedAvg(totalsWeighted.flag_rate), attribute_error: weightedAvg(totalsWeighted.attribute_error), label_error: weightedAvg(totalsWeighted.label_error),
+      accuracy: weightedAvg(totalsWeighted.accuracy), correction: weightedAvg(totalsWeighted.correction),
     };
     return { data, totalsRow };
   })();
@@ -3032,6 +3234,51 @@ function LogsView({ datasets, detections, onNavigate }: { datasets: DatasetQa[];
       setSortKey(key);
       setSortDir("desc");
     }
+  }
+
+  function exportTableCsv() {
+    if (sortedTableData.length === 0) return;
+    const cols: { key: keyof AnnotatorMetrics; label: string; type: "count" | "rate" }[] = [
+      { key: "datasets_assigned", label: "Assigned", type: "count" },
+      { key: "datasets_completed", label: "Completed", type: "count" },
+      { key: "items_labeled", label: "Items", type: "count" },
+      { key: "flag_rate", label: "Flag Rate", type: "rate" },
+      { key: "attribute_error", label: "Attr Match", type: "rate" },
+      { key: "label_error", label: "Label Match", type: "rate" },
+      { key: "accuracy", label: "Accuracy", type: "rate" },
+      { key: "correction", label: "Correction", type: "rate" },
+    ];
+    const cell = (m: AnnotatorMetrics, c: (typeof cols)[number]) => {
+      const v = m[c.key];
+      if (v === null || v === undefined) return "";
+      return c.type === "rate" ? `${((v as number) * 100).toFixed(1)}%` : String(v);
+    };
+    const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+    const lines: string[] = [];
+    lines.push(["Annotator", ...cols.map((c) => c.label)].map(esc).join(","));
+    for (const m of sortedTableData) {
+      lines.push([esc(m.annotator), ...cols.map((c) => esc(cell(m, c)))].join(","));
+    }
+    if (tableMetrics.totalsRow) {
+      lines.push([esc("Total"), ...cols.map((c) => esc(cell(tableMetrics.totalsRow!, c)))].join(","));
+    }
+    const csv = lines.join("\r\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const periodSlug = ({
+      all: "all-time",
+      this_week: "this-week",
+      last_week: "last-week",
+      this_month: "this-month",
+      last_month: "last-month",
+    } as const)[tablePeriod];
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `annotator-metrics-${periodSlug}-${toDateStr(new Date())}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   const metricLabel = metricOptions.find((o) => o.value === chartMetric)?.label || chartMetric;
@@ -3153,7 +3400,7 @@ function LogsView({ datasets, detections, onNavigate }: { datasets: DatasetQa[];
             </div>
           ) : chartData.length === 0 ? (
             <div className="flex items-center justify-center h-full">
-              <p className="text-sm text-[var(--app-text-muted)]">No historical data available. Run the seed script to populate metrics history.</p>
+              <p className="text-sm text-[var(--app-text-muted)]">No data available. Adjust your filters or complete QA reviews to populate metrics.</p>
             </div>
           ) : (
             <MetricsChart
@@ -3173,24 +3420,35 @@ function LogsView({ datasets, detections, onNavigate }: { datasets: DatasetQa[];
       <div className="app-card overflow-hidden">
         <div className="flex items-center justify-between border-b border-[var(--app-border)] px-5 py-3">
           <h3 className="text-sm font-semibold text-[var(--app-text)]">Performance by Annotator</h3>
-          <div className="flex items-center rounded-md border border-[var(--app-border)] overflow-hidden">
-            {([
-              { value: "all", label: "All Time" },
-              { value: "this_week", label: "This Week" },
-              { value: "last_week", label: "Last Week" },
-              { value: "this_month", label: "This Month" },
-              { value: "last_month", label: "Last Month" },
-            ] as const).map((opt) => (
-              <button
-                key={opt.value}
-                className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  tablePeriod === opt.value ? "bg-[var(--app-surface-soft)] text-[var(--app-text)]" : "text-[var(--app-text-muted)] hover:text-[var(--app-text)]"
-                }`}
-                onClick={() => setTablePeriod(opt.value)}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div className="flex items-center gap-3">
+            <div className="flex items-center rounded-md border border-[var(--app-border)] overflow-hidden">
+              {([
+                { value: "all", label: "All Time" },
+                { value: "this_week", label: "This Week" },
+                { value: "last_week", label: "Last Week" },
+                { value: "this_month", label: "This Month" },
+                { value: "last_month", label: "Last Month" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.value}
+                  className={`px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    tablePeriod === opt.value ? "bg-[var(--app-surface-soft)] text-[var(--app-text)]" : "text-[var(--app-text-muted)] hover:text-[var(--app-text)]"
+                  }`}
+                  onClick={() => setTablePeriod(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={exportTableCsv}
+              disabled={tableMetrics.data.length === 0}
+              className="app-btn app-btn-subtle app-btn-sm text-xs flex items-center gap-1.5 disabled:opacity-40"
+              title="Export the current table view as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export CSV
+            </button>
           </div>
         </div>
 
@@ -3214,7 +3472,7 @@ function LogsView({ datasets, detections, onNavigate }: { datasets: DatasetQa[];
                       { key: "flag_rate", label: "Flag Rate", tip: "Review flags (open + resolved) as a percentage of items labeled." },
                       { key: "attribute_error", label: "Attr Match", tip: "Percentage of reference attributes correctly matched by the annotator." },
                       { key: "label_error", label: "Label Match", tip: "Percentage of labels matching the finalized dataset ground truth." },
-                      { key: "accuracy", label: "Accuracy", tip: "Combined correctness: (correct labels + correct attributes) / total compared." },
+                      { key: "accuracy", label: "Accuracy", tip: "Combined per-decision correctness: (correct label decisions + correct attribute decisions) ÷ (compared images × (1 + taxonomy size))." },
                       { key: "correction", label: "Correction", tip: "Proportion requiring correction: 1 − accuracy." },
                     ] as { key: keyof AnnotatorMetrics; label: string; tip: string }[]).map((col) => (
                       <th

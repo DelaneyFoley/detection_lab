@@ -4,6 +4,18 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
+const STRICT_JSON_CONTRACT = [
+  'Return ONLY this JSON object and nothing else.',
+  '{',
+  '  "detection_code": "{{DETECTION_CODE}}",',
+  '  "decision": "DETECTED" or "NOT_DETECTED",',
+  '  "confidence": <float 0-1>,',
+  '  "evidence": "<short phrase describing visual basis>"',
+  '}',
+  'Do not wrap the JSON in markdown code fences.',
+  'Do not add any prose, comments, headings, or extra keys.',
+].join("\n");
+
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -110,7 +122,7 @@ export async function runDetectionInference(
     "{{DETECTION_CODE}}",
     detectionCode
   );
-  const compiledUserPrompt = buildCompiledUserPrompt(prompt, userPrompt);
+  const compiledUserPrompt = buildCompiledUserPrompt(prompt, userPrompt, detectionCode);
   const maxParseRetries = 3;
   let currentPrompt = compiledUserPrompt;
   let lastRaw = "";
@@ -202,15 +214,19 @@ function buildRetryPrompt({
   return `${basePrompt}\n\n${retryHeader}`;
 }
 
-function buildCompiledUserPrompt(prompt: PromptVersion, baseUserPrompt: string): string {
+function buildCompiledUserPrompt(prompt: PromptVersion, baseUserPrompt: string, detectionCode: string): string {
   const structure = (prompt.prompt_structure || {}) as any;
+  const fixedGuidance = typeof structure.fixed_guidance === "string" ? structure.fixed_guidance.trim() : "";
   const labelPolicy = typeof structure.label_policy === "string" ? structure.label_policy.trim() : "";
   const decisionRubric = typeof structure.decision_rubric === "string" ? structure.decision_rubric.trim() : "";
+  const schemaContract = STRICT_JSON_CONTRACT.replace(/\{\{DETECTION_CODE\}\}/g, detectionCode);
 
   const sections = [
     baseUserPrompt.trim(),
+    fixedGuidance ? `Detection Guidelines (fixed):\n${fixedGuidance}` : "",
     labelPolicy ? `Decision Policy:\n${labelPolicy}` : "",
     decisionRubric ? `Decision Rubric:\n${decisionRubric}` : "",
+    schemaContract,
   ].filter(Boolean);
 
   return sections.join("\n\n");
@@ -481,10 +497,14 @@ function parseGeminiResponse(
   expectedCode: string
 ): { result: GeminiDetectionResponse | null; ok: boolean; reason: string | null; fix: string | null } {
   try {
-    // Strip markdown code fences if present
     let cleaned = raw.trim();
-    if (cleaned.startsWith("```")) {
-      cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+    if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) {
+      return {
+        result: null,
+        ok: false,
+        reason: "Response is not a raw JSON object.",
+        fix: "Return only the raw JSON object with no markdown, code fences, or extra text.",
+      };
     }
 
     const parsed = JSON.parse(cleaned);

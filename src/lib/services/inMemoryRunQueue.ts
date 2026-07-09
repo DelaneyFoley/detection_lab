@@ -26,3 +26,9 @@ class InMemoryRunQueue implements RunQueue {
 }
 
 export const runQueue: RunQueue = new InMemoryRunQueue();
+
+/**
+ * Separate control map for long-running AI prompt-iteration jobs. Uses the same
+ * cancel-flag contract as the run queue so orchestration can poll for cancels.
+ */
+export const iterationJobQueue: RunQueue = new InMemoryRunQueue();

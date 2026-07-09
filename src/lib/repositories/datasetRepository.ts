@@ -7,6 +7,15 @@ export class DatasetRepository {
     return dataStore.get<any>("SELECT * FROM datasets WHERE dataset_id = ?", datasetId);
   }
 
+  setExcludeAttributes(datasetId: string, exclude: boolean): void {
+    dataStore.run(
+      "UPDATE datasets SET exclude_attributes = ?, updated_at = ? WHERE dataset_id = ?",
+      exclude ? 1 : 0,
+      new Date().toISOString(),
+      datasetId
+    );
+  }
+
   getDatasetWithItems(datasetId: string): { dataset: any | undefined; items: any[] } {
     return {
       dataset: this.getDatasetById(datasetId),
@@ -564,7 +573,7 @@ export class DatasetRepository {
     return childIds;
   }
 
-  getMergeConflicts(parentId: string): Array<{ image_id: string; labels: Array<{ annotator: string; label: string; tags: string }> }> {
+  getMergeConflicts(parentId: string, excludeAttributes = false): Array<{ image_id: string; labels: Array<{ annotator: string; label: string; tags: string }> }> {
     const children = this.getChildDatasets(parentId);
     if (children.length === 0) return [];
 
@@ -588,7 +597,11 @@ export class DatasetRepository {
     const conflicts: Array<{ image_id: string; labels: Array<{ annotator: string; label: string; tags: string }> }> = [];
     for (const [imageId, entries] of imageLabels) {
       if (entries.length < 2) continue;
-      const allAgree = entries.every((e) => e.label === entries[0].label && e.tags === entries[0].tags);
+      // When attributes are excluded from the review, only label disagreements
+      // count as discrepancies — differing attribute tags are ignored.
+      const allAgree = excludeAttributes
+        ? entries.every((e) => e.label === entries[0].label)
+        : entries.every((e) => e.label === entries[0].label && e.tags === entries[0].tags);
       if (!allAgree) conflicts.push({ image_id: imageId, labels: entries });
     }
     return conflicts;
@@ -624,22 +637,44 @@ export class DatasetRepository {
     }));
   }
 
-  mergeChildrenIntoParent(parentId: string, resolutions: Array<{ image_id: string; label: string; tags?: string[] }>): void {
+  mergeChildrenIntoParent(parentId: string, resolutions: Array<{ image_id: string; label: string; tags?: string[] }>, excludeAttributes = false): void {
     const now = new Date().toISOString();
     const children = this.getChildDatasets(parentId);
     if (children.length === 0) throw new Error("No child datasets to merge");
 
     const resolutionMap = new Map(resolutions.map((r) => [r.image_id, r]));
 
+    // Agreed label/tags (first child's values) plus, when attributes are
+    // excluded from review, the union of every child's tags for each image.
     const imageLabels = new Map<string, { label: string; tags: string }>();
+    const imageTagUnion = new Map<string, Set<string>>();
+    // Distinct, non-empty annotator notes per image, preserved in child order,
+    // so annotator notes surface as the master's image description.
+    const imageNotes = new Map<string, string[]>();
     for (const child of children) {
-      const items = dataStore.all<{ image_id: string; ground_truth_label: string | null; segment_tags: string }>(
-        "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ? AND ground_truth_label IS NOT NULL",
+      const items = dataStore.all<{ image_id: string; ground_truth_label: string | null; segment_tags: string; image_description: string | null }>(
+        "SELECT image_id, ground_truth_label, segment_tags, image_description FROM dataset_items WHERE dataset_id = ? AND ground_truth_label IS NOT NULL",
         child.dataset_id
       );
       for (const item of items) {
         if (!imageLabels.has(item.image_id)) {
           imageLabels.set(item.image_id, { label: item.ground_truth_label!, tags: item.segment_tags || "[]" });
+        }
+        const note = (item.image_description || "").trim();
+        if (note) {
+          if (!imageNotes.has(item.image_id)) imageNotes.set(item.image_id, []);
+          const notes = imageNotes.get(item.image_id)!;
+          if (!notes.includes(note)) notes.push(note);
+        }
+        if (excludeAttributes) {
+          if (!imageTagUnion.has(item.image_id)) imageTagUnion.set(item.image_id, new Set<string>());
+          const union = imageTagUnion.get(item.image_id)!;
+          try {
+            const parsed = JSON.parse(item.segment_tags || "[]");
+            if (Array.isArray(parsed)) parsed.forEach((t) => union.add(String(t)));
+          } catch {
+            /* ignore malformed tags */
+          }
         }
       }
     }
@@ -648,7 +683,14 @@ export class DatasetRepository {
       for (const [imageId, agreed] of imageLabels) {
         const resolution = resolutionMap.get(imageId);
         const finalLabel = resolution ? resolution.label : agreed.label;
-        const finalTags = resolution?.tags ? JSON.stringify(resolution.tags) : agreed.tags;
+        // When attributes are excluded, the parent's tags become the union of
+        // all child datasets' tags for the image (reviewer tag edits ignored).
+        let finalTags: string;
+        if (excludeAttributes) {
+          finalTags = JSON.stringify([...(imageTagUnion.get(imageId) ?? new Set<string>())]);
+        } else {
+          finalTags = resolution?.tags ? JSON.stringify(resolution.tags) : agreed.tags;
+        }
 
         store.run(
           "UPDATE dataset_items SET ground_truth_label = ?, segment_tags = ?, item_status = 'labeled' WHERE dataset_id = ? AND image_id = ?",
@@ -657,6 +699,19 @@ export class DatasetRepository {
           parentId,
           imageId
         );
+
+        // Carry annotator notes into the master's image description. Only write
+        // when at least one annotator left a note so existing descriptions are
+        // preserved for images without notes.
+        const notes = imageNotes.get(imageId);
+        if (notes && notes.length > 0) {
+          store.run(
+            "UPDATE dataset_items SET image_description = ? WHERE dataset_id = ? AND image_id = ?",
+            notes.join("\n"),
+            parentId,
+            imageId
+          );
+        }
       }
 
       store.run("UPDATE datasets SET qa_status = 'finalized', split_type = 'MASTER', updated_at = ? WHERE dataset_id = ?", now, parentId);

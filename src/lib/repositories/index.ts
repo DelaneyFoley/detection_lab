@@ -8,3 +8,6 @@ export { reviewFlagRepository } from "@/lib/repositories/reviewFlagRepository";
 export { systemRepository } from "@/lib/repositories/systemRepository";
 export { qaRepository } from "@/lib/repositories/qaRepository";
 export { notificationRepository } from "@/lib/repositories/notificationRepository";
+export { versionNoteEntryRepository } from "@/lib/repositories/versionNoteEntryRepository";
+export { attributeLayoutRepository } from "@/lib/repositories/attributeLayoutRepository";
+export { promptIterationRepository } from "@/lib/repositories/promptIterationRepository";

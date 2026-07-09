@@ -31,6 +31,16 @@ const TABS = [
   { label: "Admin", id: 9, step: "", description: "Manage Prompt Assist and Prompt Feedback templates" },
 ];
 
+/**
+ * Keep only Gemini models suitable for detection (multimodal text/JSON output).
+ * Excludes image-generation, TTS, embedding, computer-use, and live variants
+ * returned by ListModels.
+ */
+function isDetectionModel(name: string): boolean {
+  return typeof name === "string" && !/image|tts|embedding|computer-use|\blive\b|\baqa\b/i.test(name);
+}
+
+
 export default function Home() {
   const {
     activeTab,
@@ -45,7 +55,7 @@ export default function Home() {
   } = useAppStore();
   const [detections, setDetections] = useState<Detection[]>([]);
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [modelOptions] = useState<string[]>(AVAILABLE_MODELS as unknown as string[]);
+  const [modelOptions, setModelOptions] = useState<string[]>(AVAILABLE_MODELS as unknown as string[]);
   const [hasStarted, setHasStarted] = useState(false);
   const [createTrigger, setCreateTrigger] = useState(0);
 
@@ -58,6 +68,35 @@ export default function Home() {
   useEffect(() => {
     loadDetections();
   }, [loadDetections, refreshCounter]);
+
+  // Fetch the currently-available Gemini models from Google at load time so the
+  // picker reflects reality (retired previews disappear automatically). Non-Gemini
+  // providers keep their static list; on any failure we keep the static fallback.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/gemini/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_key: apiKey || undefined }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const live: string[] = Array.isArray(data?.models)
+          ? data.models.filter(isDetectionModel)
+          : [];
+        if (cancelled || live.length === 0) return;
+        const nonGemini = (AVAILABLE_MODELS as readonly string[]).filter((m) => !m.startsWith("gemini"));
+        setModelOptions([...nonGemini, ...live]);
+      } catch {
+        /* keep the static fallback */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiKey]);
 
   useEffect(() => {
     if (modelOptions.length > 0 && !modelOptions.includes(selectedModel)) {

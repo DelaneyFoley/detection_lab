@@ -55,3 +55,45 @@ export function buildUserPromptTemplate(baseTemplate: string, addendum?: string 
   return [base, `Detection-Specific Addendum:\n${extra}`].filter(Boolean).join("\n\n");
 }
 
+const ADDENDUM_MARKER = "Detection-Specific Addendum:";
+
+/**
+ * Mandatory evidence directive. This must always be present in the addendum so
+ * the model always emits a populated `evidence` field, even for the leanest
+ * tuned prompts.
+ */
+export const EVIDENCE_REQUIREMENT =
+  "Evidence: Always populate the evidence field with a short phrase citing the specific visual basis for the decision — the component, its location, and the visible morphology. For NOT_DETECTED, cite the strongest contrary or excluded cue.";
+
+/** True if an addendum already contains an evidence directive. */
+function hasEvidenceDirective(addendum: string): boolean {
+  return /\bevidence\b/i.test(addendum || "");
+}
+
+/**
+ * Guarantee the addendum contains the evidence requirement. Never returns an
+ * empty string — an empty/whitespace addendum becomes the evidence requirement
+ * alone, and an addendum lacking an evidence directive gets it appended.
+ */
+export function ensureEvidenceRequirement(addendum?: string | null): string {
+  const trimmed = String(addendum || "").trim();
+  if (!trimmed) return EVIDENCE_REQUIREMENT;
+  if (hasEvidenceDirective(trimmed)) return trimmed;
+  return `${trimmed}\n\n${EVIDENCE_REQUIREMENT}`;
+}
+
+/**
+ * Split a compiled user prompt template into its fixed base (task + schema block)
+ * and the editable detection-specific addendum. Inverse of
+ * `buildUserPromptTemplate`. If no addendum marker is present, the whole string
+ * is treated as the base with an empty addendum.
+ */
+export function splitUserPromptTemplate(template: string): { base: string; addendum: string } {
+  const full = String(template || "");
+  const idx = full.indexOf(ADDENDUM_MARKER);
+  if (idx < 0) return { base: full.trim(), addendum: "" };
+  const base = full.slice(0, idx).trim();
+  const addendum = full.slice(idx + ADDENDUM_MARKER.length).trim();
+  return { base, addendum };
+}
+
