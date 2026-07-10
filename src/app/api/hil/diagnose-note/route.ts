@@ -77,7 +77,12 @@ export async function POST(req: NextRequest) {
 
     const aiDecision = pred.predicted_decision || "(none)";
     const aiEvidence = pred.evidence || "(none)";
-    const currentNote = String(pred.reviewer_note || pred.image_description || "").trim();
+    // Prefer the note the reviewer currently has typed (sent from the client,
+    // possibly unsaved) over the persisted value, so edits in progress count.
+    const currentNote =
+      typeof body?.reviewer_note === "string"
+        ? body.reviewer_note.trim()
+        : String(pred.reviewer_note || pred.image_description || "").trim();
     const agrees = String(aiDecision).toUpperCase() === String(groundTruth).toUpperCase();
 
     const promptText = [
@@ -89,7 +94,9 @@ export async function POST(req: NextRequest) {
       `AI model decision: ${aiDecision}`,
       `AI model evidence: "${aiEvidence}"`,
       `Human ground-truth label (authoritative): ${groundTruth}`,
-      currentNote ? `Existing reviewer note (refine or replace it): "${currentNote}"` : "There is no reviewer note yet.",
+      currentNote
+        ? `The human reviewer already wrote this note explaining the ground truth: "${currentNote}". Build on and INCORPORATE their reasoning — keep their key observation, do not contradict it, and make it more specific and complete using what you see in the image.`
+        : "There is no reviewer note yet.",
       "",
       agrees
         ? "The AI decision AGREES with the ground truth. Look at the image and write a reviewer note that pinpoints the specific visual evidence confirming this label: name the component, its location, and the visible morphology."

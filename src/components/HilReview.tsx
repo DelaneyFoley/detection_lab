@@ -1044,6 +1044,7 @@ function ImageReviewMode({
   const [noteDirty, setNoteDirty] = useState(false);
   const [generatingNote, setGeneratingNote] = useState(false);
   const { notify } = useAppFeedback();
+  const { selectedModel, apiKey } = useAppStore();
   const [imageZoom, setImageZoom] = useState(1);
   const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
   const [draggingImage, setDraggingImage] = useState(false);
@@ -1140,7 +1141,12 @@ function ImageReviewMode({
       const res = await fetch("/api/hil/diagnose-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prediction_id: p.prediction_id }),
+        body: JSON.stringify({
+          prediction_id: p.prediction_id,
+          reviewer_note: (note || "").trim() || null,
+          model: selectedModel || undefined,
+          api_key: apiKey || undefined,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
