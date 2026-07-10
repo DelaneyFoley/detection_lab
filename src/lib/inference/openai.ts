@@ -1,5 +1,5 @@
 import type { PromptVersion, GeminiDetectionResponse } from "@/types";
-import { fetchImageAsBase64 } from "./shared";
+import { fetchImageAsBase64, getReferenceImageUri } from "./shared";
 
 const STRICT_JSON_CONTRACT = [
   'Return ONLY this JSON object and nothing else.',
@@ -40,6 +40,18 @@ export async function runOpenAIInference(
     const { base64, mimeType } = await fetchImageAsBase64(imageUri);
     const dataUrl = `data:${mimeType};base64,${base64}`;
 
+    // Optional reference sheet (labeled examples) sent before the target image.
+    const referenceUri = getReferenceImageUri(prompt);
+    let refDataUrl = "";
+    if (referenceUri) {
+      try {
+        const rr = await fetchImageAsBase64(referenceUri);
+        refDataUrl = `data:${rr.mimeType};base64,${rr.base64}`;
+      } catch {
+        /* ignore unresolvable reference */
+      }
+    }
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const messageText = attempt === 0 ? compiledUserPrompt : buildRetryText(compiledUserPrompt, attempt, detectionCode);
 
@@ -53,6 +65,12 @@ export async function runOpenAIInference(
           {
             role: "user",
             content: [
+              ...(refDataUrl
+                ? [
+                    { type: "text", text: "REFERENCE — labeled calibration examples; use to judge severity:" },
+                    { type: "image_url", image_url: { url: refDataUrl, detail: "high" } },
+                  ]
+                : []),
               { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
               { type: "text", text: messageText },
             ],

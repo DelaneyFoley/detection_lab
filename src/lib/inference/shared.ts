@@ -1,6 +1,16 @@
 import fs from "fs";
 import path from "path";
 
+/** Extract the optional reference-image data URI/URL stored on a prompt version. */
+export function getReferenceImageUri(prompt: { prompt_structure?: unknown }): string {
+  const raw = prompt?.prompt_structure;
+  const structure = (raw && typeof raw === "object"
+    ? raw
+    : (() => { try { return JSON.parse(String(raw || "{}")); } catch { return {}; } })()) as Record<string, unknown>;
+  const ref = structure.reference_image;
+  return typeof ref === "string" ? ref.trim() : "";
+}
+
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",

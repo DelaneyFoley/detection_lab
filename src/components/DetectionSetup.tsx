@@ -8,6 +8,7 @@ import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import { InfoTip } from "@/components/shared/InfoTip";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
+import { ReferenceImageBuilder } from "@/components/shared/ReferenceImageBuilder";
 import type { Detection, DetectionCategory, PromptVersion, VersionNoteEntry, VersionNoteEntryOrigin } from "@/types";
 import {
   buildUserPromptTemplate,
@@ -119,6 +120,7 @@ export function DetectionSetup({
     label_policy: "",
     user_prompt_addendum: "",
     fixed_guidance: "",
+    reference_image: "",
     decision_rubric: [""],
     segment_taxonomy: [""],
     metric_thresholds: { primary_metric: "f1" as const, min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
@@ -269,6 +271,7 @@ export function DetectionSetup({
           decision_rubric: decisionRubricText,
           user_prompt_addendum: form.user_prompt_addendum,
           fixed_guidance: form.fixed_guidance,
+          reference_image: form.reference_image || "",
           output_schema: `{"detection_code":"${form.detection_code}","decision":"DETECTED|NOT_DETECTED","confidence":0.0,"evidence":"short phrase"}`,
           examples: "",
         },
@@ -413,9 +416,11 @@ export function DetectionSetup({
       const fixedGuidanceChanged =
         form.fixed_guidance.trim() !==
         (((editPromptSource.prompt_structure as any)?.fixed_guidance || "").trim());
+      const referenceImageChanged =
+        (form.reference_image || "") !== ((editPromptSource.prompt_structure as any)?.reference_image || "");
       const versionChanged = nextVersionName.length > 0 && nextVersionName !== editPromptSource.version_label;
 
-      if (labelPolicyChanged || rubricChanged || addendumChanged || fixedGuidanceChanged || versionChanged) {
+      if (labelPolicyChanged || rubricChanged || addendumChanged || fixedGuidanceChanged || referenceImageChanged || versionChanged) {
         const promptRes = await fetch("/api/prompts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -427,6 +432,7 @@ export function DetectionSetup({
               label_policy: form.label_policy,
               user_prompt_addendum: form.user_prompt_addendum,
               fixed_guidance: form.fixed_guidance,
+              reference_image: form.reference_image || "",
               decision_rubric: form.decision_rubric
                 .filter((r) => r.trim())
                 .map((r, i) => `${i + 1}. ${r}`)
@@ -512,6 +518,8 @@ export function DetectionSetup({
         : selectedDetection.user_prompt_addendum || "";
     const versionFixedGuidance =
       typeof sourceStructure.fixed_guidance === "string" ? sourceStructure.fixed_guidance : "";
+    const versionReferenceImage =
+      typeof sourceStructure.reference_image === "string" ? sourceStructure.reference_image : "";
     const parsedLabelPolicy = parseLabelPolicySections(versionLabelPolicy);
     setForm({
       detection_code: selectedDetection.detection_code,
@@ -521,6 +529,7 @@ export function DetectionSetup({
       label_policy: versionLabelPolicy,
       user_prompt_addendum: versionAddendum,
       fixed_guidance: versionFixedGuidance,
+      reference_image: versionReferenceImage,
       decision_rubric: versionRubric.length > 0 ? versionRubric : [""],
       segment_taxonomy:
         Array.isArray(selectedDetection.segment_taxonomy) && selectedDetection.segment_taxonomy.length > 0
@@ -543,6 +552,7 @@ export function DetectionSetup({
       label_policy: "",
       user_prompt_addendum: "",
       fixed_guidance: "",
+      reference_image: "",
       decision_rubric: [""],
       segment_taxonomy: [""],
       metric_thresholds: { primary_metric: "f1", min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
@@ -1468,6 +1478,16 @@ export function DetectionSetup({
               }}
               ref={(el) => { if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; } }}
               placeholder="Reusable rules the model must always apply and that AI prompt iteration cannot rewrite (e.g. the Severity 0–4 scale and shared detection-spec guidelines)."
+            />
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">
+              Reference Image <span className="text-gray-500">(optional — up to 10 labeled examples composed into one sheet, sent to the model at inference)</span>
+            </label>
+            <ReferenceImageBuilder
+              value={form.reference_image}
+              onChange={(dataUrl) => setForm((f) => ({ ...f, reference_image: dataUrl || "" }))}
             />
           </div>
 

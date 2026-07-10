@@ -118,6 +118,16 @@ export async function runDetectionInference(
   // Build image part
   const imageParts = await buildImagePart(imageUri);
 
+  // Optional reference sheet (labeled severity examples) stored with the prompt
+  // version — sent as a visual few-shot calibration example before the target.
+  const referenceUri = getReferenceImageUri(prompt);
+  const referenceParts = referenceUri
+    ? [
+        { text: "REFERENCE — labeled examples for calibration. Use these to judge severity, then analyze the TARGET image that follows:" },
+        ...(await buildImagePart(referenceUri).catch(() => [])),
+      ]
+    : [];
+
   const userPrompt = prompt.user_prompt_template.replace(
     "{{DETECTION_CODE}}",
     detectionCode
@@ -132,7 +142,7 @@ export async function runDetectionInference(
 
   try {
     for (let attempt = 0; attempt <= maxParseRetries; attempt += 1) {
-      const result = await model.generateContent([currentPrompt, ...imageParts]);
+      const result = await model.generateContent([currentPrompt, ...referenceParts, "TARGET image:", ...imageParts]);
       const raw = result.response.text();
       lastRaw = raw;
 
@@ -230,6 +240,14 @@ function buildCompiledUserPrompt(prompt: PromptVersion, baseUserPrompt: string, 
   ].filter(Boolean);
 
   return sections.join("\n\n");
+}
+
+/** Extract the optional reference-image data URI/URL stored on a prompt version. */
+function getReferenceImageUri(prompt: PromptVersion): string {
+  const raw = (prompt as { prompt_structure?: unknown }).prompt_structure;
+  const structure = (raw && typeof raw === "object" ? raw : (() => { try { return JSON.parse(String(raw || "{}")); } catch { return {}; } })()) as Record<string, unknown>;
+  const ref = structure.reference_image;
+  return typeof ref === "string" ? ref.trim() : "";
 }
 
 export async function buildImagePart(imageUri: string) {

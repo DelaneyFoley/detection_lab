@@ -1,5 +1,5 @@
 import type { PromptVersion, GeminiDetectionResponse } from "@/types";
-import { fetchImageAsBase64 } from "./shared";
+import { fetchImageAsBase64, getReferenceImageUri } from "./shared";
 
 const STRICT_JSON_CONTRACT = [
   'Return ONLY this JSON object and nothing else.',
@@ -39,6 +39,17 @@ export async function runAnthropicInference(
   try {
     const { base64, mimeType } = await fetchImageAsBase64(imageUri);
 
+    // Optional reference sheet (labeled examples) sent before the target image.
+    const referenceUri = getReferenceImageUri(prompt);
+    let ref: { base64: string; mimeType: string } | null = null;
+    if (referenceUri) {
+      try {
+        ref = await fetchImageAsBase64(referenceUri);
+      } catch {
+        /* ignore unresolvable reference */
+      }
+    }
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const body: Record<string, unknown> = {
         model: prompt.model,
@@ -49,6 +60,12 @@ export async function runAnthropicInference(
           {
             role: "user",
             content: [
+              ...(ref
+                ? [
+                    { type: "text", text: "REFERENCE — labeled calibration examples; use to judge severity:" },
+                    { type: "image", source: { type: "base64", media_type: ref.mimeType, data: ref.base64 } },
+                  ]
+                : []),
               { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } },
               { type: "text", text: attempt === 0 ? compiledUserPrompt : buildRetryText(compiledUserPrompt, attempt, detectionCode) },
             ],
