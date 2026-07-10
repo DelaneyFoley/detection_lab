@@ -103,6 +103,20 @@ export interface FailureMode {
   example_evidence: string[];
 }
 
+/**
+ * A misclassified image (false positive or false negative) surfaced to the
+ * candidate-generation model so it can VISUALLY review what it got wrong before
+ * editing the prompt, rather than relying only on text evidence snippets.
+ */
+export interface FailureImage {
+  outcome: "FP" | "FN";
+  image_uri: string;
+  /** Finalized ground-truth label for the image. */
+  ground_truth: Decision | null;
+  /** The model's own evidence text from the failing run, for context. */
+  ai_evidence: string | null;
+}
+
 export interface SelectionResult {
   selected: CandidateResult | null;
   baseline: CoreMetrics;

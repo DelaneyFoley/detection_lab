@@ -19,7 +19,7 @@ import {
   parseObjective,
   DEFAULT_SELECTION_CONFIG,
 } from "@/lib/promptIteration/metrics";
-import { summarizeFailureModes, summarizeReviewedRows, toReviewedRows } from "@/lib/promptIteration/packaging";
+import { summarizeFailureModes, summarizeReviewedRows, toReviewedRows, collectFailureImages } from "@/lib/promptIteration/packaging";
 import { generateCandidates } from "@/lib/promptIteration/candidateGen";
 import { evaluateCandidate, computeRegressionCounts, buildCandidatePromptVersion, type EvalPrediction } from "@/lib/promptIteration/evaluation";
 import { generateIterationReport } from "@/lib/promptIteration/report";
@@ -229,6 +229,19 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       `Found ${failureModes.map((m) => `${m.count} ${m.kind}`).join(", ") || "no dominant failure modes"}`
     );
 
+    // Every FP/FN image, so each generation round can visually review its own
+    // mistakes (not just the model's text evidence) before rewriting the prompt.
+    const failureImages = collectFailureImages(rows);
+    if (failureImages.length > 0) {
+      const fnCount = failureImages.filter((f) => f.outcome === "FN").length;
+      const fpCount = failureImages.length - fnCount;
+      repo.appendLog(
+        jobId,
+        "analysis",
+        `Attaching ${failureImages.length} misclassified image(s) (${fnCount} FN, ${fpCount} FP) for the tuning model to review visually.`
+      );
+    }
+
     // Held-out split — the AI only sees the tuning slice; candidates are scored
     // on the holdout it never saw. The split fraction and the promotion bar are
     // chosen adaptively from the labeled sample's statistical power.
@@ -403,6 +416,7 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
           round,
           priorRounds,
           testedCandidates,
+          failureImages,
         },
         apiKey || null
       );

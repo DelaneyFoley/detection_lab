@@ -1,5 +1,5 @@
 import type { Decision, Prediction } from "@/types";
-import type { FailureMode, ReviewedRow } from "@/lib/promptIteration/types";
+import type { FailureMode, FailureImage, ReviewedRow } from "@/lib/promptIteration/types";
 import { classifyOutcome } from "@/lib/promptIteration/metrics";
 
 /**
@@ -123,4 +123,31 @@ export function summarizeFailureModes(rows: ReviewedRow[], maxExamples = 4): Fai
     });
   }
   return modes;
+}
+
+/**
+ * Collect EVERY false-positive and false-negative image (with a resolvable URI)
+ * so the candidate-generation model can visually review its own mistakes. FN and
+ * FP are interleaved (FN first, since misses usually dominate) so that if a
+ * downstream size budget trims the list, both error types stay represented.
+ */
+export function collectFailureImages(rows: ReviewedRow[]): FailureImage[] {
+  const pick = (outcome: "FP" | "FN"): FailureImage[] =>
+    rows
+      .filter((r) => r.outcome === outcome && r.image_uri)
+      .map((r) => ({
+        outcome,
+        image_uri: r.image_uri,
+        ground_truth: r.finalized_ground_truth,
+        ai_evidence: r.ai_evidence,
+      }));
+  const fns = pick("FN");
+  const fps = pick("FP");
+  const interleaved: FailureImage[] = [];
+  const max = Math.max(fns.length, fps.length);
+  for (let i = 0; i < max; i++) {
+    if (fns[i]) interleaved.push(fns[i]);
+    if (fps[i]) interleaved.push(fps[i]);
+  }
+  return interleaved;
 }

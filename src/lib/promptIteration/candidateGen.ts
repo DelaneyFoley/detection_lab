@@ -1,7 +1,8 @@
 import { v4 as uuid } from "uuid";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getProvider } from "@/lib/models";
-import type { FailureMode, PromptCandidate } from "@/lib/promptIteration/types";
+import { fetchImageAsBase64 } from "@/lib/inference/shared";
+import type { FailureImage, FailureMode, PromptCandidate } from "@/lib/promptIteration/types";
 
 export interface CandidateGenInput {
   model: string;
@@ -22,8 +23,7 @@ export interface CandidateGenInput {
     negatives: number;
     fp: number;
     fn: number;
-  };
-  goalF1: number | null;
+  };  goalF1: number | null;
   maxCandidates: number;
   /** Count of genuine parse errors in the baseline run (must be driven to 0). */
   baselineParseErrors?: number;
@@ -56,6 +56,13 @@ export interface CandidateGenInput {
     rejected_reasons: string[];
     rubric_snippet?: string;
   }>;
+  /**
+   * Every false-positive and false-negative image from the baseline run, so the
+   * generator can VISUALLY review its own mistakes before editing the prompt.
+   * Attached to the model call (Gemini/OpenAI/Anthropic are all multimodal),
+   * trimmed to a safe request-size budget. Empty/omitted = text-only behavior.
+   */
+  failureImages?: FailureImage[];
 }
 
 /** Collapse redundant whitespace / duplicate lines to produce a lean variant. */
@@ -78,6 +85,47 @@ const CONSERVATIVE_RULE =
   "When evidence is ambiguous, insufficient, or the target component is not clearly eligible, default to NOT_DETECTED.";
 const RECALL_RULE =
   "Treat partial but morphologically consistent evidence as DETECTED unless a known confuser better explains it.";
+
+/** A misclassified image fetched and encoded for attachment to the model call. */
+interface LoadedFailureImage {
+  outcome: "FP" | "FN";
+  label: string;
+  base64: string;
+  mimeType: string;
+}
+
+// Keep the total attached-image payload under the providers' inline-request
+// limits (Gemini ~20MB, others similar). Base64 inflates bytes ~33%, so budget
+// the encoded size conservatively and cap the count.
+const MAX_FAILURE_IMAGE_BYTES = 14 * 1024 * 1024;
+const MAX_FAILURE_IMAGE_COUNT = 80;
+
+/**
+ * Fetch and encode failure images up to a size/count budget. Images are already
+ * interleaved (FN/FP) upstream, so a budget cut keeps both error types present.
+ * Best-effort: individual fetch failures are skipped, never fatal.
+ */
+async function loadFailureImageParts(images: FailureImage[]): Promise<LoadedFailureImage[]> {
+  const out: LoadedFailureImage[] = [];
+  let bytes = 0;
+  for (const img of images) {
+    if (out.length >= MAX_FAILURE_IMAGE_COUNT) break;
+    try {
+      const { base64, mimeType } = await fetchImageAsBase64(img.image_uri);
+      if (bytes + base64.length > MAX_FAILURE_IMAGE_BYTES) break;
+      bytes += base64.length;
+      const gt = img.ground_truth || "unknown";
+      const label =
+        img.outcome === "FN"
+          ? `FALSE NEGATIVE — ground truth ${gt}, but the model returned NOT_DETECTED. What visible evidence was missed here?`
+          : `FALSE POSITIVE — ground truth ${gt}, but the model returned DETECTED. What confuser was mistaken for the hazard here?`;
+      out.push({ outcome: img.outcome, label, base64, mimeType });
+    } catch {
+      // Skip unresolvable images; continue with the rest.
+    }
+  }
+  return out;
+}
 
 /**
  * Deterministic, generic candidates used when no AI is available or the AI
@@ -185,6 +233,14 @@ function buildAIPrompt(input: CandidateGenInput): string {
     "Observed failure modes:",
     fmLines,
     "",
+    (input.failureImages && input.failureImages.length)
+      ? [
+          "ATTACHED IMAGES: the actual misclassified images from this run are attached below, each captioned as FALSE NEGATIVE or FALSE POSITIVE with its ground truth.",
+          "Visually study them before editing: for false negatives, identify the real hazard morphology the model missed; for false positives, identify the confuser it mistook for the hazard.",
+          "Turn the RECURRING visual patterns you see into GENERAL, morphology-based rules (do NOT describe or hardcode any single image). Prioritize whichever error type dominates.",
+          "",
+        ].join("\n")
+      : "",
     "Rules for your candidates:",
     "- You control THREE fields: label_policy, decision_rubric, and detection_guidance (the addendum). Concentrate the decision logic in the POLICY and RUBRIC first — those are the primary levers. Use the addendum freely for whatever remains high-signal: key highlights, sharp edge-case/confuser rules, or reminders. You may restructure or drop the current addendum entirely — do NOT feel bound to its existing eligibility/severity/look-alike/evidence layout.",
     "- The addendum's ONE mandatory element is an EVIDENCE REQUIREMENT: it must always instruct the model to populate the evidence field with a short phrase citing the specific visual basis for the decision. Keep this even in the leanest addendum (the system will add it if you omit it, but include it deliberately).",
@@ -310,29 +366,44 @@ function coerceCandidates(parsed: any, input: CandidateGenInput): PromptCandidat
   return out.slice(0, Math.max(1, input.maxCandidates));
 }
 
-function buildOpenAIRequest(input: CandidateGenInput, temperature: number) {
+function buildOpenAIRequest(input: CandidateGenInput, temperature: number, imageParts: LoadedFailureImage[]) {
+  const content: any[] = [{ type: "text", text: buildAIPrompt(input) }];
+  for (const im of imageParts) {
+    content.push({ type: "text", text: im.label });
+    content.push({ type: "image_url", image_url: { url: `data:${im.mimeType};base64,${im.base64}` } });
+  }
   return {
     model: input.model,
     temperature,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: "You generate strict JSON only." },
-      { role: "user", content: buildAIPrompt(input) },
+      { role: "user", content },
     ],
   };
 }
 
-function buildAnthropicRequest(input: CandidateGenInput, temperature: number) {
+function buildAnthropicRequest(input: CandidateGenInput, temperature: number, imageParts: LoadedFailureImage[]) {
+  const content: any[] = [{ type: "text", text: buildAIPrompt(input) }];
+  for (const im of imageParts) {
+    content.push({ type: "text", text: im.label });
+    content.push({ type: "image", source: { type: "base64", media_type: im.mimeType, data: im.base64 } });
+  }
   return {
     model: input.model,
     max_tokens: 1024,
     temperature,
     system: "You generate strict JSON only.",
-    messages: [{ role: "user", content: buildAIPrompt(input) }],
+    messages: [{ role: "user", content }],
   };
 }
 
-async function generateCandidateText(input: CandidateGenInput, apiKey: string, temperature: number): Promise<string> {
+async function generateCandidateText(
+  input: CandidateGenInput,
+  apiKey: string,
+  temperature: number,
+  imageParts: LoadedFailureImage[]
+): Promise<string> {
   const provider = getProvider(input.model);
   switch (provider) {
     case "openai": {
@@ -342,7 +413,7 @@ async function generateCandidateText(input: CandidateGenInput, apiKey: string, t
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(buildOpenAIRequest(input, temperature)),
+        body: JSON.stringify(buildOpenAIRequest(input, temperature, imageParts)),
       });
       if (!resp.ok) {
         const errBody = await resp.text();
@@ -359,7 +430,7 @@ async function generateCandidateText(input: CandidateGenInput, apiKey: string, t
           "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
-        body: JSON.stringify(buildAnthropicRequest(input, temperature)),
+        body: JSON.stringify(buildAnthropicRequest(input, temperature, imageParts)),
       });
       if (!resp.ok) {
         const errBody = await resp.text();
@@ -375,7 +446,12 @@ async function generateCandidateText(input: CandidateGenInput, apiKey: string, t
         model: input.model,
         generationConfig: { temperature, responseMimeType: "application/json" },
       });
-      const result = await model.generateContent(buildAIPrompt(input));
+      const parts: any[] = [{ text: buildAIPrompt(input) }];
+      for (const im of imageParts) {
+        parts.push({ text: im.label });
+        parts.push({ inlineData: { mimeType: im.mimeType, data: im.base64 } });
+      }
+      const result = await model.generateContent({ contents: [{ role: "user", parts }] });
       return result.response.text();
     }
   }
@@ -395,11 +471,16 @@ export async function generateCandidates(
     return { candidates: fallbackCandidates(input), usedAI: false, error: "no API key" };
   }
   const temperature = Math.min(0.9, 0.4 + 0.08 * Math.max(0, (input.round ?? 1) - 1));
+  // Fetch the misclassified images once (not per retry) so the generator can
+  // visually review its own FP/FN before rewriting the prompt.
+  const imageParts = input.failureImages && input.failureImages.length
+    ? await loadFailureImageParts(input.failureImages)
+    : [];
   let lastError: string | undefined;
   // Retry once on transient failure / unparseable output before falling back.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const rawText = await generateCandidateText(input, key, temperature);
+      const rawText = await generateCandidateText(input, key, temperature, imageParts);
       const parsed = extractJson(rawText);
       const candidates = coerceCandidates(parsed, input);
       if (candidates.length === 0) {

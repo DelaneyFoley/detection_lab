@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toReviewedRows, summarizeReviewedRows, summarizeFailureModes } from "@/lib/promptIteration/packaging";
+import { toReviewedRows, summarizeReviewedRows, summarizeFailureModes, collectFailureImages } from "@/lib/promptIteration/packaging";
 import { buildPromptVersionInput, aiVersionLabel, parseGoalF1, parseLeanPreference, applyCandidateUserTemplate } from "@/lib/promptIteration/saving";
 import { buildCandidatePromptVersion, computeRegressionCounts, type EvalPrediction } from "@/lib/promptIteration/evaluation";
 import { generateIterationReport } from "@/lib/promptIteration/report";
@@ -81,6 +81,39 @@ describe("packaging.toReviewedRows", () => {
     expect(modes.find((m) => m.kind === "FN")?.count).toBe(1);
     expect(serialized).not.toContain("x1");
     expect(serialized).not.toContain("x2");
+  });
+});
+
+describe("packaging.collectFailureImages", () => {
+  it("collects only FP/FN images, interleaved FN-first, with ground truth", () => {
+    const rows = toReviewedRows([
+      pred({ image_id: "tp", image_uri: "tp.jpg", ground_truth_label: "DETECTED", predicted_decision: "DETECTED" }),
+      pred({ image_id: "fn1", image_uri: "fn1.jpg", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED" }),
+      pred({ image_id: "fp1", image_uri: "fp1.jpg", ground_truth_label: "NOT_DETECTED", predicted_decision: "DETECTED" }),
+      pred({ image_id: "fn2", image_uri: "fn2.jpg", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED" }),
+    ]);
+    const imgs = collectFailureImages(rows);
+    expect(imgs.map((i) => i.image_uri)).toEqual(["fn1.jpg", "fp1.jpg", "fn2.jpg"]);
+    expect(imgs.map((i) => i.outcome)).toEqual(["FN", "FP", "FN"]);
+    expect(imgs[0].ground_truth).toBe("DETECTED");
+    expect(imgs[1].ground_truth).toBe("NOT_DETECTED");
+  });
+
+  it("skips failures that have no image uri", () => {
+    const row: ReviewedRow = {
+      image_id: "fn",
+      image_uri: "",
+      original_ground_truth: "DETECTED",
+      finalized_ground_truth: "DETECTED",
+      ai_predicted: "NOT_DETECTED",
+      ai_evidence: null,
+      reviewer_note: null,
+      attributes: [],
+      confidence: null,
+      parse_ok: true,
+      outcome: "FN",
+    };
+    expect(collectFailureImages([row])).toHaveLength(0);
   });
 });
 
