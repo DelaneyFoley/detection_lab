@@ -74,17 +74,27 @@ export function buildPromptVersionInput(params: {
   sourcePromptVersionId: string;
 }): PromptVersionSaveInput {
   const structure = parseStructure(params.sourcePrompt?.prompt_structure);
+  const userPromptTemplate = applyCandidateUserTemplate(
+    params.sourcePrompt.user_prompt_template || "",
+    params.candidate
+  );
+  // Keep the structured addendum copy IN SYNC with what was actually baked into
+  // the template. Inference reads the template; the edit UI reads
+  // structure.user_prompt_addendum — if we don't update both, edit mode shows a
+  // stale addendum and re-saving it would overwrite the real (running) prompt.
+  const syncedAddendum = splitUserPromptTemplate(userPromptTemplate).addendum;
   const newStructure = {
     ...structure,
     label_policy: params.candidate.label_policy,
     decision_rubric: params.candidate.decision_rubric,
+    user_prompt_addendum: syncedAddendum,
   };
   return {
     promptVersionId: params.promptVersionId,
     detectionId: params.detectionId,
     versionLabel: params.newVersionLabel,
     systemPrompt: params.candidate.system_prompt || params.sourcePrompt.system_prompt || "",
-    userPromptTemplate: applyCandidateUserTemplate(params.sourcePrompt.user_prompt_template || "", params.candidate),
+    userPromptTemplate,
     promptStructure: JSON.stringify(newStructure),
     model: params.sourcePrompt.model || "gemini-2.5-flash",
     temperature: Number(params.sourcePrompt.temperature ?? 0),

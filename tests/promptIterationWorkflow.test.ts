@@ -187,10 +187,38 @@ describe("saving helpers", () => {
     expect(input.userPromptTemplate).toBe(
       buildUserPromptTemplate("USER {{DETECTION_CODE}}", EVIDENCE_REQUIREMENT)
     );
+    // The structured addendum copy MUST match what was baked into the template
+    // (edit mode reads it; inference reads the template — they must not diverge).
+    expect(structure.user_prompt_addendum).toBe(splitUserPromptTemplate(input.userPromptTemplate).addendum);
     expect(input.model).toBe("gemini-2.5-flash");
     expect(input.versionLabel).toBe("v2.0-ai");
     expect(input.sourcePromptVersionId).toBe("src-id");
     expect(input.versionNotes).toBe("REPORT");
+  });
+
+  it("syncs structure.user_prompt_addendum to a candidate's new addendum (no stale copy)", () => {
+    const source = {
+      system_prompt: "SYS",
+      user_prompt_template: buildUserPromptTemplate("Analyze {{DETECTION_CODE}}", "OLD long human addendum with lots of detail"),
+      prompt_structure: JSON.stringify({ user_prompt_addendum: "OLD long human addendum with lots of detail" }),
+      version_label: "v7.0",
+    };
+    const input = buildPromptVersionInput({
+      promptVersionId: "id",
+      detectionId: "det",
+      sourcePrompt: source,
+      candidate: { ...candidate, user_prompt_addendum: "NEW lean addendum" },
+      newVersionLabel: "v7.0-ai-r1",
+      changeNotes: "n",
+      versionNotes: "r",
+      createdAt: "2026-01-01T00:00:00Z",
+      sourcePromptVersionId: "src",
+    });
+    const structure = JSON.parse(input.promptStructure);
+    // Structure addendum must be the NEW one baked into the template, not the stale OLD source copy.
+    expect(structure.user_prompt_addendum).toContain("NEW lean addendum");
+    expect(structure.user_prompt_addendum).not.toContain("OLD long human addendum");
+    expect(structure.user_prompt_addendum).toBe(splitUserPromptTemplate(input.userPromptTemplate).addendum);
   });
 
   it("splitUserPromptTemplate round-trips the editable addendum", () => {
