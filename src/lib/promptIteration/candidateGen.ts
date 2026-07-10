@@ -115,10 +115,12 @@ async function loadFailureImageParts(images: FailureImage[]): Promise<LoadedFail
       if (bytes + base64.length > MAX_FAILURE_IMAGE_BYTES) break;
       bytes += base64.length;
       const gt = img.ground_truth || "unknown";
+      const note = (img.reviewer_note || "").trim();
+      const reviewerLine = note ? ` Reviewer's ground-truth note: "${note.slice(0, 300)}".` : "";
       const label =
         img.outcome === "FN"
-          ? `FALSE NEGATIVE — ground truth ${gt}, but the model returned NOT_DETECTED. What visible evidence was missed here?`
-          : `FALSE POSITIVE — ground truth ${gt}, but the model returned DETECTED. What confuser was mistaken for the hazard here?`;
+          ? `FALSE NEGATIVE — ground truth ${gt}, but the model returned NOT_DETECTED.${reviewerLine} Using the reviewer's note and the image, identify the visible evidence the model missed.`
+          : `FALSE POSITIVE — ground truth ${gt}, but the model returned DETECTED.${reviewerLine} Using the reviewer's note and the image, identify the confuser the model mistook for the hazard.`;
       out.push({ outcome: img.outcome, label, base64, mimeType });
     } catch {
       // Skip unresolvable images; continue with the rest.
@@ -175,7 +177,7 @@ function buildAIPrompt(input: CandidateGenInput): string {
     ? input.failureModes
         .map(
           (m) =>
-            `- ${m.name} (${m.count} case(s)). Example evidence: ${
+            `- ${m.name} (${m.count} case(s)). Reviewer notes / evidence: ${
               m.example_evidence.slice(0, 3).map((e) => `"${e.slice(0, 160)}"`).join("; ") || "n/a"
             }`
         )

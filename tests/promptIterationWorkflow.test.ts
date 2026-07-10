@@ -82,13 +82,23 @@ describe("packaging.toReviewedRows", () => {
     expect(serialized).not.toContain("x1");
     expect(serialized).not.toContain("x2");
   });
+
+  it("prefers the reviewer note over the model's evidence in failure examples", () => {
+    const rows = toReviewedRows([
+      pred({ image_id: "n1", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED", evidence: "only minor oxidation", reviewer_note: "textured rust at the union" }),
+    ]);
+    const modes = summarizeFailureModes(rows);
+    const fn = modes.find((m) => m.kind === "FN");
+    expect(fn?.example_evidence).toContain("textured rust at the union");
+    expect(fn?.example_evidence).not.toContain("only minor oxidation");
+  });
 });
 
 describe("packaging.collectFailureImages", () => {
   it("collects only FP/FN images, interleaved FN-first, with ground truth", () => {
     const rows = toReviewedRows([
       pred({ image_id: "tp", image_uri: "tp.jpg", ground_truth_label: "DETECTED", predicted_decision: "DETECTED" }),
-      pred({ image_id: "fn1", image_uri: "fn1.jpg", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED" }),
+      pred({ image_id: "fn1", image_uri: "fn1.jpg", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED", reviewer_note: "rust ringing the inlet nipple" }),
       pred({ image_id: "fp1", image_uri: "fp1.jpg", ground_truth_label: "NOT_DETECTED", predicted_decision: "DETECTED" }),
       pred({ image_id: "fn2", image_uri: "fn2.jpg", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED" }),
     ]);
@@ -96,6 +106,7 @@ describe("packaging.collectFailureImages", () => {
     expect(imgs.map((i) => i.image_uri)).toEqual(["fn1.jpg", "fp1.jpg", "fn2.jpg"]);
     expect(imgs.map((i) => i.outcome)).toEqual(["FN", "FP", "FN"]);
     expect(imgs[0].ground_truth).toBe("DETECTED");
+    expect(imgs[0].reviewer_note).toBe("rust ringing the inlet nipple");
     expect(imgs[1].ground_truth).toBe("NOT_DETECTED");
   });
 

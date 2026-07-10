@@ -106,7 +106,7 @@ export function summarizeFailureModes(rows: ReviewedRow[], maxExamples = 4): Fai
       kind: "FP",
       count: fps.length,
       example_evidence: fps
-        .map((r) => (r.ai_evidence || r.reviewer_note || "").trim())
+        .map((r) => (r.reviewer_note || r.ai_evidence || "").trim())
         .filter(Boolean)
         .slice(0, maxExamples),
     });
@@ -117,7 +117,7 @@ export function summarizeFailureModes(rows: ReviewedRow[], maxExamples = 4): Fai
       kind: "FN",
       count: fns.length,
       example_evidence: fns
-        .map((r) => (r.ai_evidence || r.reviewer_note || "").trim())
+        .map((r) => (r.reviewer_note || r.ai_evidence || "").trim())
         .filter(Boolean)
         .slice(0, maxExamples),
     });
@@ -140,6 +140,7 @@ export function collectFailureImages(rows: ReviewedRow[]): FailureImage[] {
         image_uri: r.image_uri,
         ground_truth: r.finalized_ground_truth,
         ai_evidence: r.ai_evidence,
+        reviewer_note: r.reviewer_note,
       }));
   const fns = pick("FN");
   const fps = pick("FP");

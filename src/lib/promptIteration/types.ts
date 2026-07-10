@@ -115,6 +115,8 @@ export interface FailureImage {
   ground_truth: Decision | null;
   /** The model's own evidence text from the failing run, for context. */
   ai_evidence: string | null;
+  /** The reviewer's note — the human's ground-truth explanation of the image. */
+  reviewer_note: string | null;
 }
 
 export interface SelectionResult {
