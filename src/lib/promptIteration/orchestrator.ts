@@ -324,6 +324,7 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
         ? "Relative precision floor: capped at the baseline's own precision minus a tolerance (so a 'precision ≥ X' objective can never be strictly unachievable), with a sampling-noise margin so candidates are not rejected within the margin of error."
         : "Precision guardrail prevents choosing a winner that collapses precision.",
       "Beam search: multiple candidates are written and evaluated each round; the best competes globally and seeds the next round.",
+      "Final synthesis pass: after the beam rounds, one master prompt is compiled by ablating across every strategy tried (keep what helped, drop what hurt); it must pass the same CV + gate to win.",
       "Leaner prompts win ties (complexity penalty) to avoid prompt bloat and overfitting.",
       "Parse errors are unacceptable: a prompt producing schema-invalid output cannot win.",
       "A group-bootstrap confidence interval gates promotion so a point-estimate win is not mistaken for real signal.",
@@ -410,11 +411,17 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       repo.appendLog(jobId, "evaluation", "No API key available — cannot evaluate prompts on the holdout.");
     }
 
-    for (let round = 1; round <= maxRounds && apiKey; round++) {
+    // One extra pass after the beam rounds: a final SYNTHESIS round that ablates
+    // across every strategy tried and compiles a single master prompt. It competes
+    // through the same CV + gate as any other candidate.
+    const totalRounds = maxRounds + 1;
+
+    for (let round = 1; round <= totalRounds && apiKey; round++) {
       if (isCancelled()) return void finishCanceled(jobId);
+      const isSynthesis = round > maxRounds;
       repo.updateJob(jobId, { current_round: round });
-      const roundBase = ((round - 1) / maxRounds) * 88;
-      const roundSpan = 88 / maxRounds;
+      const roundBase = ((round - 1) / totalRounds) * 88;
+      const roundSpan = 88 / totalRounds;
 
       const roundStructure =
         currentPrompt.prompt_structure && typeof currentPrompt.prompt_structure === "object"
@@ -424,7 +431,51 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       const roundDecisionRubric = String(roundStructure.decision_rubric || baseDecisionRubric);
       const roundUserAddendum = splitUserPromptTemplate(currentPrompt.user_prompt_template || "").addendum;
 
-      setPhase("generation", Math.round(roundBase + roundSpan * 0.2), `Round ${round}/${maxRounds}: writing the next prompt`);
+      // For the synthesis pass, compile every distinct strategy tried (best-first).
+      let synthesisStrategies:
+        | Array<{ label: string; kind: string; f1: number; precision: number; recall: number; label_policy: string; decision_rubric: string; addendum?: string | null }>
+        | undefined;
+      if (isSynthesis) {
+        const seen = new Set<string>();
+        synthesisStrategies = allResults
+          .filter((r) => {
+            const k = candidateContentKey(r.candidate);
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          .sort(
+            (a, b) =>
+              objectiveScore(b.metrics, b.confusion, selectionObjective) -
+              objectiveScore(a.metrics, a.confusion, selectionObjective)
+          )
+          .slice(0, 8)
+          .map((r) => ({
+            label: r.candidate.label,
+            kind: r.candidate.kind,
+            f1: r.metrics.f1,
+            precision: r.metrics.precision,
+            recall: r.metrics.recall,
+            label_policy: r.candidate.label_policy,
+            decision_rubric: r.candidate.decision_rubric,
+            addendum: r.candidate.user_prompt_addendum,
+          }));
+        if (synthesisStrategies.length < 2) {
+          repo.appendLog(jobId, "generation", "Final synthesis skipped: fewer than 2 distinct strategies to combine.");
+          break;
+        }
+        repo.appendLog(
+          jobId,
+          "generation",
+          `Final synthesis pass: ablating across ${synthesisStrategies.length} strategies to compile one master prompt.`
+        );
+      }
+
+      setPhase(
+        "generation",
+        Math.round(roundBase + roundSpan * 0.2),
+        isSynthesis ? "Final synthesis: compiling the best of every round" : `Round ${round}/${maxRounds}: writing the next prompt`
+      );
       const gen = await generateCandidates(
         {
           model: currentPrompt.model || modelUsed,
@@ -436,6 +487,8 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
           baseSystemPrompt: currentPrompt.system_prompt || "",
           baseUserAddendum: roundUserAddendum,
           baseFixedGuidance: typeof roundStructure.fixed_guidance === "string" ? roundStructure.fixed_guidance : "",
+          synthesis: isSynthesis,
+          roundStrategies: synthesisStrategies,
           failureModes,
           tuningSummary: {
             total: tuningSummary0.labeled,
@@ -445,7 +498,7 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
             fn: tuningSummary0.fn,
           },
           goalF1: job.goal_f1,
-          maxCandidates: MAX_CANDIDATES,
+          maxCandidates: isSynthesis ? 1 : MAX_CANDIDATES,
           baselineParseErrors,
           round,
           priorRounds,
@@ -473,7 +526,7 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       setPhase(
         "evaluation",
         Math.round(roundBase + roundSpan * 0.55),
-        `Round ${round}/${maxRounds}: evaluating ${beam.length} candidate(s) via ${CV_FOLDS}-fold CV`
+        `${isSynthesis ? "Final synthesis" : `Round ${round}/${maxRounds}`}: evaluating ${beam.length} candidate(s) via ${CV_FOLDS}-fold CV`
       );
       type RoundEval = { candidate: PromptCandidate; contentKey: string; result: CandidateResult; preds: EvalPrediction[] };
       const roundEvals: RoundEval[] = [];
@@ -568,7 +621,7 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       }
 
       // Always save this round's prompt as its own version + linked run.
-      setPhase("saving", Math.round(roundBase + roundSpan - 2), `Round ${round}/${maxRounds}: saving prompt version`);
+      setPhase("saving", Math.round(roundBase + roundSpan - 2), `${isSynthesis ? "Final synthesis" : `Round ${round}/${maxRounds}`}: saving prompt version`);
       const roundLabel = promptRepository.uniqueVersionLabel(
         job.detection_id,
         aiVersionLabel(sourcePrompt.version_label, round, iterationBatch)

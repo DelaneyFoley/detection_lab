@@ -63,6 +63,24 @@ export interface CandidateGenInput {
    * trimmed to a safe request-size budget. Empty/omitted = text-only behavior.
    */
   failureImages?: FailureImage[];
+  /**
+   * Final synthesis pass. When true, the generator does NOT explore a new
+   * strategy; instead it ABLATES across every strategy tried (below), keeping the
+   * elements that helped and dropping the ones that hurt, and compiles ONE master
+   * prompt. Requires `roundStrategies`.
+   */
+  synthesis?: boolean;
+  /** Full content + outcomes of every strategy tried, for the synthesis pass. */
+  roundStrategies?: Array<{
+    label: string;
+    kind: string;
+    f1: number;
+    precision: number;
+    recall: number;
+    label_policy: string;
+    decision_rubric: string;
+    addendum?: string | null;
+  }>;
 }
 
 /** Collapse redundant whitespace / duplicate lines to produce a lean variant. */
@@ -172,7 +190,82 @@ export function fallbackCandidates(input: CandidateGenInput): PromptCandidate[] 
   return candidates.slice(0, Math.max(1, input.maxCandidates));
 }
 
+/**
+ * Final synthesis pass: instead of exploring a new strategy, ablate across every
+ * strategy already tried — keep the elements that helped, drop the ones that hurt
+ * — and compile ONE master prompt. The result is scored on the same CV + bootstrap
+ * gate as any other candidate, so it only wins if it genuinely beats the best round.
+ */
+function buildSynthesisPrompt(input: CandidateGenInput): string {
+  const strategies = (input.roundStrategies || [])
+    .slice()
+    .sort((a, b) => b.f1 - a.f1)
+    .map((s, i) => {
+      const rubric = (s.decision_rubric || "").replace(/\s+/g, " ").trim().slice(0, 500);
+      const policy = (s.label_policy || "").replace(/\s+/g, " ").trim().slice(0, 300);
+      const addendum = (s.addendum || "").replace(/\s+/g, " ").trim().slice(0, 500);
+      return [
+        `STRATEGY ${i + 1} — "${s.label}" (${s.kind}): F1 ${(s.f1 * 100).toFixed(1)}% · P ${(s.precision * 100).toFixed(1)}% · R ${(s.recall * 100).toFixed(1)}%`,
+        `  label_policy: ${policy || "(none)"}`,
+        `  decision_rubric: ${rubric || "(none)"}`,
+        addendum ? `  guidance: ${addendum}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n\n");
+
+  const fmLines = input.failureModes.length
+    ? input.failureModes
+        .map((m) => `- ${m.name} (${m.count} case(s)).`)
+        .join("\n")
+    : "- No dominant failure mode.";
+
+  return [
+    "You are running the FINAL SYNTHESIS pass of a vision-language DETECTION prompt tuning process.",
+    "Every strategy below was already written and scored on the SAME data. Your job is NOT to invent a new direction — it is to LEARN from all of them at once and compile ONE master prompt.",
+    "",
+    `Detection code: ${input.detectionCode}`,
+    `Detection category: ${input.detectionCategory}`,
+    input.goalF1 != null ? `Target F1: ${(input.goalF1 * 100).toFixed(1)}%.` : "",
+    "",
+    "All strategies tried, best-scoring first (with their precision/recall trade-offs):",
+    strategies,
+    "",
+    "Observed failure modes across the run:",
+    fmLines,
+    input.failureImages && input.failureImages.length
+      ? "\nThe actual misclassified images are attached (captioned FN/FP with ground truth) — use them to judge which strategy's morphology rules were right."
+      : "",
+    "",
+    "Do this, step by step:",
+    "1. ABLATE: for each strategy, identify which specific ELEMENTS raised recall WITHOUT collapsing precision (keep these), and which over-broadened and dropped precision, or over-restricted and dropped recall (drop these). Compare high-precision variants against high-recall variants to locate the elements responsible for each.",
+    "2. COMPILE: write ONE master prompt that combines the precision discipline of the high-precision strategies with the recall triggers of the high-recall strategies. Prefer the tightest wording that keeps each kept element.",
+    "3. The goal is to beat the BEST strategy above on the objective — not to average them. Resolve conflicts in favor of whatever the scores + images show actually worked.",
+    "",
+    "FIXED guidelines (always applied automatically — do NOT restate or contradict):",
+    input.baseFixedGuidance || "(none)",
+    "",
+    "Output rules (identical to the normal pass):",
+    "- You control THREE fields: detection_guidance (addendum), label_policy, and decision_rubric.",
+    "- label_policy MUST be EXACTLY TWO LINES: 'DETECTED: <one sentence>' then 'NOT_DETECTED: <one sentence>'.",
+    "- decision_rubric MUST be 3–7 plain-text criteria, ONE per line, no markdown/bullets.",
+    "- The addendum MUST retain an EVIDENCE REQUIREMENT (cite the specific visual basis in the evidence field).",
+    "- Only generalizable morphology/eligibility/confuser rules. NEVER reference specific image ids, examples, hex/RGB values, or layouts.",
+    "- Do NOT restate the JSON schema or confidence rules; they are fixed and appended by the system.",
+    "- Prefer the LEANEST prompt that captures every kept element.",
+    "",
+    "Return STRICT JSON only, exactly one object in the candidates array:",
+    '{"candidates":[{"kind":"balanced","label":"synthesis master","target_failure_mode":"synthesis of all rounds","rationale":"which elements you kept vs dropped and why","detection_guidance":"...","label_policy":"...","decision_rubric":"..."}]}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildAIPrompt(input: CandidateGenInput): string {
+  if (input.synthesis && input.roundStrategies && input.roundStrategies.length >= 2) {
+    return buildSynthesisPrompt(input);
+  }
   const fmLines = input.failureModes.length
     ? input.failureModes
         .map(
