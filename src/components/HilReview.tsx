@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Sparkles, Loader2 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import type { Detection, Run, Prediction, ErrorTag, Decision, ReviewFlag, ResolutionAction, GroundtruthCorrection } from "@/types";
 import { computeMetricsWithSegments } from "@/lib/metrics";
@@ -1041,6 +1042,8 @@ function ImageReviewMode({
 }) {
   const [note, setNote] = useState(p.image_description || p.reviewer_note || "");
   const [noteDirty, setNoteDirty] = useState(false);
+  const [generatingNote, setGeneratingNote] = useState(false);
+  const { notify } = useAppFeedback();
   const [imageZoom, setImageZoom] = useState(1);
   const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
   const [draggingImage, setDraggingImage] = useState(false);
@@ -1128,6 +1131,36 @@ function ImageReviewMode({
     if (isTypingTarget) return;
     if (e.key === "ArrowRight") handleNext();
     if (e.key === "ArrowLeft") handlePrev();
+  };
+
+  const generateDiagnosticNote = async () => {
+    if (generatingNote) return;
+    setGeneratingNote(true);
+    try {
+      const res = await fetch("/api/hil/diagnose-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prediction_id: p.prediction_id }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        notify({ tone: "error", message: data?.error || "Failed to generate note" });
+        return;
+      }
+      const generated = String(data?.note || "").trim();
+      if (!generated) {
+        notify({ tone: "error", message: "The model returned an empty note." });
+        return;
+      }
+      setNote(generated);
+      setNoteDirty(false);
+      onUpdate(p.prediction_id, { reviewer_note: generated });
+      notify({ tone: "success", message: "Diagnostic note generated." });
+    } catch (err) {
+      notify({ tone: "error", message: err instanceof Error ? err.message : "Failed to generate note" });
+    } finally {
+      setGeneratingNote(false);
+    }
   };
 
   const handlePrev = () => {
@@ -1434,7 +1467,23 @@ function ImageReviewMode({
 
         {/* Reviewer Note */}
         <div className="app-card p-4">
-          <h4 className="text-xs text-gray-500 font-medium mb-2">Reviewer Note</h4>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-xs text-gray-500 font-medium">Reviewer Note</h4>
+            <button
+              type="button"
+              onClick={generateDiagnosticNote}
+              disabled={generatingNote}
+              title="Auto-generate a diagnostic note with AI"
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-indigo-300 hover:text-indigo-200 hover:bg-indigo-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {generatingNote ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              <span>{generatingNote ? "Generating…" : "Generate"}</span>
+            </button>
+          </div>
           <textarea
             className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs h-20"
             value={note}
