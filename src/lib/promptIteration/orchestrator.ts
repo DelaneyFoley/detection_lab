@@ -17,6 +17,9 @@ import {
   objectiveScore,
   objectiveLabel,
   parseObjective,
+  relativePrecisionFloor,
+  proportionNoiseMargin,
+  crossValidatedMetrics,
   DEFAULT_SELECTION_CONFIG,
 } from "@/lib/promptIteration/metrics";
 import { summarizeFailureModes, summarizeReviewedRows, toReviewedRows, collectFailureImages } from "@/lib/promptIteration/packaging";
@@ -39,7 +42,7 @@ const PROVIDER_ENV_KEY: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
 };
 
-const MAX_CANDIDATES = 1;
+const MAX_CANDIDATES = 3;
 
 function parseStructure(value: unknown): Record<string, unknown> {
   if (value && typeof value === "object") return value as Record<string, unknown>;
@@ -260,11 +263,18 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       `Sample: ${labeledRows.length} labeled (${labeledPositives} pos / ${labeledRows.length - labeledPositives} neg) → ${evalPlan.regime} regime (holdout ${Math.round(evalPlan.holdoutFraction * 100)}%, min ΔF1 ${(evalPlan.minEffectF1 * 100).toFixed(0)}%). ${evalPlan.note}`
     );
     const { tuning, holdout } = groupAwareStratifiedSplit(labeledRows, evalPlan.holdoutFraction, job.run_id);
-    const evalHoldout = holdout.length > 0 ? holdout : labeledRows;
+    // K-fold CROSS-VALIDATION replaces the single small holdout: every candidate
+    // is scored on ALL labeled rows, and stability is reported as the mean ± spread
+    // across k group-aware, label-stratified folds — so the number is no longer
+    // dominated by which few images happened to land in a 25% holdout. The tuning
+    // slice still governs what the AI is shown; scoring uses the full labeled set.
+    const CV_FOLDS = 5;
+    const evalHoldout = labeledRows;
+    void holdout;
     repo.appendLog(
       jobId,
       "analysis",
-      `Split: ${tuning.length} tuning / ${evalHoldout.length} holdout (~${Math.round(evalPlan.holdoutFraction * 100)}% held out; group-aware, label-stratified, attribute-diverse)`
+      `Evaluation: ${CV_FOLDS}-fold cross-validation over all ${evalHoldout.length} labeled rows (group-aware, label-stratified). Tuning slice shown to the AI: ${tuning.length}.`
     );
 
     const baselineHoldoutConfusion = confusionFromRows(evalHoldout);
@@ -273,6 +283,28 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
     // bootstrap promotion gate all use this instead of raw F1.
     const objective = parseObjective(job.objective);
     const baselineObjectiveScore = objectiveScore(baselineHoldoutCore, baselineHoldoutConfusion, objective);
+    // Relative precision floor (#4): never demand MORE precision than the baseline
+    // itself delivers (minus tolerance), so a "precision ≥ X" objective can never be
+    // strictly unachievable. Noise margin (#1): don't reject a candidate for a
+    // precision gap within the margin of error at this sample size.
+    const requestedPrecisionFloor =
+      objective.kind === "recall_at_precision" ? objective.precisionFloor : job.precision_floor ?? null;
+    const effectivePrecisionFloor = relativePrecisionFloor(requestedPrecisionFloor, baselineHoldoutCore.precision);
+    const basePredPositives = baselineHoldoutConfusion.tp + baselineHoldoutConfusion.fp;
+    const precisionNoiseMargin = proportionNoiseMargin(Math.max(1, basePredPositives));
+    // Objective used for eligibility/selection carries the EFFECTIVE floor; the
+    // reported objective keeps the operator's requested floor for the label.
+    const selectionObjective: typeof objective =
+      objective.kind === "recall_at_precision" && effectivePrecisionFloor != null
+        ? { kind: "recall_at_precision", precisionFloor: effectivePrecisionFloor }
+        : objective;
+    if (requestedPrecisionFloor != null) {
+      repo.appendLog(
+        jobId,
+        "analysis",
+        `Precision floor: requested ${(requestedPrecisionFloor * 100).toFixed(0)}%, effective ${(((effectivePrecisionFloor ?? 0)) * 100).toFixed(0)}% (relative to baseline ${(baselineHoldoutCore.precision * 100).toFixed(0)}%), ±${(precisionNoiseMargin * 100).toFixed(0)}% noise margin.`
+      );
+    }
     repo.appendLog(jobId, "analysis", `Objective: ${objectiveLabel(objective)} (baseline ${(baselineObjectiveScore * 100).toFixed(1)}%).`);
     const baselineByImageId = new Map<string, Decision | null>(
       evalHoldout.map((r) => [r.image_id, r.ai_predicted])
@@ -286,14 +318,15 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
     // always saves it as its own version + run (so each is inspectable). The best
     // prompt across the whole chain is chosen at the end.
     const guardrailsBase = [
-      "Held-out split: prompts are scored only on images excluded from the tuning slice.",
-      "Group-aware split keeps near-duplicate images on the same side (no leakage) and stratifies by ground-truth label AND attribute labels.",
-      job.precision_floor != null
-        ? `Explicit precision floor of ${(job.precision_floor * 100).toFixed(0)}% enforced when choosing the winner.`
+      `Scoring: ${CV_FOLDS}-fold cross-validation over ALL labeled rows (not one small holdout), so the metric is not dominated by which few images landed in a tiny split.`,
+      "Group-aware folds keep near-duplicate images together (no leakage) and stratify by ground-truth label.",
+      requestedPrecisionFloor != null
+        ? "Relative precision floor: capped at the baseline's own precision minus a tolerance (so a 'precision ≥ X' objective can never be strictly unachievable), with a sampling-noise margin so candidates are not rejected within the margin of error."
         : "Precision guardrail prevents choosing a winner that collapses precision.",
+      "Beam search: multiple candidates are written and evaluated each round; the best competes globally and seeds the next round.",
       "Leaner prompts win ties (complexity penalty) to avoid prompt bloat and overfitting.",
       "Parse errors are unacceptable: a prompt producing schema-invalid output cannot win.",
-      "Every round is scored on the SAME holdout so rounds are directly comparable.",
+      "A group-bootstrap confidence interval gates promotion so a point-estimate win is not mistaken for real signal.",
     ];
 
     const maxRounds = Math.max(1, Math.min(10, job.max_rounds || 1));
@@ -370,7 +403,8 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
     // A round's prompt can be the final winner only if it emits zero parse errors
     // and respects any explicit precision floor.
     const eligibleAsWinner = (r: CandidateResult) =>
-      r.parse_errors === 0 && (job.precision_floor == null || r.metrics.precision >= job.precision_floor);
+      r.parse_errors === 0 &&
+      (effectivePrecisionFloor == null || r.metrics.precision >= effectivePrecisionFloor - precisionNoiseMargin);
 
     if (!apiKey) {
       repo.appendLog(jobId, "evaluation", "No API key available — cannot evaluate prompts on the holdout.");
@@ -421,8 +455,8 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
         apiKey || null
       );
       usedAIAny = usedAIAny || gen.usedAI;
-      const candidate = gen.candidates[0];
-      if (!candidate) {
+      const beam = gen.candidates.filter(Boolean);
+      if (beam.length === 0) {
         repo.appendLog(jobId, "generation", `Round ${round}: no prompt generated — stopping.`);
         break;
       }
@@ -430,14 +464,76 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       repo.appendLog(
         jobId,
         "generation",
-        `Round ${round}: wrote a new prompt ${gen.usedAI ? "via AI" : `via fallback${gen.error ? ` (AI unavailable: ${gen.error})` : ""}`} ("${candidate.label}").`
+        `Round ${round}: wrote ${beam.length} candidate${beam.length > 1 ? "s" : ""} ${gen.usedAI ? "via AI" : `via fallback${gen.error ? ` (AI unavailable: ${gen.error})` : ""}`} (beam width ${beam.length}).`
       );
 
-      // Skip identical re-proposals (no change from the current chain head).
-      const contentKey = candidateContentKey(candidate);
-      if (contentKey === prevContentKey) {
+      // Beam search: evaluate EVERY candidate this round on the full labeled set,
+      // then keep the single best to compete globally and seed the next round.
+      // Candidates identical to the current chain head (or to each other) are skipped.
+      setPhase(
+        "evaluation",
+        Math.round(roundBase + roundSpan * 0.55),
+        `Round ${round}/${maxRounds}: evaluating ${beam.length} candidate(s) via ${CV_FOLDS}-fold CV`
+      );
+      type RoundEval = { candidate: PromptCandidate; contentKey: string; result: CandidateResult; preds: EvalPrediction[] };
+      const roundEvals: RoundEval[] = [];
+      for (const cand of beam) {
+        if (isCancelled()) return void finishCanceled(jobId);
+        const cKey = candidateContentKey(cand);
+        if (cKey === prevContentKey) continue;
+        if (roundEvals.some((e) => e.contentKey === cKey)) continue;
+        let cResult: CandidateResult;
+        let cPreds: EvalPrediction[];
+        const cached = evalCache.get(cKey);
+        if (cached) {
+          cPreds = cached.predictions;
+          const changed = cPreds
+            .filter((p) => (baselineByImageId.get(p.image_id) ?? null) !== p.predicted)
+            .map((p) => p.image_id);
+          cResult = { ...cached.result, candidate: cand, changed_rows: changed, rejected_reasons: [] };
+        } else {
+          const out = await evaluateCandidate({
+            candidate: cand,
+            sourcePrompt: currentPrompt,
+            detectionCode: detection.detection_code,
+            rows: evalHoldout,
+            apiKey,
+            baselineByImageId,
+            isCancelled,
+          });
+          cResult = out.result;
+          cPreds = out.predictions;
+          evalCache.set(cKey, { result: out.result, predictions: out.predictions });
+        }
+        totalEvaluated += 1;
+        roundEvals.push({ candidate: cand, contentKey: cKey, result: cResult, preds: cPreds });
+        // Cross-validated stability of this candidate (mean ± spread over folds).
+        const cv = crossValidatedMetrics(
+          cPreds.map((p) => ({ group: nearDuplicateGroupKey(p.image_id), truth: p.truth, pred: p.predicted, parseOk: p.parse_ok })),
+          { k: CV_FOLDS, objective: selectionObjective, seed: `${job.run_id}:${cKey}` }
+        );
+        repo.appendLog(
+          jobId,
+          "evaluation",
+          `Round ${round}: "${cand.label}" → F1 ${(cResult.metrics.f1 * 100).toFixed(1)}% (CV ${(cv.mean.f1 * 100).toFixed(1)}±${(cv.std.f1 * 100).toFixed(1)}%) · P ${(cResult.metrics.precision * 100).toFixed(1)}% · R ${(cResult.metrics.recall * 100).toFixed(1)}%${cResult.parse_errors ? ` · ${cResult.parse_errors} parse err` : ""}.`
+        );
+        testedCandidates.push({
+          round,
+          label: cand.label,
+          kind: cand.kind,
+          f1: cResult.metrics.f1,
+          precision: cResult.metrics.precision,
+          recall: cResult.metrics.recall,
+          parse_errors: cResult.parse_errors,
+          promoted: false,
+          rejected_reasons: [],
+          rubric_snippet: (cand.decision_rubric || "").replace(/\s+/g, " ").trim().slice(0, 180),
+        });
+      }
+
+      if (roundEvals.length === 0) {
         consecutiveNoChange += 1;
-        repo.appendLog(jobId, "generation", `Round ${round}: the new prompt is identical to the current one — no change.`);
+        repo.appendLog(jobId, "generation", `Round ${round}: all candidates were identical to the current prompt — no change.`);
         if (consecutiveNoChange >= NO_CHANGE_PATIENCE) {
           repo.appendLog(jobId, "selection", `Stopping: ${consecutiveNoChange} consecutive rounds produced no change.`);
           break;
@@ -446,46 +542,30 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       }
       consecutiveNoChange = 0;
 
-      // Evaluate this round's single prompt on the holdout (cached if identical).
-      setPhase("evaluation", Math.round(roundBase + roundSpan * 0.55), `Round ${round}/${maxRounds}: evaluating the new prompt on the holdout`);
-      let result: CandidateResult;
-      let preds: EvalPrediction[];
-      const cached = evalCache.get(contentKey);
-      if (cached) {
-        preds = cached.predictions;
-        const changed = preds
-          .filter((p) => (baselineByImageId.get(p.image_id) ?? null) !== p.predicted)
-          .map((p) => p.image_id);
-        result = { ...cached.result, candidate, changed_rows: changed, rejected_reasons: [] };
-      } else {
-        const out = await evaluateCandidate({
-          candidate,
-          sourcePrompt: currentPrompt,
-          detectionCode: detection.detection_code,
-          rows: evalHoldout,
-          apiKey,
-          baselineByImageId,
-          isCancelled,
-        });
-        result = out.result;
-        preds = out.predictions;
-        evalCache.set(contentKey, { result: out.result, predictions: out.predictions });
-      }
-      totalEvaluated += 1;
-      lastRoundResults = [result];
-      allResults.push(result);
-      testedCandidates.push({
-        round,
-        label: candidate.label,
-        kind: candidate.kind,
-        f1: result.metrics.f1,
-        precision: result.metrics.precision,
-        recall: result.metrics.recall,
-        parse_errors: result.parse_errors,
-        promoted: true,
-        rejected_reasons: [],
-        rubric_snippet: (candidate.decision_rubric || "").replace(/\s+/g, " ").trim().slice(0, 180),
+      // Round winner: prefer eligible candidates (parse-clean, respect the effective
+      // floor), then rank by the objective score. If none are eligible, take the top
+      // objective score so the chain still has a base to refine next round.
+      const scoreOfResult = (r: CandidateResult) => objectiveScore(r.metrics, r.confusion, selectionObjective);
+      const rankedRound = [...roundEvals].sort((a, b) => {
+        const ea = eligibleAsWinner(a.result) ? 1 : 0;
+        const eb = eligibleAsWinner(b.result) ? 1 : 0;
+        if (ea !== eb) return eb - ea;
+        return scoreOfResult(b.result) - scoreOfResult(a.result);
       });
+      const winner = rankedRound[0];
+      const candidate = winner.candidate;
+      const contentKey = winner.contentKey;
+      const result = winner.result;
+      const preds = winner.preds;
+      lastRoundResults = roundEvals.map((e) => e.result);
+      allResults.push(result);
+      if (beam.length > 1) {
+        repo.appendLog(
+          jobId,
+          "selection",
+          `Round ${round}: beam winner "${candidate.label}" (objective ${(scoreOfResult(result) * 100).toFixed(1)}%, F1 ${(result.metrics.f1 * 100).toFixed(1)}%) of ${roundEvals.length} evaluated.`
+        );
+      }
 
       // Always save this round's prompt as its own version + linked run.
       setPhase("saving", Math.round(roundBase + roundSpan - 2), `Round ${round}/${maxRounds}: saving prompt version`);
@@ -615,13 +695,14 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
     setPhase("selection", 92, "Selecting the best prompt across all rounds");
     const finalSelection = selectBestCandidate(baselineHoldoutCore, allResults, {
       goalF1: job.goal_f1,
-      precisionFloor: job.precision_floor,
+      precisionFloor: effectivePrecisionFloor,
       precisionDropTolerance: DEFAULT_SELECTION_CONFIG.precisionDropTolerance,
+      precisionNoiseMargin,
       // Lean preference: the max F1 the operator will trade for a leaner prompt.
       // Larger window = leaner wins over more of an F1 gap. Falls back to default.
       minF1GainForComplexity: job.lean_preference ?? DEFAULT_SELECTION_CONFIG.minF1GainForComplexity,
       baselineComplexity: baseComplexity,
-      objective,
+      objective: selectionObjective,
       baselineScore: baselineObjectiveScore,
     });
     const best = finalSelection.selected

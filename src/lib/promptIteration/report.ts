@@ -72,7 +72,7 @@ export function generateIterationReport(input: ReportInput): string {
       `Operator goal F1: **${pct(input.goalF1)}** — ${selection.goal_met ? "met ✅" : "not met ⚠️"}.`
     );
   }
-  lines.push(`Evaluated on a held-out slice of ${input.holdoutSize} images (tuning slice: ${input.tuningSize}).`);
+  lines.push(`Scored by cross-validation over all ${input.holdoutSize} labeled images (tuning slice shown to the AI: ${input.tuningSize}).`);
   lines.push("");
 
   // ── Baseline performance ────────────────────────────────────────────────────

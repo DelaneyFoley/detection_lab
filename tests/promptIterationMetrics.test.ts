@@ -15,6 +15,9 @@ import {
   objectiveScore,
   objectiveEligible,
   parseObjective,
+  relativePrecisionFloor,
+  proportionNoiseMargin,
+  crossValidatedMetrics,
   DEFAULT_SELECTION_CONFIG,
 } from "@/lib/promptIteration/metrics";
 import type { CandidateResult, ReviewedRow } from "@/lib/promptIteration/types";
@@ -402,5 +405,89 @@ describe("selectBestCandidate with an explicit precision floor", () => {
 describe("candidateComplexity", () => {
   it("counts characters across tuned fields", () => {
     expect(candidateComplexity("abc", "de", "f")).toBe(6);
+  });
+});
+
+describe("relativePrecisionFloor (#4)", () => {
+  it("caps the requested floor at baseline precision minus tolerance", () => {
+    // Requested 85% but baseline only does 77.8% → floor drops so it's achievable.
+    expect(relativePrecisionFloor(0.85, 0.778, 0.03)).toBeCloseTo(0.748, 3);
+  });
+  it("keeps the requested floor when the baseline already exceeds it", () => {
+    expect(relativePrecisionFloor(0.7, 0.9, 0.03)).toBeCloseTo(0.7, 3);
+  });
+  it("returns null when no floor is requested", () => {
+    expect(relativePrecisionFloor(null, 0.9)).toBeNull();
+  });
+  it("never returns a negative floor", () => {
+    expect(relativePrecisionFloor(0.85, 0.01, 0.03)).toBe(0);
+  });
+});
+
+describe("proportionNoiseMargin (#1)", () => {
+  it("shrinks as the sample grows", () => {
+    const small = proportionNoiseMargin(10);
+    const big = proportionNoiseMargin(400);
+    expect(small).toBeGreaterThan(big);
+    expect(big).toBeGreaterThan(0);
+  });
+  it("returns a wide margin for empty/invalid n", () => {
+    expect(proportionNoiseMargin(0)).toBe(0.5);
+    expect(proportionNoiseMargin(-5)).toBe(0.5);
+  });
+});
+
+describe("objectiveEligible noise margin", () => {
+  it("accepts a precision just under the floor within the margin", () => {
+    const obj = parseObjective({ kind: "recall_at_precision", precisionFloor: 0.85 });
+    const m = { precision: 0.80, recall: 0.7, f1: 0.74, accuracy: 0.7 };
+    expect(objectiveEligible(m, obj).ok).toBe(false);
+    expect(objectiveEligible(m, obj, { precision: 0.08 }).ok).toBe(true);
+  });
+});
+
+describe("selectBestCandidate with noise margin", () => {
+  const baseline = { precision: 0.778, recall: 0.636, f1: 0.7, accuracy: 0.68 };
+  it("promotes a candidate within the noise margin of the floor", () => {
+    const res = selectBestCandidate(
+      baseline,
+      [candidateResult({ id: "r4", f1: 0.762, precision: 0.80, recall: 0.727, complexity: 100 })],
+      {
+        goalF1: null,
+        precisionFloor: 0.748,
+        precisionDropTolerance: 0.05,
+        precisionNoiseMargin: 0.08,
+        minF1GainForComplexity: 0.01,
+        baselineComplexity: 200,
+        objective: { kind: "recall_at_precision", precisionFloor: 0.748 },
+        baselineScore: 0.636,
+      }
+    );
+    expect(res.selected?.candidate.id).toBe("r4");
+  });
+});
+
+describe("crossValidatedMetrics (#2)", () => {
+  it("returns fold mean/std and averages toward the full-set metric", () => {
+    // 10 groups: 6 correct positives, 2 correct negatives, 1 FN, 1 FP.
+    const rows = [
+      ...Array.from({ length: 6 }, (_, i) => ({ group: `p${i}`, truth: "DETECTED" as const, pred: "DETECTED" as const })),
+      ...Array.from({ length: 2 }, (_, i) => ({ group: `n${i}`, truth: "NOT_DETECTED" as const, pred: "NOT_DETECTED" as const })),
+      { group: "fn", truth: "DETECTED" as const, pred: "NOT_DETECTED" as const },
+      { group: "fp", truth: "NOT_DETECTED" as const, pred: "DETECTED" as const },
+    ];
+    const cv = crossValidatedMetrics(rows, { k: 5, seed: "t" });
+    expect(cv.k).toBeGreaterThan(1);
+    expect(cv.mean.f1).toBeGreaterThan(0);
+    expect(cv.mean.f1).toBeLessThanOrEqual(1);
+    expect(cv.std.f1).toBeGreaterThanOrEqual(0);
+  });
+  it("keeps near-duplicate groups whole (never split across folds)", () => {
+    const rows = Array.from({ length: 12 }, (_, i) => {
+      const lab: "DETECTED" | "NOT_DETECTED" = i % 2 === 0 ? "DETECTED" : "NOT_DETECTED";
+      return { group: i < 6 ? "dupA" : `g${i}`, truth: lab, pred: lab };
+    });
+    const cv = crossValidatedMetrics(rows, { k: 4, seed: "t" });
+    expect(cv.folds.length).toBeGreaterThan(1);
   });
 });

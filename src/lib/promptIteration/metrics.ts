@@ -50,11 +50,15 @@ export function objectiveScore(m: CoreMetrics, c: Confusion, obj: Objective): nu
 }
 
 /** Hard constraint a candidate must satisfy for the objective (beyond global guards). */
-export function objectiveEligible(m: CoreMetrics, obj: Objective): { ok: boolean; reason?: string } {
-  if (obj.kind === "recall_at_precision" && m.precision < obj.precisionFloor) {
+export function objectiveEligible(
+  m: CoreMetrics,
+  obj: Objective,
+  margins: { precision?: number; recall?: number } = {}
+): { ok: boolean; reason?: string } {
+  if (obj.kind === "recall_at_precision" && m.precision < obj.precisionFloor - (margins.precision ?? 0)) {
     return { ok: false, reason: `precision ${m.precision.toFixed(3)} below objective floor ${obj.precisionFloor.toFixed(3)}` };
   }
-  if (obj.kind === "precision_at_recall" && m.recall < obj.recallFloor) {
+  if (obj.kind === "precision_at_recall" && m.recall < obj.recallFloor - (margins.recall ?? 0)) {
     return { ok: false, reason: `recall ${m.recall.toFixed(3)} below objective floor ${obj.recallFloor.toFixed(3)}` };
   }
   return { ok: true };
@@ -488,6 +492,123 @@ function orderGroupsByAttributeRoundRobin<T extends { key: string; sig: string }
   return result;
 }
 
+/**
+ * Relative precision floor. Never require MORE precision than the baseline
+ * already delivers (minus a tolerance), so a "precision ≥ X" objective can never
+ * be strictly unachievable (the reason iteration can churn 10 rounds and promote
+ * nothing). Returns null when no floor is requested.
+ */
+export function relativePrecisionFloor(
+  requestedFloor: number | null,
+  baselinePrecision: number,
+  tolerance = 0.03
+): number | null {
+  if (requestedFloor == null) return null;
+  return Math.max(0, Math.min(requestedFloor, baselinePrecision - tolerance));
+}
+
+/**
+ * Normal-approx half-width of a proportion estimate at count n. Used to avoid
+ * rejecting a candidate for a precision gap that is within sampling noise on a
+ * small evaluation set. z≈1.28 ≈ 80% one-sided; p=0.5 is the widest (worst-case)
+ * estimate. Returns 0 for large/invalid n so big samples stay strict.
+ */
+export function proportionNoiseMargin(n: number, p = 0.5, z = 1.28): number {
+  if (!Number.isFinite(n) || n <= 0) return 0.5;
+  const margin = z * Math.sqrt((p * (1 - p)) / n);
+  return Number.isFinite(margin) ? Math.min(0.5, margin) : 0.5;
+}
+
+export interface CVMetrics {
+  folds: CoreMetrics[];
+  mean: CoreMetrics;
+  std: { precision: number; recall: number; f1: number };
+  /** Mean of the objective score across folds. */
+  objectiveMean: number;
+  /** Std of the objective score across folds (fold-to-fold instability). */
+  objectiveStd: number;
+  /** Number of non-empty folds actually used. */
+  k: number;
+}
+
+const mean = (xs: number[]): number => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
+const stdev = (xs: number[]): number => {
+  if (xs.length < 2) return 0;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((s, x) => s + (x - m) * (x - m), 0) / (xs.length - 1));
+};
+
+/**
+ * K-fold cross-validated metrics over the SAME predictions. Instead of scoring a
+ * candidate on one small holdout (whose luck dominates the number), partition the
+ * evaluated rows into k group-aware, label-stratified folds and compute the mean
+ * and fold-to-fold spread of each metric. The mean is a lower-variance estimate;
+ * the spread quantifies how noisy that estimate is. Near-duplicate GROUPS are
+ * kept whole (never split across folds) to prevent leakage, mirroring the split.
+ */
+export function crossValidatedMetrics(
+  rows: Array<{ group: string; truth: Decision | null; pred: Decision | null; parseOk?: boolean }>,
+  opts: { k?: number; seed?: string; objective?: Objective } = {}
+): CVMetrics {
+  const objective: Objective = opts.objective ?? { kind: "f1" };
+  const seed = opts.seed || "cv";
+  // Cluster rows by group.
+  const byGroup = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (!byGroup.has(r.group)) byGroup.set(r.group, []);
+    byGroup.get(r.group)!.push(r);
+  }
+  const groupKeys = [...byGroup.keys()];
+  // Stratify groups by their (majority) truth label so each fold has both classes.
+  const labelOf = (g: string): string => {
+    const gr = byGroup.get(g)!;
+    const det = gr.filter((r) => r.truth === "DETECTED").length;
+    return det * 2 >= gr.length ? "DETECTED" : "NOT_DETECTED";
+  };
+  const k = Math.max(2, Math.min(10, opts.k ?? 5, Math.max(2, groupKeys.length)));
+  const foldOfGroup = new Map<string, number>();
+  const byLabel = new Map<string, string[]>();
+  for (const g of groupKeys) {
+    const l = labelOf(g);
+    if (!byLabel.has(l)) byLabel.set(l, []);
+    byLabel.get(l)!.push(g);
+  }
+  for (const [label, gks] of byLabel) {
+    const ordered = [...gks].sort((a, b) => hashString(seed + label + a) - hashString(seed + label + b));
+    ordered.forEach((g, i) => foldOfGroup.set(g, i % k));
+  }
+  const folds: CoreMetrics[] = [];
+  const objScores: number[] = [];
+  for (let f = 0; f < k; f++) {
+    const foldRows = rows.filter((r) => foldOfGroup.get(r.group) === f);
+    if (foldRows.length === 0) continue;
+    const c = confusionFromPairs(
+      foldRows.map((r) => ({ predicted: r.pred, truth: r.truth, parseOk: r.parseOk !== false }))
+    );
+    const m = metricsFromConfusion(c);
+    folds.push(m);
+    objScores.push(objectiveScore(m, c, objective));
+  }
+  const meanMetrics: CoreMetrics = {
+    precision: round4(mean(folds.map((m) => m.precision))),
+    recall: round4(mean(folds.map((m) => m.recall))),
+    f1: round4(mean(folds.map((m) => m.f1))),
+    accuracy: round4(mean(folds.map((m) => m.accuracy))),
+  };
+  return {
+    folds,
+    mean: meanMetrics,
+    std: {
+      precision: round4(stdev(folds.map((m) => m.precision))),
+      recall: round4(stdev(folds.map((m) => m.recall))),
+      f1: round4(stdev(folds.map((m) => m.f1))),
+    },
+    objectiveMean: round4(mean(objScores)),
+    objectiveStd: round4(stdev(objScores)),
+    k: folds.length,
+  };
+}
+
 export interface SelectionConfig {
   goalF1: number | null;
   /** Reject a candidate whose precision drops more than this below baseline. */
@@ -501,6 +622,12 @@ export interface SelectionConfig {
   objective?: Objective;
   /** Baseline's score on the objective (defaults to baseline.f1). */
   baselineScore?: number;
+  /**
+   * Sampling-noise margin (0..1). A candidate is not rejected for a precision
+   * gap SMALLER than this below the floor, since on a small eval set such a gap
+   * is within the margin of error. Defaults to 0 (strict).
+   */
+  precisionNoiseMargin?: number;
 }
 
 export const DEFAULT_SELECTION_CONFIG: Omit<SelectionConfig, "goalF1" | "precisionFloor" | "baselineComplexity"> = {
@@ -536,6 +663,7 @@ export function selectBestCandidate(
     config.precisionFloor ??
     objectiveFloor ??
     (baseline.precision >= 0.85 ? baseline.precision - config.precisionDropTolerance : null);
+  const noiseMargin = Math.max(0, config.precisionNoiseMargin ?? 0);
 
   const viable: CandidateResult[] = [];
   for (const c of candidates) {
@@ -550,16 +678,16 @@ export function selectBestCandidate(
     if (cScore <= baselineScore) {
       rej.push(`${objName} ${cScore.toFixed(3)} does not beat baseline ${baselineScore.toFixed(3)}`);
     }
-    const objElig = objectiveEligible(c.metrics, objective);
+    const objElig = objectiveEligible(c.metrics, objective, { precision: noiseMargin, recall: noiseMargin });
     if (!objElig.ok) {
       rej.push(objElig.reason || "objective constraint not met");
     }
-    if (!explicitFloor && baseline.precision - c.metrics.precision > config.precisionDropTolerance) {
+    if (!explicitFloor && baseline.precision - c.metrics.precision > config.precisionDropTolerance + noiseMargin) {
       rej.push(
         `precision collapse ${c.metrics.precision.toFixed(3)} vs baseline ${baseline.precision.toFixed(3)}`
       );
     }
-    if (precisionFloor != null && c.metrics.precision < precisionFloor) {
+    if (precisionFloor != null && c.metrics.precision < precisionFloor - noiseMargin) {
       rej.push(`precision ${c.metrics.precision.toFixed(3)} below floor ${precisionFloor.toFixed(3)}`);
     }
     c.rejected_reasons = rej;
