@@ -10,7 +10,7 @@ export class RunRepository {
   getRunPredictions(runId: string): Prediction[] {
     const run = this.getRunById(runId);
     if (!run) return [];
-    return sortByImageId(dataStore.all<Prediction>(
+    const rows = sortByImageId(dataStore.all<any>(
       `SELECT p.*, di.image_description, di.segment_tags
        FROM predictions p
        LEFT JOIN dataset_items di ON di.dataset_id = ? AND di.image_id = p.image_id
@@ -18,6 +18,10 @@ export class RunRepository {
       run.dataset_id,
       runId
     ));
+    return rows.map((r) => ({
+      ...r,
+      sibling_detections: parseSiblingDetections(r.sibling_detections),
+    })) as Prediction[];
   }
 
   listRuns(filters: {
@@ -108,8 +112,8 @@ export class RunRepository {
     dataStore.run(
       `INSERT INTO predictions (
         prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence,
-        parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count, error_tag
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count, error_tag, sibling_detections
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       pred.prediction_id,
       pred.run_id,
       pred.image_id,
@@ -124,7 +128,8 @@ export class RunRepository {
       pred.parse_fix_suggestion ?? null,
       pred.inference_runtime_ms ?? null,
       pred.parse_retry_count ?? 0,
-      errorTag
+      errorTag,
+      JSON.stringify(pred.sibling_detections ?? [])
     );
   }
 
@@ -160,3 +165,16 @@ export class RunRepository {
 }
 
 export const runRepository = new RunRepository();
+
+function parseSiblingDetections(value: unknown): Array<{ label: string; reasoning?: string }> {
+  if (Array.isArray(value)) return value as Array<{ label: string; reasoning?: string }>;
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}

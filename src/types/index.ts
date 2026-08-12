@@ -4,6 +4,22 @@ export type Decision = "DETECTED" | "NOT_DETECTED";
 export type SplitType = "MASTER" | "GOLDEN" | "ITERATION" | "HELD_OUT_EVAL" | "CUSTOM";
 export type PrimaryMetric = "precision" | "recall" | "f1";
 export type DetectionCategory = "INCORRECT_CAPTURE" | "HAZARD_IDENTIFICATION";
+
+// ============ Production-Mirror (Slice S0) ============
+
+/** Execution mode carried on each prompt version (unified version model). */
+export type ExecutionMode = "DEVELOPMENT_MODE" | "PRODUCTION_MODE";
+
+/**
+ * Provenance of a PRODUCTION_MODE version relative to its frozen snapshot.
+ * `exact_replication`: only the target detection was authored/iterated; all other
+ * members, the shared preamble, and pinned params are byte-identical to the
+ * snapshot. `modified_replication`: a non-target member, the preamble, or params
+ * were changed.
+ */
+export type ProvenanceKind = "exact_replication" | "modified_replication";
+
+export type CompositionMemberRole = "detection" | "ic_correct" | "ic_incorrect";
 export type ErrorTag =
   | "MISSED_DETECTION"
   | "FALSE_POSITIVE"
@@ -35,6 +51,10 @@ export interface Detection {
   segment_taxonomy: string[];
   metric_thresholds: MetricThresholds;
   approved_prompt_version: string | null;
+  /** Raw production label that maps to target DETECTED in the aggregate. */
+  production_label?: string | null;
+  /** Justification captured when held-out thresholds are waived on approval. */
+  approval_override_reason?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -67,6 +87,61 @@ export interface PromptVersion {
   created_at: string;
   golden_set_regression_result: RegressionResult | null;
   source_prompt_version_id?: string | null;
+  /** Execution mode; defaults to DEVELOPMENT_MODE for existing versions. */
+  mode: ExecutionMode;
+  /** Associated production context name (PRODUCTION_MODE only). */
+  context_name?: string | null;
+  /** Target detection label within the aggregate (PRODUCTION_MODE only). */
+  production_label?: string | null;
+  /** Immutable snapshot this version was derived from (PRODUCTION_MODE only). */
+  production_snapshot_id?: string | null;
+  provenance_kind?: ProvenanceKind | null;
+  /** Editable working copy of the aggregate composition (PRODUCTION_MODE only). */
+  composition?: PromptComposition | null;
+}
+
+// ============ Production Snapshot & Composition ============
+
+/** One entry in a context's ordered aggregate. */
+export interface CompositionMember {
+  role: CompositionMemberRole;
+  label: string;
+  description: string;
+  position: number;
+  /** Whether this member participates in the compiled request. */
+  enabled: boolean;
+  /** True for the detection under development. */
+  is_target: boolean;
+  /** Lab-only: when the target isn't applied, this member's reasoning fills the evidence. */
+  is_support?: boolean;
+}
+
+/** Editable aggregate working copy stored on a PRODUCTION_MODE version. */
+export interface PromptComposition {
+  context_name: string;
+  google_model: string;
+  thinking_level: string;
+  members: CompositionMember[];
+  /** Whether the target member uses the frozen production wording or the lab's structured fields. */
+  target_source?: "baseline" | "structured";
+  /** Shared instruction block before the numbered detections; defaults to the snapshot's frozen preamble. */
+  preamble?: string;
+}
+
+/** Immutable capture of a production context's compiled aggregate. */
+export interface ProductionSnapshot {
+  snapshot_id: string;
+  context_name: string;
+  source_revision: string;
+  imported_at: string;
+  google_model: string;
+  thinking_level: string;
+  ordered_members: CompositionMember[];
+  built_prompt: string;
+  response_schema: Record<string, unknown>;
+  raw_source: string;
+  checksum: string;
+  import_method: string;
 }
 
 export type VersionNoteEntryOrigin = "auto_created" | "auto_diff" | "auto_hil" | "user";
@@ -180,6 +255,14 @@ export interface Prediction {
   reviewer_note: string | null;
   image_description?: string | null;
   corrected_at: string | null;
+  /** Non-target labels emitted by an aggregate run; stored/exported, not scored. */
+  sibling_detections?: SiblingDetection[];
+}
+
+/** A non-target detection emitted alongside the target in an aggregate run. */
+export interface SiblingDetection {
+  label: string;
+  reasoning?: string;
 }
 
 // ============ Metrics ============

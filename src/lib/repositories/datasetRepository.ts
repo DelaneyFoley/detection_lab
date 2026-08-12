@@ -1,6 +1,9 @@
 import crypto from "crypto";
 import { dataStore } from "@/lib/services";
 import { sortByImageId } from "@/lib/imageIdSort";
+import { deriveImageCorrection, type AnnotatorCorrection, type QaSampleInput, type DiscrepancyInput } from "@/lib/annotatorCorrections";
+
+export type { AnnotatorCorrection, StageCorrection } from "@/lib/annotatorCorrections";
 
 export class DatasetRepository {
   getDatasetById(datasetId: string): any | undefined {
@@ -246,8 +249,56 @@ export class DatasetRepository {
     tx(items);
   }
 
-  deleteDatasetItem(itemId: string) {
-    dataStore.run("DELETE FROM dataset_items WHERE item_id = ?", itemId);
+  deleteDatasetItem(itemId: string): { affectedRunIds: string[] } {
+    const item = dataStore.get<{ dataset_id: string; image_id: string }>(
+      "SELECT dataset_id, image_id FROM dataset_items WHERE item_id = ?",
+      itemId
+    );
+    if (!item) {
+      dataStore.run("DELETE FROM dataset_items WHERE item_id = ?", itemId);
+      return { affectedRunIds: [] };
+    }
+
+    // Every run built on this dataset that produced a prediction for this image
+    // must have that prediction removed too, so deleted images disappear from
+    // inference runs (and their metrics).
+    const affected = dataStore.all<{ run_id: string }>(
+      `SELECT DISTINCT p.run_id FROM predictions p
+         JOIN runs r ON r.run_id = p.run_id
+        WHERE p.image_id = ? AND r.dataset_id = ?`,
+      item.image_id,
+      item.dataset_id
+    );
+
+    const tx = dataStore.transaction((store, imageId: string, targetItemId: string, runIds: string[]) => {
+      if (runIds.length > 0) {
+        const placeholders = runIds.map(() => "?").join(",");
+        const predSubquery = `SELECT prediction_id FROM predictions WHERE image_id = ? AND run_id IN (${placeholders})`;
+        // Clear FK dependents of the predictions we're about to remove.
+        store.run(`DELETE FROM groundtruth_corrections WHERE prediction_id IN (${predSubquery})`, imageId, ...runIds);
+        store.run(`DELETE FROM review_flags WHERE prediction_id IN (${predSubquery})`, imageId, ...runIds);
+        store.run(
+          `DELETE FROM predictions WHERE image_id = ? AND run_id IN (${placeholders})`,
+          imageId,
+          ...runIds
+        );
+        // Keep run image counts consistent with the removed prediction.
+        store.run(
+          `UPDATE runs
+              SET total_images = max(0, total_images - 1),
+                  processed_images = max(0, processed_images - 1)
+            WHERE run_id IN (${placeholders})`,
+          ...runIds
+        );
+      }
+      // Clear FK dependents of the dataset item, then the item itself.
+      store.run("DELETE FROM qa_samples WHERE item_id = ?", targetItemId);
+      store.run("DELETE FROM review_flags WHERE dataset_item_id = ?", targetItemId);
+      store.run("DELETE FROM dataset_items WHERE item_id = ?", targetItemId);
+    });
+    tx(item.image_id, itemId, affected.map((r) => r.run_id));
+
+    return { affectedRunIds: affected.map((r) => r.run_id) };
   }
 
   updateDatasetMeta(datasetId: string, name: string, detectionId: string | null, splitType: string, updatedAt: string) {
@@ -537,8 +588,8 @@ export class DatasetRepository {
         childIds.push(childId);
 
         store.run(
-          `INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, qa_status, assigned_to, linked_dataset_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, '', ?, 'assigned', ?, ?, ?, ?)`,
+          `INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, qa_status, assigned_to, linked_dataset_id, segment_taxonomy, exclude_attributes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, '', ?, 'assigned', ?, ?, ?, ?, ?, ?)`,
           childId,
           `${parent.name} - ${annotator}`,
           parent.detection_id,
@@ -546,6 +597,8 @@ export class DatasetRepository {
           items.length,
           annotator,
           input.parentId,
+          parent.segment_taxonomy ?? "[]",
+          parent.exclude_attributes ?? 0,
           now,
           now
         );
@@ -607,34 +660,106 @@ export class DatasetRepository {
     return conflicts;
   }
 
-  getCorrections(childDatasetId: string): Array<{ image_id: string; child_label: string; parent_label: string; child_tags: string[]; parent_tags: string[] }> {
+  /**
+   * Corrections attributed to QA review or discrepancy review for a single
+   * annotator's (child) dataset. A field (label or a specific attribute) is
+   * only counted when it was changed BY a reviewer — QA (any round, from
+   * qa_samples) or discrepancy resolution (from the parent's resolution logs).
+   * The annotator's own between-round self-revisions never create these
+   * records, so they are naturally excluded. An annotator is only charged
+   * where THEIR value differed from the corrected/resolved value. Attribute
+   * corrections are omitted entirely when the parent has exclude_attributes.
+   */
+  getAnnotatorCorrections(childDatasetId: string): AnnotatorCorrection[] {
     const child = this.getDatasetById(childDatasetId);
     if (!child || !child.linked_dataset_id) return [];
+    const parentId = child.linked_dataset_id;
+    const parent = this.getDatasetById(parentId);
+    const excludeAttributes = !!parent?.exclude_attributes;
 
-    const rows = dataStore.all<{ image_id: string; child_label: string; child_tags: string; parent_label: string; parent_tags: string }>(
-      `SELECT
-        ci.image_id,
-        ci.ground_truth_label AS child_label,
-        ci.segment_tags AS child_tags,
-        pi.ground_truth_label AS parent_label,
-        pi.segment_tags AS parent_tags
-      FROM dataset_items ci
-      JOIN dataset_items pi ON ci.image_id = pi.image_id AND pi.dataset_id = ?
-      WHERE ci.dataset_id = ?
-        AND ci.ground_truth_label IS NOT NULL
-        AND pi.ground_truth_label IS NOT NULL
-        AND (ci.ground_truth_label != pi.ground_truth_label OR ci.segment_tags != pi.segment_tags)`,
-      child.linked_dataset_id,
+    const parseTags = (raw: unknown): string[] => {
+      if (raw == null) return [];
+      const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+      try {
+        const parsed = JSON.parse(text || "[]");
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const childItems = dataStore.all<{ image_id: string; label: string | null; tags: string }>(
+      "SELECT image_id, ground_truth_label AS label, segment_tags AS tags FROM dataset_items WHERE dataset_id = ?",
       childDatasetId
     );
+    const childByImage = new Map(childItems.map((i) => [i.image_id, i]));
 
-    return rows.map((r) => ({
-      image_id: r.image_id,
-      child_label: r.child_label,
-      parent_label: r.parent_label,
-      child_tags: JSON.parse(r.child_tags || "[]"),
-      parent_tags: JSON.parse(r.parent_tags || "[]"),
-    }));
+    const parentItems = dataStore.all<{ image_id: string; label: string | null; tags: string }>(
+      "SELECT image_id, ground_truth_label AS label, segment_tags AS tags FROM dataset_items WHERE dataset_id = ?",
+      parentId
+    );
+    const parentByImage = new Map(parentItems.map((i) => [i.image_id, i]));
+
+    // Non-accepted QA samples grouped per image, earliest attempt first.
+    const qaRows = dataStore.all<{ image_id: string | null; outcome: string | null; original_label: string | null; corrected_label: string | null; original_tags: string | null; corrected_tags: string | null }>(
+      `SELECT di.image_id, qs.outcome, qs.original_label, qs.corrected_label, qs.original_tags, qs.corrected_tags
+       FROM qa_samples qs
+       JOIN dataset_items di ON qs.item_id = di.item_id
+       WHERE qs.dataset_id = ? AND qs.outcome IS NOT NULL AND qs.outcome <> 'accepted'
+       ORDER BY qs.attempt_number ASC, qs.created_at ASC`,
+      childDatasetId
+    );
+    const qaByImage = new Map<string, QaSampleInput[]>();
+    for (const s of qaRows) {
+      if (!s.image_id || !s.outcome) continue;
+      const list = qaByImage.get(s.image_id) ?? [];
+      list.push({
+        outcome: s.outcome,
+        original_label: s.original_label,
+        corrected_label: s.corrected_label,
+        original_tags: s.original_tags != null ? parseTags(s.original_tags) : null,
+        corrected_tags: s.corrected_tags != null ? parseTags(s.corrected_tags) : null,
+      });
+      qaByImage.set(s.image_id, list);
+    }
+
+    // Discrepancy resolutions per image (n-way).
+    const discByImage = new Map<string, DiscrepancyInput>();
+    const logs = dataStore.all<{ details: string }>(
+      "SELECT details FROM qa_logs WHERE dataset_id = ? AND action = 'nway_discrepancy_resolved'",
+      parentId
+    );
+    for (const log of logs) {
+      let d: { image_id?: string; resolved_label?: string | null; corrected_tags?: unknown };
+      try {
+        d = JSON.parse(log.details || "{}");
+      } catch {
+        continue;
+      }
+      if (!d.image_id) continue;
+      discByImage.set(d.image_id, {
+        resolved_label: d.resolved_label ?? null,
+        corrected_tags: d.corrected_tags != null ? parseTags(d.corrected_tags) : null,
+      });
+    }
+
+    const images = new Set<string>([...qaByImage.keys(), ...discByImage.keys()]);
+    const result: AnnotatorCorrection[] = [];
+    for (const img of images) {
+      const childCur = childByImage.get(img);
+      const parentFin = parentByImage.get(img);
+      // Discrepancy attribution needs this child's value; skip it otherwise.
+      const discrepancy = childCur ? (discByImage.get(img) ?? null) : null;
+      const derived = deriveImageCorrection({
+        qaSamples: qaByImage.get(img) ?? [],
+        discrepancy,
+        childCurrent: { label: childCur?.label ?? null, tags: parseTags(childCur?.tags ?? "[]") },
+        parentFinal: { label: parentFin?.label ?? null, tags: parseTags(parentFin?.tags ?? "[]") },
+        excludeAttributes,
+      });
+      if (derived) result.push({ image_id: img, ...derived });
+    }
+    return result;
   }
 
   mergeChildrenIntoParent(parentId: string, resolutions: Array<{ image_id: string; label: string; tags?: string[] }>, excludeAttributes = false): void {

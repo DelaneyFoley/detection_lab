@@ -207,6 +207,7 @@ export function AdminPrompts() {
         <div className="app-card px-4 py-6 text-sm text-[var(--app-text-muted)]">Loading templates...</div>
       ) : (
         <>
+          <ProductionContexts />
           <SectionBlock
             kicker="Workbench Templates"
             title="Generation and feedback templates"
@@ -269,6 +270,207 @@ export function AdminPrompts() {
         </>
       )}
     </div>
+  );
+}
+
+type ContextMeta = {
+  name: string;
+  checksum: string;
+  has_vlm: boolean;
+  detection_count: number;
+  google_model: string;
+  thinking_level: string;
+  frozen_count: number;
+  drifted: boolean;
+};
+
+type CompiledMember = {
+  role: string;
+  label: string;
+  description: string;
+  position: number;
+};
+
+type CompiledContext = {
+  name: string;
+  built_prompt: string;
+  members: CompiledMember[];
+  google_model: string;
+  thinking_level: string;
+};
+
+type ContextsResponse = {
+  fetched_at: string | null;
+  source_revision: string | null;
+  ai_services_path: string | null;
+  context_count: number;
+  contexts_meta: ContextMeta[];
+  catalog: { contexts: CompiledContext[] } | null;
+};
+
+function ProductionContexts() {
+  const [data, setData] = useState<ContextsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/admin/contexts");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Failed to load production contexts");
+      setData(json);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load production contexts");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    setError("");
+    try {
+      const res = await fetch("/api/admin/contexts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "refresh" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || json?.hint || "Failed to refresh production contexts");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh production contexts");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const compiledByName = new Map((data?.catalog?.contexts ?? []).map((c) => [c.name, c]));
+  const anyDrift = (data?.contexts_meta ?? []).some((c) => c.drifted);
+
+  return (
+    <section className="app-card-strong space-y-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="app-kicker mb-2">Production Source</div>
+          <h3 className="text-lg font-semibold text-white">Production Contexts</h3>
+          <p className="mt-1 text-sm text-[var(--app-text-muted)]">
+            Read-only aggregate compositions compiled from the production <code>ai-services</code> source. Selecting a
+            context for a prompt version freezes an immutable snapshot; refreshing here never changes previously saved
+            versions.
+          </p>
+        </div>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="app-btn app-btn-primary app-btn-md text-sm disabled:opacity-50"
+        >
+          {refreshing ? "Refreshing…" : "Refresh Production Contexts"}
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--app-text-muted)]">
+        <span>
+          Source revision:{" "}
+          <span className="font-mono text-gray-300">
+            {data?.source_revision ? data.source_revision.slice(0, 8) : "—"}
+          </span>
+        </span>
+        <span>
+          Last fetched:{" "}
+          <span className="text-gray-300">{data?.fetched_at ? new Date(data.fetched_at).toLocaleString() : "never"}</span>
+        </span>
+        <span>
+          Contexts: <span className="text-gray-300">{data?.context_count ?? 0}</span>
+        </span>
+        {data?.ai_services_path && (
+          <span className="truncate">
+            Path: <span className="font-mono text-gray-400">{data.ai_services_path}</span>
+          </span>
+        )}
+      </div>
+
+      {error && <div className="rounded-lg border border-red-500/30 bg-red-900/30 px-3 py-2 text-sm text-red-300">{error}</div>}
+      {anyDrift && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-900/20 px-3 py-2 text-xs text-amber-300">
+          One or more contexts have changed in production since a snapshot was frozen. Existing saved versions are
+          unaffected; create a new version to capture the latest.
+        </div>
+      )}
+
+      {loading ? (
+        <p className="text-sm text-[var(--app-text-muted)]">Loading contexts…</p>
+      ) : (data?.contexts_meta ?? []).length === 0 ? (
+        <p className="text-sm text-[var(--app-text-muted)]">
+          No contexts cached yet. Click “Refresh Production Contexts” to compile from the production source.
+        </p>
+      ) : (
+        <div className="divide-y divide-white/5 rounded-lg border border-white/8">
+          {(data?.contexts_meta ?? []).map((c) => {
+            const compiled = compiledByName.get(c.name);
+            const isOpen = expanded === c.name;
+            return (
+              <div key={c.name} className="text-sm">
+                <button
+                  type="button"
+                  onClick={() => setExpanded(isOpen ? null : c.name)}
+                  className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left hover:bg-white/5"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-mono text-xs text-gray-200">{c.name}</span>
+                    {c.drifted && (
+                      <span className="shrink-0 rounded bg-amber-600/20 px-1.5 py-0.5 text-[10px] text-amber-300">
+                        drift
+                      </span>
+                    )}
+                    {c.frozen_count > 0 && (
+                      <span className="shrink-0 rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-gray-400">
+                        {c.frozen_count} snapshot{c.frozen_count === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3 text-[11px] text-gray-500">
+                    <span>{c.detection_count} det</span>
+                    <span className="font-mono">{c.google_model}</span>
+                    <span>{isOpen ? "Collapse" : "Expand"}</span>
+                  </div>
+                </button>
+                {isOpen && compiled && (
+                  <div className="space-y-3 border-t border-white/5 px-4 py-3">
+                    <div>
+                      <div className="app-label mb-1 text-[11px]">Ordered members</div>
+                      <ol className="space-y-1">
+                        {compiled.members.map((m, i) => (
+                          <li key={`${m.label}-${i}`} className="text-xs text-gray-300">
+                            <span className="text-gray-500">{m.position}.</span>{" "}
+                            <span className="font-medium text-gray-200">{m.label}</span>{" "}
+                            <span className="text-[10px] uppercase tracking-wide text-gray-500">{m.role}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    <div>
+                      <div className="app-label mb-1 text-[11px]">Compiled prompt (read-only)</div>
+                      <pre className="max-h-64 overflow-y-auto rounded border border-white/8 bg-[rgba(5,13,20,0.72)] p-3 text-[11px] text-gray-300 whitespace-pre-wrap">
+                        {compiled.built_prompt}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 

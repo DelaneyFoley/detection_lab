@@ -237,26 +237,9 @@ export function HilReview({ detection }: { detection: Detection }) {
     reviewer_note: string | null;
     update_ground_truth: boolean;
   }>) => {
-    const res = await fetch("/api/hil", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prediction_id: predictionId,
-        ...updates,
-        update_ground_truth:
-          updates.update_ground_truth ??
-          (Object.prototype.hasOwnProperty.call(updates, "ground_truth_label")
-            ? true
-            : runData?.split_type === "ITERATION"),
-      }),
-    });
-    const payload = await res.json().catch(() => null);
-    if (!res.ok) {
-      console.error("Failed to update prediction", payload);
-      return;
-    }
-
-    // Refresh predictions
+    // Optimistic update — apply the label/ground-truth change to the UI
+    // immediately, then persist. Roll back if the request fails.
+    const prevPredictions = predictions;
     setPredictions((prev) =>
       prev.map((p) => {
         if (p.prediction_id !== predictionId) return p;
@@ -279,6 +262,32 @@ export function HilReview({ detection }: { detection: Detection }) {
         return next;
       })
     );
+
+    const res = await fetch("/api/hil", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prediction_id: predictionId,
+        ...updates,
+        update_ground_truth:
+          updates.update_ground_truth ??
+          (Object.prototype.hasOwnProperty.call(updates, "ground_truth_label")
+            ? true
+            : runData?.split_type === "ITERATION"),
+      }),
+    });
+    const payload = await res.clone().json().catch(() => null);
+    if (!res.ok) {
+      // Roll back the optimistic change.
+      setPredictions(prevPredictions);
+      const fallbackText = payload ? null : await res.text().catch(() => null);
+      const message =
+        (typeof payload?.error === "string" && payload.error.trim()) ||
+        (typeof fallbackText === "string" && fallbackText.trim()) ||
+        `Failed to update prediction (${res.status})`;
+      notify({ tone: "error", message });
+      return;
+    }
 
     if (payload?.run_id && payload?.metrics) {
       setRunData((prev: any) =>
@@ -313,6 +322,7 @@ export function HilReview({ detection }: { detection: Detection }) {
   };
 
   const [exporting, setExporting] = useState(false);
+  const [recomputingAll, setRecomputingAll] = useState(false);
   const [finalized, setFinalized] = useState<boolean | null>(null);
   const [finalizing, setFinalizing] = useState(false);
   const { notify } = useAppFeedback();
@@ -359,6 +369,33 @@ export function HilReview({ detection }: { detection: Detection }) {
       notify({ tone: "error", message: error instanceof Error ? error.message : "Failed to finalize HIL review" });
     } finally {
       setFinalizing(false);
+    }
+  };
+
+  const recomputeAllMetrics = async () => {
+    if (recomputingAll) return;
+    setRecomputingAll(true);
+    try {
+      const res = await fetch("/api/runs/recompute-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ detection_id: detection.detection_id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        notify({
+          tone: "success",
+          message: `Recomputed ${data.updated ?? 0} run${data.updated === 1 ? "" : "s"} against current ground truth.`,
+        });
+        triggerRefresh();
+        loadRuns();
+      } else {
+        notify({ tone: "error", message: data?.error || "Failed to recompute run metrics" });
+      }
+    } catch (error) {
+      notify({ tone: "error", message: error instanceof Error ? error.message : "Failed to recompute run metrics" });
+    } finally {
+      setRecomputingAll(false);
     }
   };
 
@@ -564,6 +601,14 @@ export function HilReview({ detection }: { detection: Detection }) {
               {exporting ? "Exporting..." : "Export to Excel"}
             </button>
           )}
+          <button
+            onClick={recomputeAllMetrics}
+            disabled={recomputingAll}
+            title="Re-score every run for this detection against the dataset's current ground truth so metrics are comparable across runs"
+            className="app-btn app-btn-subtle app-btn-sm text-xs whitespace-nowrap disabled:opacity-40"
+          >
+            {recomputingAll ? "Recomputing..." : "Recompute All vs Current GT"}
+          </button>
           {selectedRunId && (
             <button
               onClick={finalizeHilReview}
@@ -579,6 +624,36 @@ export function HilReview({ detection }: { detection: Detection }) {
             </button>
           )}
         </div>
+
+        {runData?.decoding_params?.mode === "PRODUCTION_MODE" && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
+            <span className="rounded bg-blue-600/15 px-2 py-0.5 text-blue-200">Production Replication</span>
+            {runData.decoding_params.provenance_kind && (
+              <span className="rounded bg-white/10 px-2 py-0.5">
+                {runData.decoding_params.provenance_kind === "modified_replication" ? "Modified replication" : "Exact replication"}
+              </span>
+            )}
+            <span>
+              context: <span className="text-gray-300">{runData.decoding_params.context_name || "—"}</span>
+            </span>
+            <span>
+              model: <span className="text-gray-300">{runData.model_used || runData.decoding_params.model || "—"}</span>
+            </span>
+            <span>
+              thinking:{" "}
+              <span className="text-gray-300">
+                {runData.decoding_params.thinking_level_requested || "—"}
+                {runData.decoding_params.thinking_applied === false ? " (not applied)" : ""}
+              </span>
+            </span>
+            <span>
+              source:{" "}
+              <span className="font-mono text-gray-300">
+                {String(runData.decoding_params.source_revision || "").slice(0, 8) || "—"}
+              </span>
+            </span>
+          </div>
+        )}
 
         {/* Filters */}
         {predictions.length > 0 && (
@@ -1344,6 +1419,21 @@ function ImageReviewMode({
               Prediction:{" "}
               <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
             </p>
+            {Array.isArray(p.sibling_detections) && p.sibling_detections.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1 pt-1">
+                <span className="text-gray-500">Context siblings:</span>
+                {siblingLabelCounts(p.sibling_detections).map(([label, count]) => (
+                  <span
+                    key={label}
+                    className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-gray-300"
+                    title="Non-target detection emitted by the production aggregate (evidence only, not scored)"
+                  >
+                    {label}
+                    {count > 1 ? ` ×${count}` : ""}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1538,6 +1628,18 @@ function ImageReviewMode({
       </div>
     </div>
   );
+}
+
+function siblingLabelCounts(
+  siblings: Array<{ label: string; reasoning?: string }>
+): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const s of siblings) {
+    const label = String(s?.label || "").trim();
+    if (!label) continue;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()];
 }
 
 function normalizeSegmentTags(value: unknown): string[] {

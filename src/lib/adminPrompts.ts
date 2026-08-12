@@ -2,14 +2,6 @@ import {
   DEFAULT_CATEGORY_PROMPT_TEMPLATES,
 } from "@/lib/detectionPrompts";
 
-export const REQUIRED_USER_PROMPT_JSON_BLOCK = `Return ONLY this JSON:
-{
-  "detection_code": "{{DETECTION_CODE}}",
-  "decision": "DETECTED" or "NOT_DETECTED",
-  "confidence": <float 0-1>,
-  "evidence": "<short phrase describing visual basis>"
-}`;
-
 export const DEFAULT_PROMPT_ASSIST_TEMPLATE = `You are generating a lean, production-ready binary vision detection spec for underwriting.
 
 User request:
@@ -143,8 +135,7 @@ export const DEFAULT_HAZARD_IDENTIFICATION_USER_PROMPT =
 export function renderPromptAssistTemplate(template: string, requestText: string, detectionCategory: string): string {
   return template
     .replaceAll("{{USER_REQUEST}}", requestText)
-    .replaceAll("{{DETECTION_CATEGORY}}", detectionCategory)
-    .replaceAll("{{REQUIRED_USER_PROMPT_JSON_BLOCK}}", REQUIRED_USER_PROMPT_JSON_BLOCK);
+    .replaceAll("{{DETECTION_CATEGORY}}", detectionCategory);
 }
 
 export function renderPromptFeedbackTemplate(

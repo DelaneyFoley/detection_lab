@@ -5,6 +5,7 @@ import type { Prediction } from "@/types";
 import type { IterationJob, RoundSummary } from "@/lib/promptIteration/types";
 import { toReviewedRows, summarizeReviewedRows } from "@/lib/promptIteration/packaging";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
+import { useAppStore } from "@/lib/store";
 
 interface PromptDetail {
   prompt_version_id: string;
@@ -51,6 +52,7 @@ export function PromptIterationPanel({
   apiKey?: string;
 }) {
   const { notify } = useAppFeedback();
+  const { triggerRefresh } = useAppStore();
   const [job, setJob] = useState<IterationJob | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [goalF1, setGoalF1] = useState("");
@@ -114,6 +116,17 @@ export function PromptIterationPanel({
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [job, fetchJob]);
+
+  // When a job finishes it has created new prompt versions — refresh the app so
+  // they appear in prompt/dataset dropdowns everywhere without a manual reload.
+  const refreshedJobKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!job || ACTIVE_STATUSES.has(job.status)) return;
+    const key = `${job.job_id}:${job.status}`;
+    if (refreshedJobKeyRef.current === key) return;
+    refreshedJobKeyRef.current = key;
+    triggerRefresh();
+  }, [job, triggerRefresh]);
 
   // Pre-fill the fixed guidance from the source prompt when the modal opens.
   useEffect(() => {
@@ -238,6 +251,7 @@ export function PromptIterationPanel({
       if (res.ok && data?.job) {
         setJob(data.job);
         if (detailRound?.prompt_version_id === round.prompt_version_id) closeDetail();
+        triggerRefresh();
         notify({ tone: "success", message: `Trashed ${round.label}.` });
       } else {
         notify({ tone: "error", message: data?.error || "Failed to trash prompt" });

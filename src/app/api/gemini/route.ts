@@ -108,10 +108,15 @@ export async function POST(req: NextRequest) {
     parseFailList,
   });
 
+  // Production-mirror runs execute inside a multi-detection aggregate, so also ask
+  // the model to flag cross-detection interference (advisory; target stays the
+  // sole optimization focus).
+  const analysisPromptWithContext = buildAggregateFeedbackAddendum(prompt, analysisPrompt);
+
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: model_override || "gemini-2.5-flash" });
-    const multimodalParts: any[] = [analysisPrompt];
+    const multimodalParts: any[] = [analysisPromptWithContext];
     const sampledForVision = samplePredictionsForVision(predictions, imageLimits);
     for (const p of sampledForVision) {
       multimodalParts.push(
@@ -141,6 +146,25 @@ export async function POST(req: NextRequest) {
     logger.error("Prompt improvement analysis failed", { ...context, error: errMsg });
     return NextResponse.json({ error: errMsg }, { status: 500 });
   }
+}
+
+function buildAggregateFeedbackAddendum(prompt: any, basePrompt: string): string {
+  if (!prompt || prompt.mode !== "PRODUCTION_MODE" || !prompt.composition) return basePrompt;
+  const comp = prompt.composition;
+  const members = Array.isArray(comp.members) ? comp.members : [];
+  const target = members.find((m: any) => m.is_target);
+  const others = members
+    .filter((m: any) => !m.is_target && m.enabled !== false)
+    .map((m: any) => String(m.label));
+  return (
+    basePrompt +
+    `\n\nPRODUCTION-MIRROR CONTEXT\n` +
+    `This detection runs inside the production context "${comp.context_name}" as part of a single aggregate prompt, ` +
+    `alongside these other detections: ${others.join(", ") || "(none)"}. The target label is "${target?.label ?? ""}".\n\n` +
+    `ADDITIONAL ADVISORY ANALYSIS (do not change the target-only optimization focus):\n` +
+    `- Assess whether any OTHER detection's wording in the aggregate conflicts with, overlaps, or bleeds into the target detection in a way that could hurt target performance.\n` +
+    `- If you find such cross-detection interference, add ONE short separate note describing it. Do NOT propose edits to non-target detections; only flag the interference and, if useful, suggest defensive clarifications to the TARGET's own sections.`
+  );
 }
 
 function prioritizeByReviewerNote(items: any[]): any[] {

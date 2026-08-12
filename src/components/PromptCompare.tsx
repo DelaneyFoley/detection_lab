@@ -5,6 +5,7 @@ import { useAppStore } from "@/lib/store";
 import { ConfusionMatrixPanel } from "@/components/MetricsDisplay";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
+import { PromptCompareSynthesisPanel } from "@/components/shared/PromptCompareSynthesisPanel";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import type { Detection, PromptVersion, Dataset, MetricsSummary, Run, Prediction } from "@/types";
 import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
@@ -377,7 +378,31 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           </button>
           {progress && <span className="text-sm text-[var(--app-text-muted)]">{progress}</span>}
         </div>
+        {(() => {
+          const modes = new Set(
+            selectedPromptIds.map(
+              (id) => prompts.find((p) => p.prompt_version_id === id)?.mode || "DEVELOPMENT_MODE"
+            )
+          );
+          if (modes.size < 2) return null;
+          return (
+            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-900/20 px-3 py-2 text-xs text-amber-300">
+              You are comparing versions from different execution modes (Development vs Production Replication). Metrics are
+              produced under different conditions — the production-replication version runs inside the full context aggregate —
+              so treat this as a cross-mode comparison, not an apples-to-apples result.
+            </div>
+          );
+        })()}
       </div>
+
+      {/* Synthesis */}
+      <PromptCompareSynthesisPanel
+        detectionId={detection.detection_id}
+        detectionCode={detection.detection_code}
+        prompts={prompts}
+        runs={runs}
+        selectedPromptIds={selectedPromptIds}
+      />
 
       {/* Results */}
       {resultEntries.length > 0 && (

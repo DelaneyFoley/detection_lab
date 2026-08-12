@@ -40,12 +40,13 @@ export class DetectionRepository {
     decisionRubricJson: string;
     segmentTaxonomyJson: string;
     metricThresholdsJson: string;
+    productionLabel: string | null;
     createdAt: string;
     updatedAt: string;
   }) {
     dataStore.run(
-      `INSERT INTO detections (detection_id, detection_code, display_name, description, detection_category, label_policy, user_prompt_addendum, decision_rubric, segment_taxonomy, metric_thresholds, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO detections (detection_id, detection_code, display_name, description, detection_category, label_policy, user_prompt_addendum, decision_rubric, segment_taxonomy, metric_thresholds, production_label, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.detectionId,
       input.detectionCode,
       input.displayName,
@@ -56,6 +57,7 @@ export class DetectionRepository {
       input.decisionRubricJson,
       input.segmentTaxonomyJson,
       input.metricThresholdsJson,
+      input.productionLabel,
       input.createdAt,
       input.updatedAt
     );
@@ -72,6 +74,8 @@ export class DetectionRepository {
     segmentTaxonomyJson: string;
     metricThresholdsJson: string;
     approvedPromptVersion: string | null;
+    productionLabel: string | null;
+    approvalOverrideReason: string | null;
     updatedAt: string;
   }) {
     dataStore.run(
@@ -85,6 +89,8 @@ export class DetectionRepository {
          segment_taxonomy = ?,
          metric_thresholds = ?,
          approved_prompt_version = ?,
+         production_label = ?,
+         approval_override_reason = ?,
          updated_at = ?
        WHERE detection_id = ?`,
       input.displayName,
@@ -96,6 +102,8 @@ export class DetectionRepository {
       input.segmentTaxonomyJson,
       input.metricThresholdsJson,
       input.approvedPromptVersion,
+      input.productionLabel,
+      input.approvalOverrideReason,
       input.updatedAt,
       input.detectionId
     );

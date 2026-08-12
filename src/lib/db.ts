@@ -267,6 +267,97 @@ function initSchema(db: Database.Database) {
   ensureAttributePillLayoutsTable(db);
   ensurePromptIterationJobsTable(db);
   ensurePromptIterationJobColumns(db);
+  ensurePromptCompareJobsTable(db);
+  ensurePromptGroupMetadataTable(db);
+  ensureProductionSnapshotsTable(db);
+  ensureDetectionProductionColumns(db);
+  ensurePromptVersionModeColumns(db);
+  ensurePredictionSiblingColumn(db);
+}
+
+// Production-mirror foundation (Slice S0). Immutable capture of a production
+// context's compiled aggregate; snapshots are never mutated after creation.
+function ensureProductionSnapshotsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS production_snapshots (
+      snapshot_id TEXT PRIMARY KEY,
+      context_name TEXT NOT NULL,
+      source_revision TEXT NOT NULL DEFAULT '',
+      imported_at TEXT NOT NULL,
+      google_model TEXT NOT NULL DEFAULT '',
+      thinking_level TEXT NOT NULL DEFAULT '',
+      ordered_members TEXT NOT NULL DEFAULT '[]',
+      built_prompt TEXT NOT NULL DEFAULT '',
+      response_schema TEXT NOT NULL DEFAULT '{}',
+      raw_source TEXT NOT NULL DEFAULT '',
+      checksum TEXT NOT NULL DEFAULT '',
+      import_method TEXT NOT NULL DEFAULT 'local_compile'
+    );
+    CREATE INDEX IF NOT EXISTS idx_production_snapshots_context ON production_snapshots(context_name);
+    CREATE INDEX IF NOT EXISTS idx_production_snapshots_imported_at ON production_snapshots(imported_at);
+  `);
+}
+
+// Target label that maps to DETECTED in the aggregate, plus the held-out
+// threshold-override justification (written into the detection's HIL docs).
+function ensureDetectionProductionColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(detections)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "production_label")) {
+    db.exec("ALTER TABLE detections ADD COLUMN production_label TEXT");
+  }
+  if (!columns.some((c) => c.name === "approval_override_reason")) {
+    db.exec("ALTER TABLE detections ADD COLUMN approval_override_reason TEXT");
+  }
+}
+
+// Execution mode lives on the existing prompt_versions row (unified version
+// model). production_snapshot_id has no FK constraint, matching the existing
+// source_prompt_version_id pattern (SQLite can't ADD COLUMN with a FK).
+function ensurePromptVersionModeColumns(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(prompt_versions)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "mode")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN mode TEXT NOT NULL DEFAULT 'DEVELOPMENT_MODE'");
+  }
+  if (!columns.some((c) => c.name === "context_name")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN context_name TEXT");
+  }
+  // Target (production label) now lives on the version so one detection can
+  // target different contexts across versions. Backfill from the detection's
+  // existing target once, so no configured target is lost.
+  if (!columns.some((c) => c.name === "production_label")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN production_label TEXT");
+    db.exec(
+      "UPDATE prompt_versions SET production_label = (SELECT d.production_label FROM detections d WHERE d.detection_id = prompt_versions.detection_id) WHERE production_label IS NULL"
+    );
+  }
+  if (!columns.some((c) => c.name === "production_snapshot_id")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN production_snapshot_id TEXT");
+  }
+  if (!columns.some((c) => c.name === "provenance_kind")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN provenance_kind TEXT");
+  }
+  if (!columns.some((c) => c.name === "composition")) {
+    db.exec("ALTER TABLE prompt_versions ADD COLUMN composition TEXT");
+  }
+  // Terminology migration: provenance_kind values renamed mirror -> replication.
+  db.exec("UPDATE prompt_versions SET provenance_kind = 'exact_replication' WHERE provenance_kind = 'exact_mirror'");
+  db.exec("UPDATE prompt_versions SET provenance_kind = 'modified_replication' WHERE provenance_kind = 'modified_mirror'");
+  const runsTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runs'")
+    .get();
+  if (runsTable) {
+    db.exec("UPDATE runs SET decoding_params = REPLACE(decoding_params, '\"exact_mirror\"', '\"exact_replication\"') WHERE decoding_params LIKE '%exact_mirror%'");
+    db.exec("UPDATE runs SET decoding_params = REPLACE(decoding_params, '\"modified_mirror\"', '\"modified_replication\"') WHERE decoding_params LIKE '%modified_mirror%'");
+  }
+}
+
+// Non-target detection labels emitted by an aggregate run. Stored + exported for
+// manual review; never scored (no sibling ground truth in current scope).
+function ensurePredictionSiblingColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(predictions)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "sibling_detections")) {
+    db.exec("ALTER TABLE predictions ADD COLUMN sibling_detections TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 function ensurePromptVersionNotesColumn(db: Database.Database) {
@@ -770,6 +861,19 @@ function ensureAttributePillLayoutsTable(db: Database.Database) {
   `);
 }
 
+function ensurePromptGroupMetadataTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_group_metadata (
+      detection_id TEXT NOT NULL,
+      base_name_key TEXT NOT NULL,
+      base_name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (detection_id, base_name_key)
+    );
+  `);
+}
+
 function ensurePromptIterationJobsTable(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS prompt_iteration_jobs (
@@ -820,6 +924,40 @@ function ensurePromptIterationJobColumns(db: Database.Database) {
   if (!has("objective")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN objective TEXT");
   if (!has("current_round")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN current_round INTEGER NOT NULL DEFAULT 0");
   if (!has("rounds")) db.exec("ALTER TABLE prompt_iteration_jobs ADD COLUMN rounds TEXT NOT NULL DEFAULT '[]'");
+}
+
+function ensurePromptCompareJobsTable(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_compare_jobs (
+      job_id TEXT PRIMARY KEY,
+      detection_id TEXT NOT NULL,
+      source_prompt_version_ids TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'queued',
+      phase TEXT,
+      progress REAL NOT NULL DEFAULT 0,
+      disagreement_image_count INTEGER NOT NULL DEFAULT 0,
+      evaluate INTEGER NOT NULL DEFAULT 1,
+      analyzer_model TEXT NOT NULL DEFAULT '',
+      analyzer_temperature REAL NOT NULL DEFAULT 0.4,
+      image_cap INTEGER NOT NULL DEFAULT 40,
+      include_agreement_samples INTEGER NOT NULL DEFAULT 1,
+      per_prompt_metrics TEXT,
+      synthesis_analysis TEXT,
+      eval_results TEXT,
+      report TEXT,
+      result_prompt_version_id TEXT,
+      result_run_id TEXT,
+      result_dataset_id TEXT,
+      logs TEXT NOT NULL DEFAULT '[]',
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_prompt_compare_jobs_detection ON prompt_compare_jobs(detection_id);
+    CREATE INDEX IF NOT EXISTS idx_prompt_compare_jobs_status ON prompt_compare_jobs(status);
+  `);
 }
 
 function ensureNotificationsTable(db: Database.Database) {

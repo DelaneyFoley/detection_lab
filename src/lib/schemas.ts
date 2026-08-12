@@ -13,6 +13,7 @@ export const DetectionCreateSchema = z.object({
   decision_rubric: z.array(z.string()).optional(),
   segment_taxonomy: z.array(z.string()).optional(),
   metric_thresholds: z.record(z.string(), z.any()).optional(),
+  production_label: z.string().trim().min(1).nullable().optional(),
 });
 
 export const DetectionUpdateSchema = z.object({
@@ -26,6 +27,8 @@ export const DetectionUpdateSchema = z.object({
   segment_taxonomy: z.array(z.string()).optional(),
   metric_thresholds: z.record(z.string(), z.any()).optional(),
   approved_prompt_version: z.string().trim().min(1).nullable().optional(),
+  production_label: z.string().trim().min(1).nullable().optional(),
+  approval_override_reason: z.string().nullable().optional(),
 });
 
 export const DetectionDeleteSchema = z.object({
@@ -82,6 +85,12 @@ export const PromptCreateSchema = z.object({
   version_notes: z.string().optional(),
   created_by: z.string().trim().min(1).optional(),
   source_prompt_version_id: z.string().trim().min(1).nullable().optional(),
+  mode: z.enum(["DEVELOPMENT_MODE", "PRODUCTION_MODE"]).optional(),
+  context_name: z.string().trim().min(1).nullable().optional(),
+  production_label: z.string().trim().min(1).nullable().optional(),
+  production_snapshot_id: z.string().trim().min(1).nullable().optional(),
+  provenance_kind: z.enum(["exact_replication", "modified_replication"]).nullable().optional(),
+  composition: z.record(z.string(), z.any()).nullable().optional(),
 });
 
 export const PromptUpdateSchema = z.object({

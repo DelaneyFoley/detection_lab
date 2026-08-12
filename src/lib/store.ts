@@ -22,6 +22,10 @@ interface AppState {
   setSelectedRunForDetection: (detectionId: string, runId: string) => void;
   clearSelectedRunForDetection: (detectionId: string) => void;
 
+  // Selected prompt version per detection (shared across Detection Setup + Build & Run)
+  selectedPromptByDetection: Record<string, string>;
+  setSelectedPromptForDetection: (detectionId: string, promptId: string) => void;
+
   // Cross-tab navigation
   pendingDatasetId: string | null;
   setPendingDatasetId: (id: string | null) => void;
@@ -60,6 +64,15 @@ export const useAppStore = create<AppState>((set) => ({
       delete next[detectionId];
       return { selectedRunByDetection: next };
     }),
+
+  selectedPromptByDetection: {},
+  setSelectedPromptForDetection: (detectionId, promptId) =>
+    set((state) => ({
+      selectedPromptByDetection: {
+        ...state.selectedPromptByDetection,
+        [detectionId]: promptId,
+      },
+    })),
 
   pendingDatasetId: null,
   setPendingDatasetId: (id) => set({ pendingDatasetId: id }),

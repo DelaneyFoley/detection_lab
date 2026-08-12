@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runDetectionInference } from "@/lib/inference";
+import { runAggregateInference } from "@/lib/inference/aggregate";
 import { getProvider, PROVIDER_ENV_KEY } from "@/lib/models";
-import { runRepository } from "@/lib/repositories";
+import { runRepository, snapshotRepository } from "@/lib/repositories";
+import type { PromptComposition } from "@/types";
 
 export async function POST(req: NextRequest) {
   try {
@@ -26,8 +28,41 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Prompt not found" }, { status: 404 });
     }
 
-    const modelUsed = modelOverride || prompt.model;
-    const provider = getProvider(modelUsed);
+    const detection = runRepository.getDetectionById(detectionId);
+    if (!detection) {
+      return NextResponse.json({ error: "Detection not found" }, { status: 404 });
+    }
+
+    // Production-mode versions run the whole context aggregate and report siblings.
+    let aggregate: { snapshot: NonNullable<ReturnType<typeof snapshotRepository.getSnapshotById>>; composition: PromptComposition; targetLabel: string } | null = null;
+    let effectiveModel = modelOverride || prompt.model;
+    if (prompt.mode === "PRODUCTION_MODE") {
+      const composition = prompt.composition ? (JSON.parse(prompt.composition) as PromptComposition) : null;
+      const snapshot = prompt.production_snapshot_id
+        ? snapshotRepository.getSnapshotById(prompt.production_snapshot_id)
+        : null;
+      if (!composition || !snapshot) {
+        return NextResponse.json(
+          { error: "Production-mode version is missing its composition or frozen snapshot." },
+          { status: 400 }
+        );
+      }
+      const targetLabel =
+        composition.members.find((m) => m.is_target)?.label ??
+        prompt.production_label ??
+        detection.production_label ??
+        null;
+      if (!targetLabel) {
+        return NextResponse.json(
+          { error: "This production-mode version has no target detection in its aggregate." },
+          { status: 400 }
+        );
+      }
+      aggregate = { snapshot, composition, targetLabel };
+      effectiveModel = composition.google_model || snapshot.google_model || effectiveModel;
+    }
+
+    const provider = getProvider(effectiveModel);
     const envKey = PROVIDER_ENV_KEY[provider];
     const apiKey = String(formData.get("api_key") || process.env[envKey] || "").trim();
 
@@ -35,15 +70,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `API key required (request api_key or ${envKey} env)` }, { status: 400 });
     }
 
-    const detection = runRepository.getDetectionById(detectionId);
-    if (!detection) {
-      return NextResponse.json({ error: "Detection not found" }, { status: 404 });
-    }
-
     const parsedPrompt = {
       ...prompt,
       prompt_structure: JSON.parse(prompt.prompt_structure || "{}"),
-      model: modelUsed,
+      model: effectiveModel,
     };
 
     const results = await Promise.all(
@@ -51,6 +81,30 @@ export async function POST(req: NextRequest) {
         const buffer = Buffer.from(await file.arrayBuffer());
         const mimeType = file.type || inferMimeTypeFromFilename(file.name);
         const dataUri = `data:${mimeType};base64,${buffer.toString("base64")}`;
+
+        if (aggregate) {
+          const r = await runAggregateInference(apiKey, {
+            model: effectiveModel,
+            snapshot: aggregate.snapshot,
+            composition: aggregate.composition,
+            targetLabel: aggregate.targetLabel,
+            imageUri: dataUri,
+          });
+          return {
+            image_name: file.name || "image",
+            predicted_decision: r.decision,
+            confidence: null,
+            evidence: r.evidence,
+            parse_ok: r.parseOk,
+            raw_response: r.raw,
+            parse_error_reason: r.parseErrorReason,
+            parse_fix_suggestion: null,
+            inference_runtime_ms: r.runtimeMs ?? null,
+            parse_retry_count: 0,
+            siblings: r.siblings,
+          };
+        }
+
         const result = await runDetectionInference(apiKey, parsedPrompt, detection.detection_code, dataUri);
 
         return {
@@ -64,6 +118,7 @@ export async function POST(req: NextRequest) {
           parse_fix_suggestion: result.parseFixSuggestion,
           inference_runtime_ms: result.runtimeMs ?? null,
           parse_retry_count: result.retryCount ?? 0,
+          siblings: [],
         };
       })
     );

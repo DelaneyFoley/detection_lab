@@ -5,7 +5,6 @@ import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
 import { detectionRepository, promptRepository, settingsRepository, versionNoteEntryRepository } from "@/lib/repositories";
 import { PromptCreateSchema, PromptDeleteSchema, PromptUpdateSchema } from "@/lib/schemas";
-import { summarizePromptDiff } from "@/lib/versionNoteAI";
 
 export async function GET(req: NextRequest) {
   try {
@@ -22,6 +21,7 @@ export async function GET(req: NextRequest) {
       ...r,
       prompt_structure: safeParseJson(r.prompt_structure, {}),
       golden_set_regression_result: safeParseJson(r.golden_set_regression_result, null),
+      composition: safeParseJson(r.composition, null),
     }));
 
     return NextResponse.json(prompts);
@@ -62,6 +62,18 @@ export async function POST(req: NextRequest) {
       user_prompt_addendum: String(detection.user_prompt_addendum || ""),
     };
 
+    const mode = body.mode === "PRODUCTION_MODE" ? "PRODUCTION_MODE" : "DEVELOPMENT_MODE";
+    const composition = body.composition ?? null;
+    // In PRODUCTION_MODE the model is pinned to the context's production model.
+    const compositionModel =
+      composition && typeof composition === "object"
+        ? String((composition as Record<string, unknown>).google_model || "")
+        : "";
+    const resolvedModel =
+      mode === "PRODUCTION_MODE" && compositionModel
+        ? compositionModel
+        : body.model || "gemini-2.5-flash";
+
     promptRepository.createPromptVersion({
       promptVersionId: id,
       detectionId: body.detection_id,
@@ -69,7 +81,7 @@ export async function POST(req: NextRequest) {
       systemPrompt,
       userPromptTemplate,
       promptStructure: JSON.stringify(promptStructure),
-      model: body.model || "gemini-2.5-flash",
+      model: resolvedModel,
       temperature: body.temperature ?? 0,
       topP: body.top_p ?? 1,
       maxOutputTokens: body.max_output_tokens ?? 1024,
@@ -78,52 +90,34 @@ export async function POST(req: NextRequest) {
       createdBy: body.created_by || "user",
       createdAt: now,
       sourcePromptVersionId: body.source_prompt_version_id ?? null,
+      mode,
+      contextName: mode === "PRODUCTION_MODE" ? body.context_name ?? null : null,
+      productionLabel: mode === "PRODUCTION_MODE" ? body.production_label ?? null : null,
+      productionSnapshotId: mode === "PRODUCTION_MODE" ? body.production_snapshot_id ?? null : null,
+      provenanceKind: mode === "PRODUCTION_MODE" ? body.provenance_kind ?? null : null,
+      composition: mode === "PRODUCTION_MODE" && composition ? JSON.stringify(composition) : null,
     });
 
+    // The manually-entered change note is the first Version Notes entry.
     try {
-      const sourceVersionId = body.source_prompt_version_id ?? null;
-      const nextVersion = promptRepository.getFullPromptById(id);
-      if (sourceVersionId) {
-        const source = promptRepository.getFullPromptById(sourceVersionId);
-        if (source && nextVersion) {
-          const summary = await summarizePromptDiff({
-            source,
-            next: nextVersion,
-            changeNotes: body.change_notes || "",
-          });
-          versionNoteEntryRepository.createEntry({
-            entryId: uuid(),
-            promptVersionId: id,
-            origin: "auto_diff",
-            eventType: "version_edited_from",
-            body: summary,
-            metadata: { source_version_id: sourceVersionId, source_version_label: source.version_label },
-            createdBy: "system",
-            createdAt: now,
-          });
-        }
-      } else {
-        const parts = [
-          `Created new prompt version "${body.version_label}".`,
-        ];
-        if (body.change_notes && body.change_notes.trim()) {
-          parts.push(body.change_notes.trim());
-        }
-        versionNoteEntryRepository.createEntry({
-          entryId: uuid(),
-          promptVersionId: id,
-          origin: "auto_created",
-          eventType: "version_created",
-          body: parts.join(" "),
-          metadata: null,
-          createdBy: "system",
-          createdAt: now,
-        });
-      }
+      const noteBody =
+        (body.change_notes || "").trim() || `Created new prompt version "${body.version_label}".`;
+      versionNoteEntryRepository.createEntry({
+        entryId: uuid(),
+        promptVersionId: id,
+        origin: "user",
+        eventType: "version_created",
+        body: noteBody,
+        metadata: body.source_prompt_version_id
+          ? { source_version_id: body.source_prompt_version_id }
+          : null,
+        createdBy: body.created_by || "user",
+        createdAt: now,
+      });
     } catch (entryError) {
       const context = getRequestContext(req, "/api/prompts");
       const msg = entryError instanceof Error ? entryError.message : String(entryError);
-      logger.error("Failed to write auto version-note entry", { ...context, error: msg });
+      logger.error("Failed to write version-note entry", { ...context, error: msg });
     }
 
     return NextResponse.json({ prompt_version_id: id });

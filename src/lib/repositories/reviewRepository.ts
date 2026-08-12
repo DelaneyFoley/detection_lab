@@ -88,6 +88,28 @@ export class ReviewRepository {
     dataStore.run("UPDATE runs SET metrics_summary = ? WHERE run_id = ?", metricsJson, runId);
   }
 
+  /**
+   * Re-sync a run's per-prediction ground_truth_label snapshot to the dataset's
+   * CURRENT canonical ground truth, so runs scored under an older GT snapshot can
+   * be recomputed against today's labels. Only touches predictions whose image
+   * still exists in the dataset (never nulls a snapshot to a missing item).
+   */
+  syncRunGroundTruthFromDataset(runId: string, datasetId: string): void {
+    dataStore.run(
+      `UPDATE predictions SET ground_truth_label = (
+         SELECT di.ground_truth_label FROM dataset_items di
+         WHERE di.dataset_id = ? AND di.image_id = predictions.image_id
+       )
+       WHERE run_id = ? AND EXISTS (
+         SELECT 1 FROM dataset_items di
+         WHERE di.dataset_id = ? AND di.image_id = predictions.image_id
+       )`,
+      datasetId,
+      runId,
+      datasetId
+    );
+  }
+
   logGroundtruthCorrection(input: {
     predictionId: string;
     runId: string;

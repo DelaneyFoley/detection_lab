@@ -19,7 +19,7 @@ import { Annotation } from "@/components/MyWork";
 
 const TABS = [
   { label: "Detection Setup", id: 0, step: "1", description: "Configure detection and prompt versions" },
-  { label: "Build & Run Datasets", id: 1, step: "2", description: "Load or build datasets and run VLM labeling" },
+  { label: "Run Inference", id: 1, step: "2", description: "Run detections against labeled datasets" },
   { label: "HIL Review", id: 2, step: "3", description: "Review predictions and set ground truth" },
   { label: "Prompt Feedback", id: 3, step: "4", description: "Generate, accept, and save prompt improvements" },
   { label: "Prompt Compare", id: 4, step: "5", description: "Compare metrics across existing prompt runs" },

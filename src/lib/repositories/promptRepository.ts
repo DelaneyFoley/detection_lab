@@ -27,10 +27,16 @@ export class PromptRepository {
     createdBy: string;
     createdAt: string;
     sourcePromptVersionId?: string | null;
+    mode?: string;
+    contextName?: string | null;
+    productionLabel?: string | null;
+    productionSnapshotId?: string | null;
+    provenanceKind?: string | null;
+    composition?: string | null;
   }) {
     dataStore.run(
-      `INSERT INTO prompt_versions (prompt_version_id, detection_id, version_label, system_prompt, user_prompt_template, prompt_structure, model, temperature, top_p, max_output_tokens, change_notes, version_notes, created_by, created_at, source_prompt_version_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO prompt_versions (prompt_version_id, detection_id, version_label, system_prompt, user_prompt_template, prompt_structure, model, temperature, top_p, max_output_tokens, change_notes, version_notes, created_by, created_at, source_prompt_version_id, mode, context_name, production_label, production_snapshot_id, provenance_kind, composition)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.promptVersionId,
       input.detectionId,
       input.versionLabel,
@@ -45,7 +51,13 @@ export class PromptRepository {
       input.versionNotes || "",
       input.createdBy,
       input.createdAt,
-      input.sourcePromptVersionId ?? null
+      input.sourcePromptVersionId ?? null,
+      input.mode || "DEVELOPMENT_MODE",
+      input.contextName ?? null,
+      input.productionLabel ?? null,
+      input.productionSnapshotId ?? null,
+      input.provenanceKind ?? null,
+      input.composition ?? null
     );
   }
 
@@ -54,6 +66,21 @@ export class PromptRepository {
       "UPDATE prompt_versions SET version_notes = ? WHERE prompt_version_id = ?",
       versionNotes,
       promptVersionId
+    );
+  }
+
+  updateVersionLabel(promptVersionId: string, versionLabel: string) {
+    dataStore.run(
+      "UPDATE prompt_versions SET version_label = ? WHERE prompt_version_id = ?",
+      versionLabel,
+      promptVersionId
+    );
+  }
+
+  listByDetection(detectionId: string): Array<{ prompt_version_id: string; version_label: string; created_at: string }> {
+    return dataStore.all<{ prompt_version_id: string; version_label: string; created_at: string }>(
+      "SELECT prompt_version_id, version_label, created_at FROM prompt_versions WHERE detection_id = ? ORDER BY created_at ASC",
+      detectionId
     );
   }
 

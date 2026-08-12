@@ -7,7 +7,8 @@ import { getRequestContext, logger } from "@/lib/logger";
 import { DatasetDeleteSchema, DatasetDuplicateSchema, DatasetAssignAnnotatorsSchema, DatasetFinalizeParentSchema } from "@/lib/schemas";
 import { isDatasetSplitType } from "@/lib/splitType";
 import { fileStore } from "@/lib/services";
-import { datasetRepository, qaRepository, notificationRepository } from "@/lib/repositories";
+import { datasetRepository, qaRepository, notificationRepository, reviewRepository } from "@/lib/repositories";
+import { computeMetricsWithSegments } from "@/lib/metrics";
 import { seedBundledDatasets } from "@/lib/seed";
 
 export async function GET(req: NextRequest) {
@@ -29,8 +30,10 @@ export async function GET(req: NextRequest) {
 
     const correctionsOf = req.nextUrl.searchParams.get("corrections");
     if (correctionsOf) {
-      const corrections = datasetRepository.getCorrections(correctionsOf);
-      return NextResponse.json({ corrections });
+      const corrections = datasetRepository.getAnnotatorCorrections(correctionsOf);
+      const child = datasetRepository.getDatasetById(correctionsOf);
+      const parent = child?.linked_dataset_id ? datasetRepository.getDatasetById(child.linked_dataset_id) : null;
+      return NextResponse.json({ corrections, exclude_attributes: !!parent?.exclude_attributes });
     }
 
     if (datasetId) {
@@ -565,10 +568,21 @@ export async function PUT(req: NextRequest) {
     if (!existing) {
       return NextResponse.json({ error: "Dataset item not found" }, { status: 404 });
     }
-    datasetRepository.deleteDatasetItem(body.item_id);
+    const { affectedRunIds } = datasetRepository.deleteDatasetItem(body.item_id);
     await fileStore.removeLocalUri(existing.image_uri || "");
     datasetRepository.refreshDatasetStats(existing.dataset_id, now);
-    return NextResponse.json({ ok: true });
+
+    // Re-score every run the image was removed from so their stored metrics stay
+    // accurate now that the deleted image's prediction is gone.
+    if (affectedRunIds.length > 0) {
+      const segmentTags = reviewRepository.getDatasetSegmentTagsByImageId(existing.dataset_id);
+      for (const runId of affectedRunIds) {
+        const predictions = reviewRepository.getRunPredictions(runId);
+        const metrics = computeMetricsWithSegments(predictions, segmentTags);
+        reviewRepository.updateRunMetrics(runId, JSON.stringify(metrics));
+      }
+    }
+    return NextResponse.json({ ok: true, affected_runs: affectedRunIds.length });
   }
 
   if (body.item_id) {

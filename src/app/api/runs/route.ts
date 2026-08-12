@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuid } from "uuid";
 import { runDetectionInference } from "@/lib/inference";
+import { runAggregateInference } from "@/lib/inference/aggregate";
 import { getProvider, PROVIDER_ENV_KEY } from "@/lib/models";
 import { computeMetricsWithSegments } from "@/lib/metrics";
-import type { Prediction } from "@/types";
+import type { Prediction, ProductionSnapshot, PromptComposition } from "@/types";
 import { applyRateLimit, parseJsonWithSchema, parsePagination, parseSearch, toPaginatedResponse } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
 import { RunCreateSchema, RunUpdateSchema } from "@/lib/schemas";
 import { runQueue } from "@/lib/services";
-import { runRepository } from "@/lib/repositories";
+import { runRepository, snapshotRepository } from "@/lib/repositories";
+
+type AggregateConfig = {
+  snapshot: ProductionSnapshot;
+  composition: PromptComposition;
+  targetLabel: string | null;
+};
 
 export async function GET(req: NextRequest) {
   try {
@@ -121,13 +128,52 @@ export async function POST(req: NextRequest) {
     const detection = runRepository.getDetectionById(detection_id);
     if (!detection) return NextResponse.json({ error: "Detection not found" }, { status: 404 });
 
+    // Production-mode versions execute the whole context aggregate.
+    let aggregate: AggregateConfig | null = null;
+    if (prompt.mode === "PRODUCTION_MODE") {
+      const composition = prompt.composition
+        ? (JSON.parse(prompt.composition) as PromptComposition)
+        : null;
+      const snapshot = prompt.production_snapshot_id
+        ? snapshotRepository.getSnapshotById(prompt.production_snapshot_id)
+        : null;
+      if (!composition || !snapshot) {
+        return NextResponse.json(
+          { error: "Production-mode version is missing its composition or frozen snapshot." },
+          { status: 400 }
+        );
+      }
+      const targetLabel =
+        composition.members.find((m) => m.is_target)?.label ??
+        prompt.production_label ??
+        detection.production_label ??
+        null;
+      if (!targetLabel) {
+        return NextResponse.json(
+          { error: "This production-mode version has no target detection in its aggregate. Set the version's Target and re-save the version." },
+          { status: 400 }
+        );
+      }
+      aggregate = { snapshot, composition, targetLabel };
+    }
+
     const runId = uuid();
     const now = new Date().toISOString();
     const decodingParams = {
       model: modelUsed,
-      temperature: prompt.temperature,
+      temperature: aggregate ? 0 : prompt.temperature,
       top_p: prompt.top_p,
       max_output_tokens: prompt.max_output_tokens,
+      mode: prompt.mode || "DEVELOPMENT_MODE",
+      ...(aggregate
+        ? {
+            context_name: aggregate.composition.context_name,
+            provenance_kind: prompt.provenance_kind,
+            source_revision: aggregate.snapshot.source_revision,
+            thinking_level_requested: aggregate.snapshot.thinking_level,
+            thinking_applied: true,
+          }
+        : {}),
     };
 
     // Create run record
@@ -158,6 +204,7 @@ export async function POST(req: NextRequest) {
       detectionCode: detection.detection_code,
       items,
       maxConcurrency,
+      aggregate,
     });
 
     return NextResponse.json(
@@ -184,6 +231,7 @@ async function executeRunInBackground({
   detectionCode,
   items,
   maxConcurrency,
+  aggregate,
 }: {
   runId: string;
   apiKey: string;
@@ -191,6 +239,7 @@ async function executeRunInBackground({
   detectionCode: string;
   items: any[];
   maxConcurrency: number;
+  aggregate?: AggregateConfig | null;
 }) {
     const control = runQueue.get(runId) || runQueue.create(runId);
 
@@ -210,6 +259,44 @@ async function executeRunInBackground({
 
     const processItem = async (item: any): Promise<Prediction> => {
     try {
+      if (aggregate) {
+        const r = await runAggregateInference(apiKey, {
+          model: parsedPrompt.model,
+          snapshot: aggregate.snapshot,
+          composition: aggregate.composition,
+          targetLabel: aggregate.targetLabel,
+          imageUri: item.image_uri,
+        });
+        const aggPred: Prediction = {
+          prediction_id: uuid(),
+          run_id: runId,
+          image_id: item.image_id,
+          image_uri: item.image_uri,
+          ground_truth_label: item.ground_truth_label,
+          predicted_decision: r.decision,
+          confidence: null,
+          evidence: r.evidence,
+          parse_ok: r.parseOk,
+          raw_response: r.raw,
+          parse_error_reason: r.parseErrorReason,
+          parse_fix_suggestion: null,
+          inference_runtime_ms: r.runtimeMs,
+          parse_retry_count: 0,
+          corrected_label: null,
+          error_tag: null,
+          reviewer_note: null,
+          corrected_at: null,
+          sibling_detections: r.siblings,
+        };
+        const aggTag = r.parseOk
+          ? null
+          : r.raw.startsWith("ERROR:")
+            ? "INFERENCE_CALL_FAILED"
+            : "SCHEMA_VIOLATION";
+        runRepository.insertPrediction(aggPred, aggTag);
+        return aggPred;
+      }
+
       const result = await runDetectionInference(
         apiKey,
         parsedPrompt,

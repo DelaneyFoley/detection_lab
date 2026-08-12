@@ -32,3 +32,10 @@ export const runQueue: RunQueue = new InMemoryRunQueue();
  * cancel-flag contract as the run queue so orchestration can poll for cancels.
  */
 export const iterationJobQueue: RunQueue = new InMemoryRunQueue();
+
+/**
+ * Control map for prompt-compare synthesis jobs (analyze several prompts'
+ * disagreements → compile one merged prompt). Same cancel-flag contract as the
+ * others; separate map so a cancel on synthesis never collides with iteration.
+ */
+export const compareJobQueue: RunQueue = new InMemoryRunQueue();

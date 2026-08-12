@@ -800,6 +800,7 @@ export class QaRepository {
     );
     let prediction = null;
     if (item) {
+      attachDatasetTaxonomy(item);
       prediction = dataStore.get<any>(
         "SELECT * FROM predictions WHERE image_id = ? ORDER BY rowid DESC LIMIT 1",
         item.image_id
@@ -818,6 +819,7 @@ export class QaRepository {
       "SELECT * FROM dataset_items WHERE image_id = ? ORDER BY rowid DESC LIMIT 1",
       prediction.image_id
     );
+    if (item) attachDatasetTaxonomy(item);
     return { item, prediction };
   }
 
@@ -837,6 +839,17 @@ function parseTags(value: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+// Attach the owning dataset's attribute palette so detection-less datasets can
+// still surface attribute options in flag review.
+function attachDatasetTaxonomy(item: { dataset_id?: string; dataset_segment_taxonomy?: string | null }): void {
+  if (!item.dataset_id) return;
+  const ds = dataStore.get<{ segment_taxonomy: string | null }>(
+    "SELECT segment_taxonomy FROM datasets WHERE dataset_id = ?",
+    item.dataset_id
+  );
+  item.dataset_segment_taxonomy = ds?.segment_taxonomy ?? "[]";
 }
 
 /**

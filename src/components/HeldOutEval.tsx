@@ -74,8 +74,8 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          api_key: apiKey,
-          model_override: selectedModel,
+          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(selectedModel ? { model_override: selectedModel } : {}),
           prompt_version_id: selectedPromptId,
           dataset_id: selectedDatasetId,
           detection_id: detection.detection_id,
@@ -108,7 +108,8 @@ export function HeldOutEval({ detection }: { detection: Detection }) {
       }
     } catch (err) {
       console.error(err);
-      notify({ message: "Evaluation failed.", tone: "error" });
+      const msg = err instanceof Error ? err.message : String(err);
+      notify({ message: `Evaluation failed: ${msg}`, tone: "error" });
       setProgress("");
     }
     setRunning(false);

@@ -60,6 +60,23 @@ interface DatasetQa {
   updated_at: string;
   items_labeled: number;
   revision_note: string | null;
+  segment_taxonomy?: string | string[] | null;
+}
+
+// Attribute palette source: prefer the detection's taxonomy, else fall back to
+// the dataset's own segment_taxonomy (datasets can be detection-less).
+function resolveSegmentOptions(detectionTaxonomy: unknown, datasetTaxonomy: unknown): string[] {
+  if (Array.isArray(detectionTaxonomy) && detectionTaxonomy.length > 0) return detectionTaxonomy as string[];
+  if (Array.isArray(datasetTaxonomy)) return datasetTaxonomy.map(String);
+  if (typeof datasetTaxonomy === "string" && datasetTaxonomy.trim()) {
+    try {
+      const parsed = JSON.parse(datasetTaxonomy);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 interface Discrepancy {
@@ -761,14 +778,11 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
 
   const currentConflict = previewIndex != null ? conflicts[previewIndex] : null;
 
-  const currentDetection = (() => {
-    if (!selectedParent) return null;
-    const parent = eligibleParents.find((p: any) => p.dataset_id === selectedParent);
-    return parent?.detection_id ? detections.find((det) => det.detection_id === parent.detection_id) : null;
-  })();
-  const segmentOptions: string[] = Array.isArray(currentDetection?.segment_taxonomy)
-    ? currentDetection.segment_taxonomy
-    : [];
+  const selectedParentObj = selectedParent ? eligibleParents.find((p: any) => p.dataset_id === selectedParent) : null;
+  const currentDetection = selectedParentObj?.detection_id
+    ? detections.find((det) => det.detection_id === selectedParentObj.detection_id)
+    : null;
+  const segmentOptions: string[] = resolveSegmentOptions(currentDetection?.segment_taxonomy, selectedParentObj?.segment_taxonomy);
 
   const displayTags: string[] = correctedTags !== undefined
     ? correctedTags
@@ -1222,6 +1236,7 @@ interface FlagItemDetails {
   segment_tags: string;
   image_description: string;
   prediction: Prediction | null;
+  dataset_segment_taxonomy: string | null;
 }
 
 const FLAG_RESOLVER_NAME = "Delaney F.";
@@ -1354,6 +1369,7 @@ function FlagsQueueView({ detections }: { detections: Detection[] }) {
           segment_tags: data.item?.segment_tags || "[]",
           image_description: data.item?.image_description || "",
           prediction: data.prediction || null,
+          dataset_segment_taxonomy: data.item?.dataset_segment_taxonomy ?? "[]",
         },
       }));
     }
@@ -1440,9 +1456,7 @@ function FlagsQueueView({ detections }: { detections: Detection[] }) {
   const currentDetection = currentFlag
     ? detections.find((d) => d.detection_id === currentFlag.detection_id)
     : null;
-  const segmentOptions: string[] = Array.isArray(currentDetection?.segment_taxonomy)
-    ? currentDetection.segment_taxonomy
-    : [];
+  const segmentOptions: string[] = resolveSegmentOptions(currentDetection?.segment_taxonomy, currentDetails?.dataset_segment_taxonomy);
 
   const displayLabel = editedLabel !== undefined ? editedLabel : currentDetails?.ground_truth_label ?? null;
   const displayTags: string[] = editedTags !== undefined
@@ -1594,7 +1608,7 @@ function FlagsQueueView({ detections }: { detections: Detection[] }) {
                       }}
                     />
                   ) : (
-                    <p className="text-xs text-gray-500">No taxonomy defined for this detection.</p>
+                    <p className="text-xs text-gray-500">No attributes defined for this dataset.</p>
                   )
                 ) : (
                   <p className="text-xs text-gray-300">{formatTags(currentDetails?.segment_tags) || "None"}</p>
@@ -2050,9 +2064,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
   const currentDetection = selectedDatasetObj
     ? detections.find((d) => d.detection_id === selectedDatasetObj.detection_id)
     : null;
-  const segmentOptions: string[] = Array.isArray(currentDetection?.segment_taxonomy)
-    ? currentDetection.segment_taxonomy
-    : [];
+  const segmentOptions: string[] = resolveSegmentOptions(currentDetection?.segment_taxonomy, selectedDatasetObj?.segment_taxonomy);
   const displayLabel = editedLabel !== undefined ? editedLabel : currentSample?.ground_truth_label ?? null;
   const displayTags: string[] = editedTags !== undefined
     ? editedTags
@@ -2834,7 +2846,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                       }}
                     />
                   ) : (
-                    <p className="text-xs text-gray-500">No taxonomy defined for this detection.</p>
+                    <p className="text-xs text-gray-500">No attributes defined for this dataset.</p>
                   )
                 ) : (
                   <p className="text-xs text-gray-300">{formatTags(currentSample.segment_tags) || "None"}</p>

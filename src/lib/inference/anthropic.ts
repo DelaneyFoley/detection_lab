@@ -1,17 +1,6 @@
 import type { PromptVersion, GeminiDetectionResponse } from "@/types";
-import { fetchImageAsBase64, getReferenceImageUri } from "./shared";
-
-const STRICT_JSON_CONTRACT = [
-  'Return ONLY this JSON object and nothing else.',
-  '{',
-  '  "detection_code": "{{DETECTION_CODE}}",',
-  '  "decision": "DETECTED" or "NOT_DETECTED",',
-  '  "confidence": <float 0-1>,',
-  '  "evidence": "<short phrase describing visual basis>"',
-  '}',
-  'Do not wrap the JSON in markdown code fences.',
-  'Do not add any prose, comments, headings, or extra keys.',
-].join("\n");
+import { fetchImageAsBase64 } from "./shared";
+import { STRICT_JSON_CONTRACT, compileUserPrompt } from "@/lib/detectionPrompts";
 
 export async function runAnthropicInference(
   apiKey: string,
@@ -39,17 +28,6 @@ export async function runAnthropicInference(
   try {
     const { base64, mimeType } = await fetchImageAsBase64(imageUri);
 
-    // Optional reference sheet (labeled examples) sent before the target image.
-    const referenceUri = getReferenceImageUri(prompt);
-    let ref: { base64: string; mimeType: string } | null = null;
-    if (referenceUri) {
-      try {
-        ref = await fetchImageAsBase64(referenceUri);
-      } catch {
-        /* ignore unresolvable reference */
-      }
-    }
-
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const body: Record<string, unknown> = {
         model: prompt.model,
@@ -60,12 +38,6 @@ export async function runAnthropicInference(
           {
             role: "user",
             content: [
-              ...(ref
-                ? [
-                    { type: "text", text: "REFERENCE — labeled calibration examples; use to judge severity:" },
-                    { type: "image", source: { type: "base64", media_type: ref.mimeType, data: ref.base64 } },
-                  ]
-                : []),
               { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } },
               { type: "text", text: attempt === 0 ? compiledUserPrompt : buildRetryText(compiledUserPrompt, attempt, detectionCode) },
             ],
@@ -139,18 +111,13 @@ export async function runAnthropicInference(
 
 function buildCompiledPrompt(prompt: PromptVersion, baseUserPrompt: string, detectionCode: string): string {
   const structure = (prompt.prompt_structure || {}) as any;
-  const fixedGuidance = typeof structure.fixed_guidance === "string" ? structure.fixed_guidance.trim() : "";
-  const labelPolicy = typeof structure.label_policy === "string" ? structure.label_policy.trim() : "";
-  const decisionRubric = typeof structure.decision_rubric === "string" ? structure.decision_rubric.trim() : "";
-  const schemaContract = STRICT_JSON_CONTRACT.replace(/\{\{DETECTION_CODE\}\}/g, detectionCode);
-  const sections = [
-    baseUserPrompt.trim(),
-    fixedGuidance ? `Detection Guidelines (fixed):\n${fixedGuidance}` : "",
-    labelPolicy ? `Decision Policy:\n${labelPolicy}` : "",
-    decisionRubric ? `Decision Rubric:\n${decisionRubric}` : "",
-    schemaContract,
-  ].filter(Boolean);
-  return sections.join("\n\n");
+  return compileUserPrompt({
+    userTemplate: baseUserPrompt,
+    detectionCode,
+    fixedGuidance: typeof structure.fixed_guidance === "string" ? structure.fixed_guidance : "",
+    labelPolicy: typeof structure.label_policy === "string" ? structure.label_policy : "",
+    decisionRubric: typeof structure.decision_rubric === "string" ? structure.decision_rubric : "",
+  });
 }
 
 function buildRetryText(base: string, attempt: number, detectionCode: string): string {

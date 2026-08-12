@@ -11,3 +11,6 @@ export { notificationRepository } from "@/lib/repositories/notificationRepositor
 export { versionNoteEntryRepository } from "@/lib/repositories/versionNoteEntryRepository";
 export { attributeLayoutRepository } from "@/lib/repositories/attributeLayoutRepository";
 export { promptIterationRepository } from "@/lib/repositories/promptIterationRepository";
+export { promptCompareJobRepository } from "@/lib/repositories/promptCompareJobRepository";
+export { promptGroupMetadataRepository } from "@/lib/repositories/promptGroupMetadataRepository";
+export { snapshotRepository } from "@/lib/repositories/snapshotRepository";

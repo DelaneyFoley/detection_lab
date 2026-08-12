@@ -26,6 +26,29 @@ export const CATEGORY_PROMPT_SETTING_KEYS: Record<
   },
 };
 
+/**
+ * The strict JSON output contract. This lives inside the admin-editable
+ * user_prompt_template so nothing about the runtime prompt is hidden from the
+ * UI. Retry logic in the inference providers also references this constant to
+ * reinforce the schema on parse-failure retries.
+ */
+export const STRICT_JSON_CONTRACT = [
+  "Return ONLY this JSON object and nothing else.",
+  "{",
+  '  "detection_code": "{{DETECTION_CODE}}",',
+  '  "decision": "DETECTED" or "NOT_DETECTED",',
+  '  "confidence": <float 0-1>,',
+  '  "evidence": "<short phrase describing visual basis>"',
+  "}",
+  "Do not wrap the JSON in markdown code fences.",
+  "Do not add any prose, comments, headings, or extra keys.",
+].join("\n");
+
+/** Render the strict JSON contract for a specific detection code. */
+export function buildSchemaContract(detectionCode: string): string {
+  return STRICT_JSON_CONTRACT.replace(/\{\{DETECTION_CODE\}\}/g, detectionCode);
+}
+
 export const DEFAULT_CATEGORY_PROMPT_TEMPLATES: Record<
   DetectionCategory,
   { system_prompt: string; user_prompt_template: string }
@@ -33,19 +56,84 @@ export const DEFAULT_CATEGORY_PROMPT_TEMPLATES: Record<
   INCORRECT_CAPTURE: {
     system_prompt:
       "You are a property underwriting image validation system. Determine whether the image is an incorrect capture for the requested inspection objective. Return only valid JSON that matches the required schema.",
-    user_prompt_template:
-      'Determine whether this image is an incorrect capture for detection code {{DETECTION_CODE}}.\n\nDETECTED means the image fails the required capture context and should be rejected.\nNOT_DETECTED means the image is a usable, in-context capture.\n\nReturn ONLY this JSON:\n{\n  "detection_code": "{{DETECTION_CODE}}",\n  "decision": "DETECTED" or "NOT_DETECTED",\n  "confidence": <float 0-1>,\n  "evidence": "<short phrase describing visual basis>"\n}',
+    user_prompt_template: [
+      "Determine whether this image is an incorrect capture for detection code {{DETECTION_CODE}}.",
+      "",
+      "DETECTED means the image fails the required capture context and should be rejected.",
+      "NOT_DETECTED means the image is a usable, in-context capture.",
+      "",
+      STRICT_JSON_CONTRACT,
+    ].join("\n"),
   },
   HAZARD_IDENTIFICATION: {
     system_prompt:
       "You are a property underwriting hazard detection system. Analyze one image for the requested hazard or condition and return only valid JSON that matches the required schema.",
-    user_prompt_template:
-      'Analyze this image for detection code {{DETECTION_CODE}}.\n\nDETECTED means the target hazard or condition is present or visually confirmed.\nNOT_DETECTED means it is absent or not visually confirmed.\n\nReturn ONLY this JSON:\n{\n  "detection_code": "{{DETECTION_CODE}}",\n  "decision": "DETECTED" or "NOT_DETECTED",\n  "confidence": <float 0-1>,\n  "evidence": "<short phrase describing visual basis>"\n}',
+    user_prompt_template: [
+      "Analyze this image for detection code {{DETECTION_CODE}}.",
+      "",
+      "DETECTED means the target hazard or condition is present or visually confirmed.",
+      "NOT_DETECTED means it is absent or not visually confirmed.",
+      "",
+      STRICT_JSON_CONTRACT,
+    ].join("\n"),
   },
 };
 
 export function normalizeDetectionCategory(value: unknown): DetectionCategory {
   return value === "INCORRECT_CAPTURE" ? "INCORRECT_CAPTURE" : DEFAULT_DETECTION_CATEGORY;
+}
+
+const VERSION_SUFFIX_RE = /_V(\d+)$/i;
+const DOT_SUFFIX_RE = /^(.+)\.(\d+)$/;
+const TRAILING_INT_RE = /^(.+?)(\d+)$/;
+
+/**
+ * Split a stored version_label into its editable base name and numeric suffix.
+ * Modern labels use `Detection Baseline_V3`. Legacy labels commonly use a
+ * trailing `.n` (e.g. `BASELINE_DETECTION-Revised30.2`) or a plain trailing
+ * integer (e.g. `BASELINE_DETECTION-Revised16`). Priority: `_V{n}` > `.{n}` >
+ * trailing digits. Labels with none return num=null.
+ */
+export function parseVersionLabel(label: string): { base: string; num: number | null } {
+  const s = String(label || "").trim();
+  const v = s.match(VERSION_SUFFIX_RE);
+  if (v && v.index !== undefined) {
+    return { base: s.slice(0, v.index).trim(), num: parseInt(v[1], 10) };
+  }
+  const d = s.match(DOT_SUFFIX_RE);
+  if (d) {
+    return { base: d[1].trim(), num: parseInt(d[2], 10) };
+  }
+  const t = s.match(TRAILING_INT_RE);
+  if (t) {
+    return { base: t[1].trim(), num: parseInt(t[2], 10) };
+  }
+  return { base: s, num: null };
+}
+
+/**
+ * Highest V-number already in use for a given base name across the provided
+ * labels (case-insensitive match on base). Returns 0 when no prior V-numbered
+ * label matches.
+ */
+export function nextVersionNumber(baseName: string, existingLabels: string[]): number {
+  const target = String(baseName || "").trim().toLowerCase();
+  if (!target) return 1;
+  let max = 0;
+  for (const label of existingLabels) {
+    const { base, num } = parseVersionLabel(label);
+    if (num != null && base.toLowerCase() === target && num > max) max = num;
+  }
+  return max + 1;
+}
+
+/**
+ * Compose the final stored version_label from a user-supplied base name and
+ * the set of existing labels on the same detection.
+ */
+export function buildVersionLabel(baseName: string, existingLabels: string[]): string {
+  const base = String(baseName || "").trim() || "Detection baseline";
+  return `${base}_V${nextVersionNumber(base, existingLabels)}`;
 }
 
 export function buildUserPromptTemplate(baseTemplate: string, addendum?: string | null): string {
@@ -95,5 +183,38 @@ export function splitUserPromptTemplate(template: string): { base: string; adden
   const base = full.slice(0, idx).trim();
   const addendum = full.slice(idx + ADDENDUM_MARKER.length).trim();
   return { base, addendum };
+}
+
+/**
+ * Assemble the full compiled USER message sent to the model. The strict JSON
+ * schema contract lives inside the admin-managed user_prompt_template (so what
+ * runs at inference is exactly what shows up in the admin UI) — this function
+ * only substitutes {{DETECTION_CODE}} and appends the addendum, fixed guidance,
+ * decision policy, and decision rubric. Used by BOTH the inference providers and
+ * the compiled-prompt preview so what the user sees always matches what runs.
+ */
+export function compileUserPrompt(params: {
+  userTemplate: string;
+  detectionCode: string;
+  fixedGuidance?: string | null;
+  labelPolicy?: string | null;
+  decisionRubric?: string | null;
+}): string {
+  const code = params.detectionCode;
+  const sub = (s: string) => s.replace(/\{\{DETECTION_CODE\}\}/g, code);
+  const { base, addendum } = splitUserPromptTemplate(params.userTemplate);
+  const fixedGuidance = String(params.fixedGuidance || "").trim();
+  const labelPolicy = String(params.labelPolicy || "").trim();
+  const decisionRubric = String(params.decisionRubric || "").trim();
+
+  return [
+    sub(base).trim(),
+    addendum ? `${ADDENDUM_MARKER}\n${sub(addendum)}` : "",
+    fixedGuidance ? `Detection Guidelines (fixed):\n${fixedGuidance}` : "",
+    labelPolicy ? `Decision Policy:\n${labelPolicy}` : "",
+    decisionRubric ? `Decision Rubric:\n${decisionRubric}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 

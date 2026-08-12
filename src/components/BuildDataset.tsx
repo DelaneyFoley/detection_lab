@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "@/lib/store";
-import type { Dataset, DatasetItem, Detection, PromptVersion, SplitType, ReviewFlag, ResolutionAction } from "@/types";
+import type { Dataset, DatasetItem, Detection, PromptVersion, ReviewFlag, ResolutionAction } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 import { ImagePreviewModal } from "@/components/shared/ImagePreviewModal";
 import { InfoTip } from "@/components/shared/InfoTip";
@@ -21,19 +21,14 @@ type BuildRow = {
 };
 
 export function BuildDataset({ detection }: { detection: Detection | null }) {
-  const { apiKey, selectedModel, setActiveTab, setSelectedRunForDetection, triggerRefresh, refreshCounter } = useAppStore();
+  const { apiKey, selectedModel, setActiveTab, setSelectedRunForDetection, triggerRefresh, refreshCounter, selectedPromptByDetection } = useAppStore();
   const [prompts, setPrompts] = useState<PromptVersion[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selectedPromptId, setSelectedPromptId] = useState("");
-  const [mode, setMode] = useState<"load" | "build">("load");
 
   const [selectedExistingDatasetId, setSelectedExistingDatasetId] = useState("");
 
-  const [datasetName, setDatasetName] = useState("");
-  const [splitType, setSplitType] = useState<"" | SplitType | "AUTO_SPLIT">("");
   const [rows, setRows] = useState<BuildRow[]>([]);
-  const [buildInputMode, setBuildInputMode] = useState<"files" | "csv">("files");
-  const [csvFileName, setCsvFileName] = useState("");
 
   const [building, setBuilding] = useState(false);
   const [buildMode, setBuildMode] = useState<"save" | "run" | null>(null);
@@ -43,12 +38,6 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelingRun, setCancelingRun] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
-  const [segmentOptionsDraft, setSegmentOptionsDraft] = useState<string[]>(
-    Array.isArray(detection?.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []
-  );
-  const [newSegmentOption, setNewSegmentOption] = useState("");
-  const [savingSegments, setSavingSegments] = useState(false);
-  const autoSplit = splitType === "AUTO_SPLIT";
 
   // Review flags state (only used in load mode)
   const [flaggedItemIds, setFlaggedItemIds] = useState<Set<string>>(new Set());
@@ -58,28 +47,22 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   const [resolveModalFlagId, setResolveModalFlagId] = useState<string | null>(null);
   const [datasetFlagFilter, setDatasetFlagFilter] = useState<false | "open" | "resolved">(false);
 
-  const segmentOptions = useMemo(() => {
-    return segmentOptionsDraft;
-  }, [segmentOptionsDraft]);
+  // Child datasets (per-annotator splits linked to a parent) should not be
+  // directly selectable here — only show top-level datasets in the dropdown.
+  const selectableDatasets = useMemo(
+    () => datasets.filter((d) => !d.linked_dataset_id),
+    [datasets]
+  );
 
   useEffect(() => {
     if (!detection) return;
-    setMode("load");
     setSelectedExistingDatasetId("");
     setRows([]);
-    setDatasetName("");
-    setSplitType("");
-    setBuildInputMode("files");
-    setCsvFileName("");
     setBuiltDatasetId(null);
     setStatus("");
     setValidationError("");
     setPreviewIndex(null);
   }, [detection]);
-
-  useEffect(() => {
-    setSegmentOptionsDraft(Array.isArray(detection?.segment_taxonomy) ? detection.segment_taxonomy.filter(Boolean) : []);
-  }, [detection?.segment_taxonomy, detection?.detection_id]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -101,16 +84,22 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           : [];
       setPrompts(promptRows);
       setDatasets(datasetRows);
-      if (promptRows[0]?.prompt_version_id) {
-        setSelectedPromptId((prev) => prev || promptRows[0].prompt_version_id);
+      if (promptRows.length > 0) {
+        const storeChoice = detection ? selectedPromptByDetection[detection.detection_id] : "";
+        const storeExists = storeChoice && promptRows.some((p) => p.prompt_version_id === storeChoice);
+        const fallback = promptRows[0].prompt_version_id;
+        setSelectedPromptId((prev) => {
+          if (prev && promptRows.some((p) => p.prompt_version_id === prev)) return prev;
+          return storeExists ? storeChoice : fallback;
+        });
       }
       setSelectedExistingDatasetId((prev) => (datasetRows.some((d) => d.dataset_id === prev) ? prev : ""));
     };
     loadData();
-  }, [detection, refreshCounter]);
+  }, [detection, refreshCounter, selectedPromptByDetection]);
 
   useEffect(() => {
-    if (mode !== "load" || !selectedExistingDatasetId) return;
+    if (!selectedExistingDatasetId) return;
     const loadItems = async () => {
       const res = await fetch(`/api/datasets?dataset_id=${selectedExistingDatasetId}`);
       const data = await res.json();
@@ -150,7 +139,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
       }
     };
     loadItems();
-  }, [mode, selectedExistingDatasetId]);
+  }, [selectedExistingDatasetId]);
 
   useEffect(() => {
     return () => {
@@ -173,80 +162,10 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     }
   }, [previewIndex, rows.length]);
 
-  const canSave = useMemo(
-    () => mode === "build" && rows.length > 0 && datasetName.trim().length > 0 && splitType !== "" && validateImageIds(rows).ok,
-    [mode, rows, datasetName, splitType]
-  );
   const canRun = useMemo(
-    () =>
-      !!detection &&
-      !!selectedPromptId &&
-      (mode === "load" ? !!selectedExistingDatasetId : canSave && splitType !== "MASTER"),
-    [detection, selectedPromptId, mode, selectedExistingDatasetId, canSave, splitType]
+    () => !!detection && !!selectedPromptId && !!selectedExistingDatasetId,
+    [detection, selectedPromptId, selectedExistingDatasetId]
   );
-  const selectedBuildFileCount = useMemo(() => rows.filter((r) => !!r.file).length, [rows]);
-
-  const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(event.target.files || []);
-    if (picked.length === 0) return;
-    const next = picked.map((file, i) => {
-      const base = file.name.replace(/\.[^.]+$/, "");
-      return {
-        id: `${Date.now()}_${i}_${base}`,
-        file,
-        preview: URL.createObjectURL(file),
-        imageId: sanitizeImageId(base || `image_${i + 1}`),
-        groundTruthLabel: null,
-        segmentTags: ["Baseline"],
-        aiAssignedLabel: "" as const,
-        aiConfidence: null,
-        aiDescription: "",
-      };
-    });
-    setRows((prev) => [...prev, ...next]);
-    setValidationError("");
-    event.currentTarget.value = "";
-  };
-
-  const onPickCsvFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const parsed = await parseCsvManifest(file);
-      const mapped: BuildRow[] = parsed.map((row, i) => ({
-        id: `${Date.now()}_csv_${i}_${row.image_id}`,
-        preview: row.image_url,
-        imageId: row.image_id,
-        groundTruthLabel: row.ground_truth_label,
-        segmentTags: normalizeSegmentTags(row.segment_tags),
-        aiAssignedLabel: "",
-        aiConfidence: null,
-        aiDescription: "",
-      }));
-      setRows(mapped);
-      setCsvFileName(file.name);
-      setValidationError("");
-      setStatus(`Loaded ${mapped.length} rows from ${file.name}`);
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Failed to parse CSV";
-      setValidationError(msg);
-    } finally {
-      event.currentTarget.value = "";
-    }
-  };
-
-  const removeRow = (id: string) => {
-    setRows((prev) => {
-      const target = prev.find((r) => r.id === id);
-      if (target?.file && target.preview.startsWith("blob:")) URL.revokeObjectURL(target.preview);
-      return prev.filter((r) => r.id !== id);
-    });
-    setValidationError("");
-  };
-
-  const updateRow = (id: string, patch: Partial<BuildRow>) => {
-    setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  };
 
   const createDatasetFlag = async (itemId: string, reason: string) => {
     const row = rows.find((r) => r.id === itemId);
@@ -322,201 +241,6 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
       }
     }
     setResolveModalFlagId(null);
-  };
-
-  const addSegmentOption = () => {
-    const next = String(newSegmentOption || "").trim();
-    if (!next) return;
-    if (segmentOptionsDraft.some((item) => item.toLowerCase() === next.toLowerCase())) return;
-    setSegmentOptionsDraft((prev) => [...prev, next]);
-    setNewSegmentOption("");
-  };
-
-  const removeSegmentOption = (value: string) => {
-    setSegmentOptionsDraft((prev) => prev.filter((item) => item !== value));
-  };
-
-  const saveSegmentOptions = async () => {
-    if (!detection) return;
-    setSavingSegments(true);
-    try {
-      const res = await fetch("/api/detections", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          detection_id: detection.detection_id,
-          display_name: detection.display_name,
-          description: detection.description,
-          detection_category: detection.detection_category,
-          label_policy: detection.label_policy,
-          user_prompt_addendum: detection.user_prompt_addendum,
-          decision_rubric: Array.isArray(detection.decision_rubric) ? detection.decision_rubric : [],
-          segment_taxonomy: segmentOptionsDraft,
-          metric_thresholds: detection.metric_thresholds,
-          approved_prompt_version: detection.approved_prompt_version,
-        }),
-      });
-      const payload = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(payload?.error || "Failed to update image attributes");
-      }
-      triggerRefresh();
-      setStatus("Image attributes updated for this detection.");
-    } catch (error: unknown) {
-      setStatus(`Error: ${error instanceof Error ? error.message : "Failed to update image attributes"}`);
-    } finally {
-      setSavingSegments(false);
-    }
-  };
-
-  const createDatasetOnly = async () => {
-    if (
-      splitType !== "MASTER" &&
-      splitType !== "ITERATION" &&
-      splitType !== "GOLDEN" &&
-      splitType !== "HELD_OUT_EVAL" &&
-      splitType !== "CUSTOM"
-    ) {
-      throw new Error("Select MASTER, TRAIN, TEST, EVALUATE, or CUSTOM to save a dataset.");
-    }
-    const validation = validateImageIds(rows);
-    if (!validation.ok) throw new Error(validation.error);
-
-    setStatus("Saving dataset...");
-    const allRowsHaveFiles = rows.every((r) => !!r.file);
-      const createRes = allRowsHaveFiles
-      ? await (async () => {
-          const formData = new FormData();
-          formData.append("name", datasetName.trim());
-          if (detection?.detection_id) formData.append("detection_id", detection.detection_id);
-          formData.append("split_type", splitType);
-          formData.append(
-            "items",
-            JSON.stringify(
-              rows.map((r) => ({
-                image_id: r.imageId.trim(),
-                image_description: "",
-                ground_truth_label: r.groundTruthLabel,
-                segment_tags: r.segmentTags,
-              }))
-            )
-          );
-          rows.forEach((r) => {
-            if (r.file) formData.append("files", r.file);
-          });
-          return fetch("/api/datasets", { method: "POST", body: formData });
-        })()
-      : await fetch("/api/datasets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: datasetName.trim(),
-            detection_id: detection?.detection_id || null,
-            split_type: splitType,
-            items: rows.map((r) => ({
-              image_id: r.imageId.trim(),
-              image_uri: r.preview,
-              image_description: "",
-              ground_truth_label: r.groundTruthLabel,
-              segment_tags: r.segmentTags,
-            })),
-          }),
-        });
-    const created = await createRes.json();
-    if (!createRes.ok || !created?.dataset_id) {
-      throw new Error(created?.error || "Failed to create dataset");
-    }
-
-    const datasetId = created.dataset_id as string;
-    setBuiltDatasetId(datasetId);
-    triggerRefresh();
-    return datasetId;
-  };
-
-  const createSplitDatasets = async (): Promise<string | null> => {
-    const validation = validateImageIds(rows);
-    if (!validation.ok) throw new Error(validation.error);
-    if (rows.some((r) => !r.groundTruthLabel)) {
-      throw new Error("Auto-split requires ground_truth_label for every row.");
-    }
-    const hasLocalFiles = rows.some((r) => !!r.file);
-    setStatus("Creating TRAIN/TEST/EVAL datasets...");
-
-    const splitRows = splitRowsForAutoSplit(rows);
-    if (!hasLocalFiles) {
-      const res = await fetch("/api/datasets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create_split_datasets",
-          detection_id: detection?.detection_id || null,
-          name_prefix: datasetName.trim(),
-          items: rows.map((r) => ({
-            image_id: r.imageId.trim(),
-            image_uri: r.preview,
-            ground_truth_label: r.groundTruthLabel,
-            segment_tags: r.segmentTags,
-          })),
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) {
-        throw new Error(payload?.error || "Failed to create split datasets");
-      }
-      triggerRefresh();
-      setStatus(
-        `Created split datasets: TRAIN=${payload?.created?.[0]?.size || 0}, TEST=${payload?.created?.[1]?.size || 0}, EVAL=${payload?.created?.[2]?.size || 0}.`
-      );
-      const created = Array.isArray(payload?.created) ? payload.created : [];
-      const train = created.find((d: any) => d?.split_type === "ITERATION");
-      return train?.dataset_id || null;
-    }
-
-    const splitDefinitions: Array<{ key: "ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"; label: string }> = [
-      { key: "ITERATION", label: "TRAIN" },
-      { key: "GOLDEN", label: "TEST" },
-      { key: "HELD_OUT_EVAL", label: "EVAL" },
-    ];
-
-    let trainDatasetId: string | null = null;
-    for (const split of splitDefinitions) {
-      const itemsForSplit = splitRows[split.key];
-      if (itemsForSplit.length === 0) continue;
-      const formData = new FormData();
-      formData.append("name", `${datasetName.trim()} (${split.label})`);
-      if (detection?.detection_id) formData.append("detection_id", detection.detection_id);
-      formData.append("split_type", split.key);
-      formData.append(
-        "items",
-        JSON.stringify(
-          itemsForSplit.map((r) => ({
-            image_id: r.imageId.trim(),
-            image_description: "",
-            ground_truth_label: r.groundTruthLabel,
-            segment_tags: r.segmentTags,
-          }))
-        )
-      );
-      for (const row of itemsForSplit) {
-        if (!row.file) throw new Error("Auto-split with files requires file-backed rows.");
-        formData.append("files", row.file);
-      }
-
-      const res = await fetch("/api/datasets", { method: "POST", body: formData });
-      const payload = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(payload?.error || `Failed to create ${split.label} dataset`);
-      }
-      if (split.key === "ITERATION" && payload?.dataset_id) {
-        trainDatasetId = String(payload.dataset_id);
-      }
-    }
-
-    triggerRefresh();
-    setStatus(
-      `Created split datasets: TRAIN=${splitRows.ITERATION.length}, TEST=${splitRows.GOLDEN.length}, EVAL=${splitRows.HELD_OUT_EVAL.length}.`
-    );
-    return trainDatasetId;
   };
 
   const runOnDataset = async (datasetId: string) => {
@@ -596,50 +320,11 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   };
 
   const resetBuilder = () => {
-    if (mode === "load") {
-      setSelectedExistingDatasetId("");
-      setRows([]);
-      setBuiltDatasetId(null);
-      setStatus("");
-      setValidationError("");
-      return;
-    }
-    setDatasetName("");
-    setSplitType("ITERATION");
+    setSelectedExistingDatasetId("");
     setRows([]);
-    setBuildInputMode("files");
-    setCsvFileName("");
-    setSplitType("");
     setBuiltDatasetId(null);
     setStatus("");
     setValidationError("");
-    setPreviewIndex(null);
-  };
-
-  const saveDataset = async () => {
-    if (!canSave) return;
-    const validation = validateImageIds(rows);
-    if (!validation.ok) {
-      setValidationError(validation.error);
-      return;
-    }
-    setValidationError("");
-    setBuilding(true);
-    setBuildMode("save");
-    setBuiltDatasetId(null);
-    try {
-      if (autoSplit) {
-        await createSplitDatasets();
-      } else {
-        await createDatasetOnly();
-        setStatus("Dataset saved.");
-      }
-    } catch (error) {
-      setStatus(`Error: ${error instanceof Error ? error.message : "Save failed"}`);
-    } finally {
-      setBuilding(false);
-      setBuildMode(null);
-    }
   };
 
   const runDataset = async () => {
@@ -648,21 +333,8 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     setBuilding(true);
     setBuildMode("run");
     try {
-      if (autoSplit) {
-        const trainDatasetId = await createSplitDatasets();
-        if (!trainDatasetId) {
-          throw new Error("Auto-split did not produce a TRAIN dataset to run.");
-        }
-        await runOnDataset(trainDatasetId);
-        setBuiltDatasetId(trainDatasetId);
-        return;
-      }
-      let datasetId = selectedExistingDatasetId;
-      if (mode === "build") {
-        datasetId = builtDatasetId || (await createDatasetOnly());
-      }
-      await runOnDataset(datasetId);
-      setBuiltDatasetId(datasetId);
+      await runOnDataset(selectedExistingDatasetId);
+      setBuiltDatasetId(selectedExistingDatasetId);
     } catch (error) {
       setStatus(`Error: ${error instanceof Error ? error.message : "Run failed"}`);
       setActiveRunId(null);
@@ -679,52 +351,23 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
     <div className="mx-auto max-w-6xl space-y-5">
       <div className="app-page-header">
         <div className="min-w-0 flex-1 space-y-2">
-          <h2 className="app-page-title">Build & Run Datasets</h2>
+          <h2 className="app-page-title">Run Inference</h2>
           <p className="app-page-copy">
-            Load an existing labeled dataset or build a new one from images, Excel, or JSON before running prompt inference.
+            Select a labeled dataset and a prompt version, then run inference. Create and manage datasets in the Datasets tab.
           </p>
         </div>
       </div>
       {!detection && (
         <p className="rounded-2xl border border-[rgba(240,180,100,0.2)] bg-[rgba(86,60,27,0.45)] px-4 py-3 text-xs text-[var(--app-warning)]">
-          No detection selected: you can build/save unassigned datasets, but running prompt inference is disabled.
+          No detection selected: select a detection to run prompt inference against a labeled dataset.
         </p>
       )}
 
       <div className="app-section space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => {
-                setMode("load");
-                setRows([]);
-                setBuiltDatasetId(null);
-                setStatus("");
-                setValidationError("");
-                setPreviewIndex(null);
-              }}
-              className={`app-toggle ${mode === "load" ? "app-toggle-active" : ""}`}
-            >
-              Load Dataset
-            </button>
-            <button
-              onClick={() => {
-                setMode("build");
-                setRows([]);
-                setDatasetName("");
-                setSplitType("");
-                setBuildInputMode("files");
-                setCsvFileName("");
-                setBuiltDatasetId(null);
-                setStatus("");
-                setValidationError("");
-                setPreviewIndex(null);
-              }}
-              className={`app-toggle ${mode === "build" ? "app-toggle-active" : ""}`}
-            >
-              Build Dataset
-            </button>
-          </div>
+          <span className="text-xs text-[var(--app-text-muted)]">
+            Select a labeled dataset and a prompt version, then run inference. Create or edit datasets in the Datasets tab.
+          </span>
           <button
             onClick={resetBuilder}
             disabled={building}
@@ -751,214 +394,26 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
             </select>
           </div>
 
-          {mode === "load" ? (
-            <div>
-              <label className="text-xs text-gray-400 block mb-1">Saved Dataset</label>
-              <select
-                className="app-select w-full px-3 py-2 text-sm"
-                value={selectedExistingDatasetId}
-                onChange={(e) => setSelectedExistingDatasetId(e.target.value)}
-              >
-                <option value="">Select dataset</option>
-                {datasets.map((d) => (
-                  <option key={d.dataset_id} value={d.dataset_id}>
-                    {d.name} ({splitTypeLabel(d.split_type)}, {d.size} images)
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Dataset Name</label>
-                <input
-                  className={`app-input w-full px-3 py-2 text-sm ${
-                    datasetName.trim() ? "" : "border-red-500/70"
-                  }`}
-                  value={datasetName}
-                  onChange={(e) => setDatasetName(e.target.value)}
-                />
-                {!datasetName.trim() && <p className="mt-1 text-[11px] text-red-400">Dataset name is required.</p>}
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Split Type</label>
-                <select
-                  className={`app-select w-full px-3 py-2 text-sm ${
-                    splitType ? "" : "border-red-500/70"
-                  }`}
-                  value={splitType}
-                  onChange={(e) =>
-                    setSplitType(e.target.value as "" | SplitType | "AUTO_SPLIT")
-                  }
-                >
-                  <option value="">Select split type</option>
-                  <option value="MASTER">MASTER</option>
-                  <option value="ITERATION">TRAIN</option>
-                  <option value="GOLDEN">TEST</option>
-                  <option value="HELD_OUT_EVAL">EVALUATE</option>
-                  <option value="CUSTOM">CUSTOM</option>
-                </select>
-                {!splitType && <p className="mt-1 text-[11px] text-red-400">Split type is required.</p>}
-                {splitType === "MASTER" && (
-                  <p className="mt-1 text-[11px] text-gray-400">
-                    MASTER datasets are curated source sets. Save here, then auto-split from Saved Datasets to create TRAIN, TEST, and EVALUATE.
-                  </p>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-
-        {mode === "build" && (
-          <div className="space-y-6 border-t border-white/8 pt-5">
-            <div className="grid gap-6 xl:grid-cols-2">
-              <div className="space-y-4">
-                <div>
-                  <div className="app-label mb-1">Dataset Source</div>
-                  <p className="app-subsection-copy">
-                    Choose how you want to assemble this dataset, then load files or metadata for the build.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBuildInputMode("files")}
-                    className={`app-toggle ${buildInputMode === "files" ? "app-toggle-active" : ""}`}
-                  >
-                    Upload Images
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBuildInputMode("csv")}
-                    className={`app-toggle ${buildInputMode === "csv" ? "app-toggle-active" : ""}`}
-                  >
-                    Upload CSV
-                  </button>
-                </div>
-
-                <div className="space-y-2 border-t border-white/8 pt-4">
-                  {buildInputMode === "files" ? (
-                    <>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <input
-                          id="build-dataset-files-input"
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          onChange={onPickFiles}
-                          className="hidden"
-                        />
-                        <label
-                          htmlFor="build-dataset-files-input"
-                          className="app-btn app-btn-secondary app-btn-sm cursor-pointer"
-                        >
-                          Choose Files
-                        </label>
-                        {selectedBuildFileCount > 0 && (
-                          <span className="text-xs text-gray-500">{selectedBuildFileCount} Files Selected</span>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="space-y-1">
-                        <label className="block text-xs text-gray-400">
-                          CSV Manifest {csvFileName ? `• ${csvFileName}` : ""}
-                        </label>
-                        <p className="text-[11px] text-gray-500">
-                          Columns: imageId, imageUrl, groundTruthLabel, attributes.{" "}
-                          <a href="/dataset-manifest-example.csv" download className="text-sky-400 hover:underline">Download template</a>
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-3">
-                        <input
-                          id="build-dataset-csv-input"
-                          type="file"
-                          accept=".csv,text/csv"
-                          onChange={onPickCsvFile}
-                          className="hidden"
-                        />
-                        <label
-                          htmlFor="build-dataset-csv-input"
-                          className="app-btn app-btn-secondary app-btn-sm cursor-pointer"
-                        >
-                          Choose Files
-                        </label>
-                        {csvFileName && <span className="text-xs text-gray-500">1 File Selected</span>}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {autoSplit && (
-                  <p className="border-t border-white/8 pt-4 text-xs text-gray-400">
-                    Auto-split creates TRAIN, TEST, and EVAL datasets in a 50/20/30 split. It stratifies by ground truth label
-                    and balances attributes where available. All rows must have `ground_truth_label` set before saving.
-                  </p>
-                )}
-              </div>
-
-              {detection && (
-                <div className="space-y-4 border-t border-white/8 pt-4 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="app-label">Image Attributes</div>
-                      <InfoTip label="What are image attributes?">
-                        Use attributes to tag conditions that can change model performance or hide the target, such as
-                        `snow_on_ground`, `dark_image`, `blurry_image`, `glare`, or `partial_view`. Pick reusable tags that
-                        help you balance datasets and compare results by slice later.
-                      </InfoTip>
-                    </div>
-                    <div className="text-[11px] text-gray-500">{segmentOptionsDraft.length} total</div>
-                  </div>
-
-                  <p className="app-subsection-copy">
-                    Saving here updates the detection image attributes and does not create a new prompt version.
-                  </p>
-
-                  <div className="min-h-12 px-0 py-1">
-                    <div className="flex flex-wrap gap-1.5">
-                      {segmentOptionsDraft.map((segment) => (
-                        <span key={segment} className="inline-flex items-center gap-1 rounded-lg bg-white/6 px-2 py-0.5 text-xs text-gray-200">
-                          {segment}
-                          <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => removeSegmentOption(segment)}>
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                      {segmentOptionsDraft.length === 0 && <span className="text-xs text-gray-500">No image attributes yet.</span>}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-                    <input
-                      className="app-input min-w-0 px-3 py-2 text-sm"
-                      placeholder="Add image attribute"
-                      value={newSegmentOption}
-                      onChange={(e) => setNewSegmentOption(e.target.value)}
-                    />
-                    <button type="button" onClick={addSegmentOption} className="app-btn app-btn-secondary app-btn-md">
-                      Add
-                    </button>
-                    <button
-                      type="button"
-                      onClick={saveSegmentOptions}
-                      disabled={savingSegments}
-                      className="app-btn app-btn-secondary app-btn-md disabled:opacity-50"
-                    >
-                      {savingSegments ? "Saving..." : "Save Attributes"}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+          <div>
+            <label className="text-xs text-gray-400 block mb-1">Saved Dataset</label>
+            <select
+              className="app-select w-full px-3 py-2 text-sm"
+              value={selectedExistingDatasetId}
+              onChange={(e) => setSelectedExistingDatasetId(e.target.value)}
+            >
+              <option value="">Select dataset</option>
+              {selectableDatasets.map((d) => (
+                <option key={d.dataset_id} value={d.dataset_id}>
+                  {d.name} ({splitTypeLabel(d.split_type)}, {d.size} images)
+                </option>
+              ))}
+            </select>
           </div>
-        )}
+        </div>
 
         {rows.length > 0 && (
           <div className="app-table-wrap max-h-72 overflow-auto">
-            {mode === "load" && (flaggedItemIds.size > 0 || Object.keys(resolvedFlagsByItemId).length > 0) && (
+            {(flaggedItemIds.size > 0 || Object.keys(resolvedFlagsByItemId).length > 0) && (
               <div className="px-3 py-2 flex gap-2 items-center border-b border-white/6">
                 <button
                   onClick={() => setDatasetFlagFilter((v) => v === "open" ? false : "open")}
@@ -983,8 +438,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 <col style={{ width: "8.5rem" }} />
                 <col style={{ width: "7.5rem" }} />
                 <col />
-                {mode === "load" && <col style={{ width: "7rem" }} />}
-                {mode === "build" && <col style={{ width: "5.75rem" }} />}
+                <col style={{ width: "7rem" }} />
               </colgroup>
               <thead className="sticky top-0">
                 <tr>
@@ -995,8 +449,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                   <th className="app-table-col-label">AI Label</th>
                   <th className="app-table-col-label">Confidence</th>
                   <th className="app-table-col-label">AI Description</th>
-                  {mode === "load" && <th className="app-table-col-label">Flag</th>}
-                  {mode === "build" && <th className="app-table-col-right">Action</th>}
+                  <th className="app-table-col-label">Flag</th>
                 </tr>
               </thead>
               <tbody>
@@ -1017,45 +470,15 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                       />
                     </td>
                     <td>
-                      {mode === "build" ? (
-                        <input
-                          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
-                          value={r.imageId}
-                          onChange={(e) => updateRow(r.id, { imageId: sanitizeImageId(e.target.value) })}
-                        />
-                      ) : (
-                        <div className="w-full py-1 text-xs font-mono text-gray-300">{r.imageId}</div>
-                      )}
+                      <div className="w-full py-1 text-xs font-mono text-gray-300">{r.imageId}</div>
                     </td>
                     <td className="app-table-col-label">
                       <div className="app-table-left-slot">
-                        {mode === "build" ? (
-                          <select
-                            className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
-                            value={r.groundTruthLabel || ""}
-                            onChange={(e) =>
-                              updateRow(r.id, { groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null })
-                            }
-                          >
-                            <option value="">UNSET</option>
-                            <option value="DETECTED">DETECTED</option>
-                            <option value="NOT_DETECTED">NOT_DETECTED</option>
-                          </select>
-                        ) : (
-                          <GroundTruthBadge value={r.groundTruthLabel || null} />
-                        )}
+                        <GroundTruthBadge value={r.groundTruthLabel || null} />
                       </div>
                     </td>
                     <td>
-                      {mode === "build" ? (
-                        <SegmentTagsEditor
-                          value={r.segmentTags}
-                          options={segmentOptions}
-                          onChange={(next) => updateRow(r.id, { segmentTags: next })}
-                        />
-                      ) : (
-                        <SegmentTagList value={r.segmentTags} />
-                      )}
+                      <SegmentTagList value={r.segmentTags} />
                     </td>
                     <td className="app-table-col-label">
                       <div className="app-table-left-slot">
@@ -1070,38 +493,29 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                     <td className="text-gray-400 max-w-xs truncate" title={r.aiDescription || ""}>
                       {r.aiDescription || "—"}
                     </td>
-                    {mode === "load" && (
-                      <td className="app-table-col-label">
-                        <div className="app-table-left-slot">
-                          {flaggedItemIds.has(r.id) ? (
-                            <button
-                              onClick={() => {
-                                const flag = flagsByItemId[r.id];
-                                if (flag) setResolveModalFlagId(flag.flag_id);
-                              }}
-                              className="app-btn app-btn-sm text-[10px] text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20"
-                              title={flagsByItemId[r.id]?.reason || "Flagged"}
-                            >
-                              Flagged
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => setFlagModalItemId(r.id)}
-                              className="app-btn app-btn-subtle app-btn-sm text-[10px]"
-                            >
-                              Flag
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                    {mode === "build" && (
-                      <td className="app-table-col-right">
-                        <button className="text-red-400 hover:text-red-300" onClick={() => removeRow(r.id)}>
-                          Remove
-                        </button>
-                      </td>
-                    )}
+                    <td className="app-table-col-label">
+                      <div className="app-table-left-slot">
+                        {flaggedItemIds.has(r.id) ? (
+                          <button
+                            onClick={() => {
+                              const flag = flagsByItemId[r.id];
+                              if (flag) setResolveModalFlagId(flag.flag_id);
+                            }}
+                            className="app-btn app-btn-sm text-[10px] text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20"
+                            title={flagsByItemId[r.id]?.reason || "Flagged"}
+                          >
+                            Flagged
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setFlagModalItemId(r.id)}
+                            className="app-btn app-btn-subtle app-btn-sm text-[10px]"
+                          >
+                            Flag
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1110,15 +524,6 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
         )}
 
         <div className="flex flex-wrap items-center gap-3">
-          {mode === "build" && (
-            <button
-              onClick={saveDataset}
-              disabled={!canSave || building}
-              className="app-btn app-btn-subtle app-btn-md text-xs"
-            >
-              {building && buildMode === "save" ? "Saving..." : "Save"}
-            </button>
-          )}
           <button
             onClick={runDataset}
             disabled={!canRun || building}
@@ -1160,8 +565,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           previewRow ? (
             <div className="space-y-3">
               {/* Flag for Secondary Review — at top */}
-              {mode === "load" && (
-                <div className="border-b border-white/6 pb-3">
+              <div className="border-b border-white/6 pb-3">
                   <label className="text-xs text-gray-500 block mb-1">Secondary Review</label>
                   {flaggedItemIds.has(previewRow.id) ? (
                     <div className="space-y-2">
@@ -1191,41 +595,16 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                     </button>
                   )}
                 </div>
-              )}
 
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Image ID</label>
-                {mode === "build" ? (
-                  <input
-                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs font-mono"
-                    value={previewRow.imageId}
-                    onChange={(e) => updateRow(previewRow.id, { imageId: sanitizeImageId(e.target.value) })}
-                  />
-                ) : (
-                  <div className="w-full py-1.5 text-xs font-mono text-gray-300">{previewRow.imageId}</div>
-                )}
+                <div className="w-full py-1.5 text-xs font-mono text-gray-300">{previewRow.imageId}</div>
               </div>
               <div>
                 <label className="text-xs text-gray-500 block mb-1">Ground Truth</label>
-                {mode === "build" ? (
-                  <select
-                    className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs"
-                    value={previewRow.groundTruthLabel || ""}
-                    onChange={(e) =>
-                      updateRow(previewRow.id, {
-                        groundTruthLabel: (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null,
-                      })
-                    }
-                  >
-                    <option value="">UNSET</option>
-                    <option value="DETECTED">DETECTED</option>
-                    <option value="NOT_DETECTED">NOT_DETECTED</option>
-                  </select>
-                ) : (
-                  <div className="w-full py-1.5 text-xs text-gray-300">
-                    <GroundTruthBadge value={previewRow.groundTruthLabel || null} />
-                  </div>
-                )}
+                <div className="w-full py-1.5 text-xs text-gray-300">
+                  <GroundTruthBadge value={previewRow.groundTruthLabel || null} />
+                </div>
               </div>
               <div>
                 <div className="flex items-center gap-2 mb-1">
@@ -1236,19 +615,11 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                     help you balance datasets and compare results by slice later.
                   </InfoTip>
                 </div>
-                {mode === "build" ? (
-                  <SegmentTagsEditor
-                    value={previewRow.segmentTags}
-                    options={segmentOptions}
-                    onChange={(next) => updateRow(previewRow.id, { segmentTags: next })}
-                  />
-                ) : (
-                  <SegmentTagList value={previewRow.segmentTags} />
-                )}
+                <SegmentTagList value={previewRow.segmentTags} />
               </div>
 
               {/* Resolved flag history — below attributes */}
-              {mode === "load" && resolvedFlagsByItemId[previewRow.id] && (
+              {resolvedFlagsByItemId[previewRow.id] && (
                 <div className="border-t border-white/6 pt-3">
                   <label className="text-xs text-gray-500 block mb-1">Resolved Secondary Review</label>
                   <div className="space-y-1 text-xs">
@@ -1279,24 +650,6 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 <label className="text-xs text-gray-500 block mb-1">AI Description</label>
                 <div className="text-xs text-gray-300 whitespace-pre-wrap break-words">{previewRow.aiDescription || "—"}</div>
               </div>
-              {mode === "build" && (
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    className="text-xs px-2.5 py-1 rounded bg-red-700 hover:bg-red-600 text-white"
-                    onClick={() => {
-                      removeRow(previewRow.id);
-                      setPreviewIndex((idx) => {
-                        if (idx == null) return null;
-                        if (rows.length <= 1) return null;
-                        return Math.max(0, Math.min(idx, rows.length - 2));
-                      });
-                    }}
-                  >
-                    Remove Image
-                  </button>
-                </div>
-              )}
             </div>
           ) : null
         }
@@ -1318,122 +671,6 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
       )}
     </div>
   );
-}
-
-function sanitizeImageId(input: string) {
-  return input.trim().replace(/[^a-zA-Z0-9_-]+/g, "_");
-}
-
-function validateImageIds(rows: BuildRow[]): { ok: true } | { ok: false; error: string } {
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const imageId = row.imageId.trim();
-    if (!imageId) return { ok: false, error: "Each image needs a non-blank Image ID." };
-    if (seen.has(imageId)) return { ok: false, error: `Duplicate image_id: ${imageId}` };
-    seen.add(imageId);
-  }
-  return { ok: true };
-}
-
-async function parseCsvManifest(file: File): Promise<Array<{
-  image_id: string;
-  image_url: string;
-  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
-  segment_tags?: string[] | string;
-}>> {
-  const text = await file.text();
-  const rows = parseCsvText(text);
-  if (rows.length === 0) throw new Error("CSV file is empty or has no data rows.");
-  return normalizeManifestRows(rows, "CSV");
-}
-
-function parseCsvText(text: string): Array<Record<string, string>> {
-  const lines: string[][] = [];
-  let current: string[] = [];
-  let field = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
-        else { inQuotes = false; }
-      } else {
-        field += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ",") {
-      current.push(field); field = "";
-    } else if (ch === "\n" || (ch === "\r" && text[i + 1] === "\n")) {
-      current.push(field); field = "";
-      lines.push(current); current = [];
-      if (ch === "\r") i++;
-    } else if (ch === "\r") {
-      current.push(field); field = "";
-      lines.push(current); current = [];
-    } else {
-      field += ch;
-    }
-  }
-  if (field || current.length > 0) { current.push(field); lines.push(current); }
-
-  if (lines.length < 2) return [];
-  const headers = lines[0].map((h) => h.trim());
-  return lines.slice(1)
-    .filter((row) => row.some((cell) => cell.trim()))
-    .map((row) => {
-      const obj: Record<string, string> = {};
-      headers.forEach((h, i) => { obj[h] = row[i] ?? ""; });
-      return obj;
-    });
-}
-
-function normalizeManifestRows(
-  rowsInput: Array<Record<string, unknown>>,
-  sourceLabel: string
-): Array<{
-  image_id: string;
-  image_url: string;
-  ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
-  segment_tags?: string[] | string;
-}> {
-  const rows: Array<{
-    image_id: string;
-    image_url: string;
-    ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
-    segment_tags?: string[] | string;
-  }> = [];
-
-  for (let i = 0; i < rowsInput.length; i++) {
-    const row = rowsInput[i] || {};
-    const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
-    const imageUrl = String(row.image_url || row.image_uri || row.imageUrl || row.imageUri || "").trim();
-    const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || "").trim().toUpperCase();
-    const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.attribute_tags ?? row.attributeTags ?? row.attributes ?? row.segments ?? "") as string[] | string;
-    if (!imageId) {
-      throw new Error(`${sourceLabel} row ${i + 1} has blank image_id.`);
-    }
-    if (!imageUrl) {
-      throw new Error(`${sourceLabel} row ${i + 1} has blank image_url/image_uri.`);
-    }
-    let label: "DETECTED" | "NOT_DETECTED" | null = null;
-    if (rawLabel) {
-      if (rawLabel !== "DETECTED" && rawLabel !== "NOT_DETECTED") {
-        throw new Error(`${sourceLabel} row ${i + 1} has invalid ground_truth_label: ${rawLabel}.`);
-      }
-      label = rawLabel as "DETECTED" | "NOT_DETECTED";
-    }
-    rows.push({
-      image_id: imageId,
-      image_url: imageUrl,
-      ground_truth_label: label,
-      segment_tags: segmentTags,
-    });
-  }
-
-  return rows;
 }
 
 async function pollRunToTerminalState(runId: string, onProgress?: (snapshot: any) => void): Promise<any> {
@@ -1499,131 +736,6 @@ function SegmentTagList({ value }: { value: string[] }) {
           {tag}
         </span>
       ))}
-    </div>
-  );
-}
-
-function splitRowsForAutoSplit(rows: BuildRow[]): Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", BuildRow[]> {
-  const order: Array<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL"> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
-  const splits: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", BuildRow[]> = {
-    ITERATION: [],
-    GOLDEN: [],
-    HELD_OUT_EVAL: [],
-  };
-  const shuffle = (items: BuildRow[]) => {
-    const copy = [...items];
-    for (let i = copy.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [copy[i], copy[j]] = [copy[j], copy[i]];
-    }
-    return copy;
-  };
-  const detected = shuffle(rows.filter((r) => r.groundTruthLabel === "DETECTED"));
-  const notDetected = shuffle(rows.filter((r) => r.groundTruthLabel === "NOT_DETECTED"));
-
-  const countsByRatios = (total: number, ratios: [number, number, number] = [0.5, 0.2, 0.3]) => {
-    const exact = ratios.map((r) => r * total);
-    const counts = exact.map((v) => Math.floor(v)) as [number, number, number];
-    let remaining = total - counts.reduce((acc, n) => acc + n, 0);
-    const remainders = exact
-      .map((v, idx) => ({ idx, rem: v - Math.floor(v) }))
-      .sort((a, b) => b.rem - a.rem);
-    let k = 0;
-    while (remaining > 0) {
-      counts[remainders[k % remainders.length].idx] += 1;
-      remaining -= 1;
-      k += 1;
-    }
-    return counts;
-  };
-
-  const assignWithSegmentBalancing = (bucket: BuildRow[]) => {
-    if (bucket.length === 0) return;
-    const counts = countsByRatios(bucket.length);
-    const assigned: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", number> = {
-      ITERATION: 0,
-      GOLDEN: 0,
-      HELD_OUT_EVAL: 0,
-    };
-    const segmentCounts: Record<"ITERATION" | "GOLDEN" | "HELD_OUT_EVAL", Map<string, number>> = {
-      ITERATION: new Map(),
-      GOLDEN: new Map(),
-      HELD_OUT_EVAL: new Map(),
-    };
-    const prioritized = [...bucket].sort((a, b) => (b.segmentTags?.length || 0) - (a.segmentTags?.length || 0));
-
-    for (const row of prioritized) {
-      const candidates = order.filter((split) => assigned[split] < counts[order.indexOf(split)]);
-      if (candidates.length === 0) break;
-      let best = candidates[0];
-      let bestScore = Number.POSITIVE_INFINITY;
-      for (const split of candidates) {
-        const cap = Math.max(1, counts[order.indexOf(split)]);
-        const loadPenalty = assigned[split] / cap;
-        let segPenalty = 0;
-        for (const tag of row.segmentTags || []) segPenalty += segmentCounts[split].get(tag) || 0;
-        const score = segPenalty + loadPenalty;
-        if (score < bestScore) {
-          best = split;
-          bestScore = score;
-        }
-      }
-      splits[best].push(row);
-      assigned[best] += 1;
-      for (const tag of row.segmentTags || []) {
-        segmentCounts[best].set(tag, (segmentCounts[best].get(tag) || 0) + 1);
-      }
-    }
-  };
-
-  assignWithSegmentBalancing(detected);
-  assignWithSegmentBalancing(notDetected);
-  return splits;
-}
-
-function SegmentTagsEditor({
-  value,
-  options,
-  onChange,
-}: {
-  value: string[];
-  options: string[];
-  onChange: (next: string[]) => void;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <select
-        className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px]"
-        value=""
-        onChange={(e) => {
-          const next = e.target.value;
-          if (!next) return;
-          if (!value.includes(next)) onChange([...value, next]);
-        }}
-      >
-        <option value="">Add attribute...</option>
-        {options.filter((option) => !value.includes(option)).map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      {value.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {value.map((tag) => (
-            <span key={tag} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-200 text-[11px]">
-              {tag}
-              <button
-                type="button"
-                className="text-gray-400 hover:text-red-300"
-                onClick={() => onChange(value.filter((v) => v !== tag))}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

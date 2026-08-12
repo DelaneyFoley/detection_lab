@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
       decisionRubricJson: JSON.stringify(body.decision_rubric || []),
       segmentTaxonomyJson: JSON.stringify(normalizeStringList(body.segment_taxonomy || [])),
       metricThresholdsJson: JSON.stringify(body.metric_thresholds || { primary_metric: "f1" }),
+      productionLabel: body.production_label ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -130,25 +131,54 @@ export async function PUT(req: NextRequest) {
       const hasPassingEval = evalRuns.some((r) =>
         metricsMeetThresholds(safeParseJson(r.metrics_summary, {}), thresholds)
       );
+      // A justification lets an operator approve a complex detection below the
+      // thresholds (recorded in the detection's HIL documentation), but a
+      // completed held-out eval run must still exist.
+      const overrideReason = String(body.approval_override_reason || "").trim();
       if (!hasPassingEval) {
-        return NextResponse.json(
-          { error: "Prompt can only be approved after a completed EVAL run that meets thresholds." },
-          { status: 400 }
-        );
+        if (!overrideReason) {
+          return NextResponse.json(
+            { error: "Prompt can only be approved after a completed EVAL run that meets thresholds. Provide an approval override reason to approve below thresholds." },
+            { status: 400 }
+          );
+        }
+        if (evalRuns.length === 0) {
+          return NextResponse.json(
+            { error: "An approval override still requires a completed held-out EVAL run for this prompt version." },
+            { status: 400 }
+          );
+        }
       }
     }
 
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
     detectionRepository.updateDetection({
       detectionId: body.detection_id,
-      displayName: body.display_name,
-      description: body.description || "",
-      detectionCategory: normalizeDetectionCategory(body.detection_category),
-      labelPolicy: body.label_policy || "",
-      userPromptAddendum: body.user_prompt_addendum || "",
-      decisionRubricJson: JSON.stringify(body.decision_rubric || []),
+      displayName: has("display_name") ? body.display_name : existing.display_name,
+      description: has("description") ? body.description || "" : existing.description || "",
+      detectionCategory: has("detection_category")
+        ? normalizeDetectionCategory(body.detection_category)
+        : existing.detection_category,
+      // Prompt-authoring fields are seeds now edited only via the prompt-version
+      // form; preserve existing values when the detection form omits them.
+      labelPolicy: has("label_policy") ? body.label_policy || "" : existing.label_policy || "",
+      userPromptAddendum: has("user_prompt_addendum")
+        ? body.user_prompt_addendum || ""
+        : existing.user_prompt_addendum || "",
+      decisionRubricJson: has("decision_rubric")
+        ? JSON.stringify(body.decision_rubric || [])
+        : existing.decision_rubric || "[]",
       segmentTaxonomyJson: JSON.stringify(normalizeStringList(body.segment_taxonomy || safeParseJson(existing.segment_taxonomy, []))),
-      metricThresholdsJson: JSON.stringify(body.metric_thresholds || {}),
+      metricThresholdsJson: has("metric_thresholds")
+        ? JSON.stringify(body.metric_thresholds || {})
+        : existing.metric_thresholds || "{}",
       approvedPromptVersion: requestedApprovedPromptVersion,
+      productionLabel: Object.prototype.hasOwnProperty.call(body, "production_label")
+        ? body.production_label ?? null
+        : existing.production_label ?? null,
+      approvalOverrideReason: Object.prototype.hasOwnProperty.call(body, "approval_override_reason")
+        ? body.approval_override_reason ?? null
+        : existing.approval_override_reason ?? null,
       updatedAt: now,
     });
 

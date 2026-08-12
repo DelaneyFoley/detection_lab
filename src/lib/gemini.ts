@@ -1,20 +1,9 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { GeminiDetectionResponse, PromptVersion } from "@/types";
+import { compileUserPrompt } from "@/lib/detectionPrompts";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-
-const STRICT_JSON_CONTRACT = [
-  'Return ONLY this JSON object and nothing else.',
-  '{',
-  '  "detection_code": "{{DETECTION_CODE}}",',
-  '  "decision": "DETECTED" or "NOT_DETECTED",',
-  '  "confidence": <float 0-1>,',
-  '  "evidence": "<short phrase describing visual basis>"',
-  '}',
-  'Do not wrap the JSON in markdown code fences.',
-  'Do not add any prose, comments, headings, or extra keys.',
-].join("\n");
 
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".jpg": "image/jpeg",
@@ -118,16 +107,6 @@ export async function runDetectionInference(
   // Build image part
   const imageParts = await buildImagePart(imageUri);
 
-  // Optional reference sheet (labeled severity examples) stored with the prompt
-  // version — sent as a visual few-shot calibration example before the target.
-  const referenceUri = getReferenceImageUri(prompt);
-  const referenceParts = referenceUri
-    ? [
-        { text: "REFERENCE — labeled examples for calibration. Use these to judge severity, then analyze the TARGET image that follows:" },
-        ...(await buildImagePart(referenceUri).catch(() => [])),
-      ]
-    : [];
-
   const userPrompt = prompt.user_prompt_template.replace(
     "{{DETECTION_CODE}}",
     detectionCode
@@ -142,7 +121,7 @@ export async function runDetectionInference(
 
   try {
     for (let attempt = 0; attempt <= maxParseRetries; attempt += 1) {
-      const result = await model.generateContent([currentPrompt, ...referenceParts, "TARGET image:", ...imageParts]);
+      const result = await model.generateContent([currentPrompt, ...imageParts]);
       const raw = result.response.text();
       lastRaw = raw;
 
@@ -226,28 +205,13 @@ function buildRetryPrompt({
 
 function buildCompiledUserPrompt(prompt: PromptVersion, baseUserPrompt: string, detectionCode: string): string {
   const structure = (prompt.prompt_structure || {}) as any;
-  const fixedGuidance = typeof structure.fixed_guidance === "string" ? structure.fixed_guidance.trim() : "";
-  const labelPolicy = typeof structure.label_policy === "string" ? structure.label_policy.trim() : "";
-  const decisionRubric = typeof structure.decision_rubric === "string" ? structure.decision_rubric.trim() : "";
-  const schemaContract = STRICT_JSON_CONTRACT.replace(/\{\{DETECTION_CODE\}\}/g, detectionCode);
-
-  const sections = [
-    baseUserPrompt.trim(),
-    fixedGuidance ? `Detection Guidelines (fixed):\n${fixedGuidance}` : "",
-    labelPolicy ? `Decision Policy:\n${labelPolicy}` : "",
-    decisionRubric ? `Decision Rubric:\n${decisionRubric}` : "",
-    schemaContract,
-  ].filter(Boolean);
-
-  return sections.join("\n\n");
-}
-
-/** Extract the optional reference-image data URI/URL stored on a prompt version. */
-function getReferenceImageUri(prompt: PromptVersion): string {
-  const raw = (prompt as { prompt_structure?: unknown }).prompt_structure;
-  const structure = (raw && typeof raw === "object" ? raw : (() => { try { return JSON.parse(String(raw || "{}")); } catch { return {}; } })()) as Record<string, unknown>;
-  const ref = structure.reference_image;
-  return typeof ref === "string" ? ref.trim() : "";
+  return compileUserPrompt({
+    userTemplate: baseUserPrompt,
+    detectionCode,
+    fixedGuidance: typeof structure.fixed_guidance === "string" ? structure.fixed_guidance : "",
+    labelPolicy: typeof structure.label_policy === "string" ? structure.label_policy : "",
+    decisionRubric: typeof structure.decision_rubric === "string" ? structure.decision_rubric : "",
+  });
 }
 
 export async function buildImagePart(imageUri: string) {

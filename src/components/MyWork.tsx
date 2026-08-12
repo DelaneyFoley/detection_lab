@@ -192,12 +192,145 @@ function QaReportCard({ datasetId }: { datasetId: string }) {
 
 // ─── Dataset List View ──────────────────────────────────────────────────────
 
-interface CorrectionEntry {
-  parentLabel: string;
-  parentTags: string[];
-  childLabel: string;
-  childTags: string[];
+interface StageCorrection {
+  labelCorrected: boolean;
+  labelFrom: string | null;
+  labelTo: string | null;
+  addedTags: string[];
+  removedTags: string[];
+  attrDetailKnown: boolean;
 }
+
+interface CorrectionEntry {
+  stages: string[];
+  qa: StageCorrection | null;
+  discrepancy: StageCorrection | null;
+  annotatorLabel: string | null;
+  annotatorTags: string[];
+  finalLabel: string | null;
+  finalTags: string[];
+  labelCorrected: boolean;
+  labelFrom: string | null;
+  labelTo: string | null;
+  attrCorrected: boolean;
+  addedTags: string[];
+  removedTags: string[];
+  attrDetailKnown: boolean;
+}
+
+// DETECTED = purple, NOT_DETECTED = blue — matches the scheme used app-wide.
+const labelTextColor = (label: string | null) =>
+  label === "DETECTED" ? "text-[var(--app-purple)]" : label === "NOT_DETECTED" ? "text-[var(--app-not-detected)]" : "text-gray-400";
+const labelBadgeClass = (label: string | null) =>
+  label === "DETECTED"
+    ? "bg-[var(--app-purple-soft)] text-[var(--app-purple)]"
+    : label === "NOT_DETECTED"
+      ? "bg-[var(--app-not-detected-soft)] text-[var(--app-not-detected)]"
+      : "bg-gray-500/20 text-gray-400";
+
+const stageHasDetail = (stage: StageCorrection | null): stage is StageCorrection =>
+  !!stage && (stage.labelCorrected || stage.addedTags.length > 0 || stage.removedTags.length > 0 || !stage.attrDetailKnown);
+
+// Label badge + its applied attributes (annotator's or the final), read-only.
+function LabelSnapshot({ label, tags }: { label: string | null; tags: string[] }) {
+  return (
+    <div className="space-y-2">
+      <span className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-medium ${labelBadgeClass(label)}`}>
+        {label || "UNSET"}
+      </span>
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {tags.map((tag) => (
+            <span key={tag} className="rounded-md border border-sky-400/50 bg-sky-500/12 px-2 py-0.5 text-[11px] text-sky-100">{tag}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The label / attributes change rows for one review stage.
+function StageRows({ stage }: { stage: StageCorrection }) {
+  return (
+    <div className="space-y-1 text-xs">
+      {stage.labelCorrected && (
+        <div className="flex gap-3">
+          <span className="w-20 shrink-0 text-[var(--app-text-subtle)]">label</span>
+          <span>
+            <span className="line-through text-red-300">{stage.labelFrom || "—"}</span>
+            <span className="text-[var(--app-text-subtle)]"> → </span>
+            <span className={labelTextColor(stage.labelTo)}>{stage.labelTo || "—"}</span>
+          </span>
+        </div>
+      )}
+      {(stage.addedTags.length > 0 || stage.removedTags.length > 0 || !stage.attrDetailKnown) && (
+        <div className="flex gap-3">
+          <span className="w-20 shrink-0 text-[var(--app-text-subtle)]">attributes</span>
+          <span className="space-y-0.5">
+            {stage.addedTags.length > 0 && <span className="block text-emerald-300">+ {stage.addedTags.join(", ")}</span>}
+            {stage.removedTags.length > 0 && <span className="block text-red-300">− {stage.removedTags.join(", ")}</span>}
+            {!stage.attrDetailKnown && stage.addedTags.length === 0 && stage.removedTags.length === 0 && (
+              <span className="block text-amber-300/80">corrected</span>
+            )}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Vertical timeline: annotator submission → QA → discrepancy → final, one node
+// per event connected by a single rail.
+function ReadOnlyReviewTimeline({
+  annotatorLabel, annotatorTags, correction, finalLabel, finalTags,
+}: {
+  annotatorLabel: string | null;
+  annotatorTags: string[];
+  correction: CorrectionEntry | null;
+  finalLabel: string | null;
+  finalTags: string[];
+}) {
+  const nodes: { dot: string; title: string; body: React.ReactNode }[] = [];
+  nodes.push({
+    dot: "bg-gray-400",
+    title: "Annotator submitted",
+    body: <LabelSnapshot label={annotatorLabel} tags={annotatorTags} />,
+  });
+  if (correction && stageHasDetail(correction.qa)) {
+    nodes.push({ dot: "bg-amber-400", title: "QA Review", body: <StageRows stage={correction.qa} /> });
+  }
+  if (correction && stageHasDetail(correction.discrepancy)) {
+    nodes.push({ dot: "bg-amber-400", title: "Discrepancy Review", body: <StageRows stage={correction.discrepancy} /> });
+  }
+  nodes.push({
+    dot: "bg-emerald-400",
+    title: "Final ground truth",
+    body: <LabelSnapshot label={finalLabel} tags={finalTags} />,
+  });
+
+  return (
+    <div className="app-card p-4">
+      <ul>
+        {nodes.map((node, i) => {
+          const isLast = i === nodes.length - 1;
+          return (
+            <li key={i} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${node.dot}`} />
+                {!isLast && <span className="mt-1 w-px flex-1 bg-white/10" />}
+              </div>
+              <div className={`flex-1 ${isLast ? "" : "pb-8"}`}>
+                <div className="text-[11px] font-medium uppercase tracking-wider text-[var(--app-text-muted)]">{node.title}</div>
+                <div className="mt-2">{node.body}</div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 
 function DatasetListView({
   dataset,
@@ -205,6 +338,7 @@ function DatasetListView({
   detection,
   readOnly,
   corrections,
+  excludeAttributes,
   flags,
   onBack,
   onSelectImage,
@@ -214,6 +348,7 @@ function DatasetListView({
   detection: Detection | null;
   readOnly: boolean;
   corrections: Map<string, CorrectionEntry> | null;
+  excludeAttributes: boolean;
   flags: Record<string, { reason: string }>;
   onBack: () => void;
   onSelectImage: (index: number) => void;
@@ -249,42 +384,44 @@ function DatasetListView({
 
   // Accuracy uses the same per-decision formula as the Performance Metrics tab:
   // (correct label decisions + correct attribute decisions) ÷ (images × (1 + taxonomy size)).
-  // Each image contributes one label decision plus one apply/omit decision per
-  // attribute in the detection's taxonomy; correct applications AND correct
-  // omissions (true negatives) both count.
+  // A decision is "wrong" only when QA or discrepancy review corrected it — the
+  // annotator's own self-revisions are never charged. Attributes are dropped
+  // from the formula entirely for datasets that exclude attributes from review.
   const accuracy = useMemo(() => {
     if (items.length === 0) return "—";
     const taxonomy: string[] = Array.isArray(detection?.segment_taxonomy) ? detection!.segment_taxonomy : [];
-    const perImage = 1 + taxonomy.length;
+    const attrCount = excludeAttributes ? 0 : taxonomy.length;
+    const perImage = 1 + attrCount;
     let correct = 0;
     for (const item of items) {
       const corr = corrections?.get(item.image_id);
       if (!corr) {
-        // Accepted — annotator matched the master on the label and every attribute.
         correct += perImage;
         continue;
       }
-      if (corr.childLabel === corr.parentLabel) correct += 1;
-      const childSet = new Set(corr.childTags || []);
-      const parentSet = new Set(corr.parentTags || []);
-      for (const attr of taxonomy) {
-        if (childSet.has(attr) === parentSet.has(attr)) correct += 1;
+      correct += corr.labelCorrected ? 0 : 1;
+      if (attrCount > 0) {
+        const correctedInTax = new Set(
+          [...corr.addedTags, ...corr.removedTags].filter((t) => taxonomy.includes(t))
+        );
+        let wrongAttrs = correctedInTax.size;
+        // Historical QA rows flag an attribute change without a stored diff;
+        // count at least one wrong attribute so it isn't silently free.
+        if (corr.attrCorrected && !corr.attrDetailKnown && wrongAttrs === 0) wrongAttrs = 1;
+        correct += Math.max(0, attrCount - wrongAttrs);
       }
     }
     const total = items.length * perImage;
     return total > 0 ? ((correct / total) * 100).toFixed(1) : "—";
-  }, [items, corrections, detection]);
+  }, [items, corrections, detection, excludeAttributes]);
 
   const correctionBreakdown = useMemo(() => {
     if (!corrections || corrections.size === 0) return { labelChanges: 0, attrChanges: 0 };
     let labelChanges = 0;
     let attrChanges = 0;
     for (const c of corrections.values()) {
-      if (c.childLabel !== c.parentLabel) labelChanges++;
-      const childSet = new Set(c.childTags || []);
-      const parentSet = new Set(c.parentTags || []);
-      const tagsMatch = childSet.size === parentSet.size && [...childSet].every((t) => parentSet.has(t));
-      if (!tagsMatch) attrChanges++;
+      if (c.labelCorrected) labelChanges++;
+      if (c.attrCorrected) attrChanges++;
     }
     return { labelChanges, attrChanges };
   }, [corrections]);
@@ -544,7 +681,7 @@ function DatasetListView({
               <tr>
                 <th className="app-table-col-label">Preview</th>
                 <th className="app-table-col-label">Image ID</th>
-                <th className="app-table-col-center">Ground Truth Label</th>
+                <th className="app-table-col-center">Annotator Label</th>
                 <th className="app-table-col-label">Attributes</th>
                 <th className="app-table-col-center">Flag</th>
                 <th className="app-table-col-label">Note</th>
@@ -563,7 +700,7 @@ function DatasetListView({
                       annotationBlocked
                         ? "opacity-50 cursor-not-allowed"
                         : "cursor-pointer hover:bg-[rgba(92,184,255,0.06)]"
-                    } ${correction ? "bg-amber-500/5" : ""}`}
+                    }`}
                   >
                     <td>
                       <img
@@ -576,13 +713,7 @@ function DatasetListView({
                       <div className="text-xs font-mono text-gray-300 truncate">{item.image_id}</div>
                     </td>
                     <td className="app-table-col-center">
-                      <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-medium ${
-                        item.ground_truth_label === "DETECTED"
-                          ? "bg-emerald-500/20 text-emerald-300"
-                          : item.ground_truth_label === "NOT_DETECTED"
-                            ? "bg-red-500/20 text-red-300"
-                            : "bg-gray-500/20 text-gray-400"
-                      }`}>
+                      <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-medium ${labelBadgeClass(item.ground_truth_label)}`}>
                         {item.ground_truth_label || "UNSET"}
                       </span>
                     </td>
@@ -620,37 +751,27 @@ function DatasetListView({
                     {isArchived && corrections && (
                       <td className="app-table-col-center">
                         {correction ? (() => {
-                          const labelChanged = correction.childLabel !== correction.parentLabel;
-                          const childSet = new Set(correction.childTags || []);
-                          const parentSet = new Set(correction.parentTags || []);
-                          const added = [...parentSet].filter((t) => !childSet.has(t));
-                          const removed = [...childSet].filter((t) => !parentSet.has(t));
+                          const stageFields = (stage: StageCorrection | null): string[] => {
+                            if (!stage) return [];
+                            const f: string[] = [];
+                            if (stage.labelCorrected) f.push("Label");
+                            if (stage.addedTags.length > 0 || stage.removedTags.length > 0 || !stage.attrDetailKnown) f.push("Attributes");
+                            return f;
+                          };
+                          const rows: { stage: string; fields: string[] }[] = [];
+                          const qaFields = stageFields(correction.qa);
+                          const discFields = stageFields(correction.discrepancy);
+                          if (qaFields.length > 0) rows.push({ stage: "QA", fields: qaFields });
+                          if (discFields.length > 0) rows.push({ stage: "Discrepancy", fields: discFields });
+                          if (rows.length === 0) return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 inline" />;
                           return (
-                            <div className="space-y-0.5 text-left">
-                              {labelChanged && (
-                                <div className="text-[10px]">
-                                  <span className="line-through text-red-300">{correction.childLabel}</span>
-                                  {" → "}
-                                  <span className="text-emerald-300">{correction.parentLabel}</span>
+                            <div className="space-y-0.5 text-left text-[10px]">
+                              {rows.map((r) => (
+                                <div key={r.stage}>
+                                  <span className="text-[var(--app-text-muted)]">{r.stage}:</span>{" "}
+                                  <span className="text-amber-300">{r.fields.join(", ")}</span>
                                 </div>
-                              )}
-                              {added.length > 0 && (
-                                <div className="flex flex-wrap gap-0.5">
-                                  {added.map((t) => (
-                                    <span key={t} className="rounded bg-emerald-500/10 px-1 py-0.5 text-[9px] text-emerald-300">+{t}</span>
-                                  ))}
-                                </div>
-                              )}
-                              {removed.length > 0 && (
-                                <div className="flex flex-wrap gap-0.5">
-                                  {removed.map((t) => (
-                                    <span key={t} className="rounded bg-red-500/10 px-1 py-0.5 text-[9px] text-red-300 line-through">−{t}</span>
-                                  ))}
-                                </div>
-                              )}
-                              {!labelChanged && added.length === 0 && removed.length === 0 && (
-                                <span className="text-[10px] text-amber-300">corrected</span>
-                              )}
+                              ))}
                             </div>
                           );
                         })() : (
@@ -893,9 +1014,16 @@ function AnnotationView({
   };
 
   const saveItem = useCallback(async (itemId: string, label: "DETECTED" | "NOT_DETECTED" | null, tags: string[]) => {
+    // Optimistic update: reflect the label/attribute change in the UI immediately,
+    // then persist in the background. Revert if the server request fails.
+    const prevItems = items;
+    const updated = items.map((i) => (i.item_id === itemId ? { ...i, ground_truth_label: label, segment_tags: tags } : i));
+    setItems(updated);
+    skipSyncRef.current = true;
+    onItemsChange?.(updated);
     setSaving(true);
     try {
-      await fetch("/api/datasets", {
+      const res = await fetch("/api/datasets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -904,15 +1032,18 @@ function AnnotationView({
           items: [{ item_id: itemId, ground_truth_label: label, segment_tags: tags }],
         }),
       });
-      const updated = items.map((i) => (i.item_id === itemId ? { ...i, ground_truth_label: label, segment_tags: tags } : i));
-      setItems(updated);
-      skipSyncRef.current = true;
-      onItemsChange?.(updated);
+      if (!res.ok) throw new Error("Save failed");
       onRefresh();
+    } catch {
+      // Roll back the optimistic change so the UI stays truthful.
+      setItems(prevItems);
+      skipSyncRef.current = true;
+      onItemsChange?.(prevItems);
+      notify({ tone: "error", message: "Failed to save label — reverted. Check your connection and try again." });
     } finally {
       setSaving(false);
     }
-  }, [dataset.dataset_id, onRefresh, items, onItemsChange]);
+  }, [dataset.dataset_id, onRefresh, items, onItemsChange, notify]);
 
   const handleLabelChange = (label: "DETECTED" | "NOT_DETECTED" | null) => {
     if (readOnly || !currentItem) return;
@@ -1167,18 +1298,6 @@ function AnnotationView({
             )}
           </div>
           <p className="mt-2 text-xs text-gray-500">Zoom: {(imageZoom * 100).toFixed(0)}%</p>
-          {currentCorrection && (
-            <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-              <p className="text-xs font-medium text-amber-300">
-                Corrected: Your label was <span className="font-semibold">{currentItem?.ground_truth_label || "UNSET"}</span> → Final: <span className="font-semibold">{currentCorrection.parentLabel}</span>
-              </p>
-              {currentCorrection.parentTags.length > 0 && (
-                <p className="mt-1 text-[10px] text-amber-300/70">
-                  Final attributes: {currentCorrection.parentTags.join(", ")}
-                </p>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Right: Review panel */}
@@ -1209,40 +1328,62 @@ function AnnotationView({
             )}
           </div>
 
-          {/* Ground Truth Label */}
-          <div className="app-card p-4">
-            <h4 className="text-xs text-gray-500 font-medium mb-2">Ground Truth Label</h4>
-            <div className="flex items-center gap-3 flex-wrap">
-              <span className="text-xs text-gray-400">Ground truth:</span>
-              <button
-                onClick={() => handleLabelChange("DETECTED")}
-                disabled={readOnly}
-                className={`px-3 py-1.5 rounded text-xs border ${currentItem.ground_truth_label === "DETECTED" ? "bg-[var(--app-purple-soft)] text-[var(--app-purple)] border-[color:color-mix(in_srgb,var(--app-purple)_36%,transparent)]" : readOnly ? "bg-gray-900/50 text-gray-500 border-gray-800 cursor-not-allowed" : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"}`}
-              >DETECTED</button>
-              <button
-                onClick={() => handleLabelChange("NOT_DETECTED")}
-                disabled={readOnly}
-                className={`px-3 py-1.5 rounded text-xs border ${currentItem.ground_truth_label === "NOT_DETECTED" ? "bg-[var(--app-not-detected-soft)] text-[var(--app-not-detected)] border-[color:color-mix(in_srgb,var(--app-not-detected)_36%,transparent)]" : readOnly ? "bg-gray-900/50 text-gray-500 border-gray-800 cursor-not-allowed" : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"}`}
-              >NOT_DETECTED</button>
-              <button
-                onClick={() => handleLabelChange(null)}
-                disabled={readOnly}
-                className={`px-3 py-1.5 rounded text-xs border ${!currentItem.ground_truth_label ? "bg-gray-800 text-gray-100 border-gray-500" : readOnly ? "bg-gray-900/50 text-gray-500 border-gray-800 cursor-not-allowed" : "bg-gray-900 text-gray-400 border-gray-700 hover:bg-gray-800"}`}
-              >UNSET</button>
-            </div>
-          </div>
+          {/* Ground Truth Label + Attributes — editable while annotating, or a
+              read-only annotator → corrections → final summary once archived. */}
+          {readOnly ? (
+            (() => {
+              const annLabel = currentCorrection?.annotatorLabel ?? currentItem.ground_truth_label ?? null;
+              const annTags = currentCorrection?.annotatorTags ?? currentItem.segment_tags ?? [];
+              const finLabel = currentCorrection?.finalLabel ?? currentItem.ground_truth_label ?? null;
+              const finTags = currentCorrection?.finalTags ?? currentItem.segment_tags ?? [];
+              return (
+                <ReadOnlyReviewTimeline
+                  annotatorLabel={annLabel}
+                  annotatorTags={annTags}
+                  correction={currentCorrection}
+                  finalLabel={finLabel}
+                  finalTags={finTags}
+                />
+              );
+            })()
+          ) : (
+            <>
+              {/* Ground Truth Label */}
+              <div className="app-card p-4">
+                <h4 className="text-xs text-gray-500 font-medium mb-2">Ground Truth Label</h4>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span className="text-xs text-gray-400">Ground truth:</span>
+                  <button
+                    onClick={() => handleLabelChange("DETECTED")}
+                    disabled={readOnly}
+                    className={`px-3 py-1.5 rounded text-xs border ${currentItem.ground_truth_label === "DETECTED" ? "bg-[var(--app-purple-soft)] text-[var(--app-purple)] border-[color:color-mix(in_srgb,var(--app-purple)_36%,transparent)]" : readOnly ? "bg-gray-900/50 text-gray-500 border-gray-800 cursor-not-allowed" : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"}`}
+                  >DETECTED</button>
+                  <button
+                    onClick={() => handleLabelChange("NOT_DETECTED")}
+                    disabled={readOnly}
+                    className={`px-3 py-1.5 rounded text-xs border ${currentItem.ground_truth_label === "NOT_DETECTED" ? "bg-[var(--app-not-detected-soft)] text-[var(--app-not-detected)] border-[color:color-mix(in_srgb,var(--app-not-detected)_36%,transparent)]" : readOnly ? "bg-gray-900/50 text-gray-500 border-gray-800 cursor-not-allowed" : "bg-gray-900 text-gray-300 border-gray-700 hover:bg-gray-800"}`}
+                  >NOT_DETECTED</button>
+                  <button
+                    onClick={() => handleLabelChange(null)}
+                    disabled={readOnly}
+                    className={`px-3 py-1.5 rounded text-xs border ${!currentItem.ground_truth_label ? "bg-gray-800 text-gray-100 border-gray-500" : readOnly ? "bg-gray-900/50 text-gray-500 border-gray-800 cursor-not-allowed" : "bg-gray-900 text-gray-400 border-gray-700 hover:bg-gray-800"}`}
+                  >UNSET</button>
+                </div>
+              </div>
 
-          {/* Attributes */}
-          {segmentOptions.length > 0 && (
-            <div className="app-card p-4">
-              <h4 className="text-xs text-gray-500 font-medium mb-2">Attributes</h4>
-              <AttributePills
-                options={segmentOptions}
-                selected={currentItem.segment_tags}
-                onToggle={handleTagToggle}
-                disabled={readOnly}
-              />
-            </div>
+              {/* Attributes */}
+              {segmentOptions.length > 0 && (
+                <div className="app-card p-4">
+                  <h4 className="text-xs text-gray-500 font-medium mb-2">Attributes</h4>
+                  <AttributePills
+                    options={segmentOptions}
+                    selected={currentItem.segment_tags}
+                    onToggle={handleTagToggle}
+                    disabled={readOnly}
+                  />
+                </div>
+              )}
+            </>
           )}
 
           {/* Annotator Note */}
@@ -2008,6 +2149,7 @@ export function Annotation({ detections }: { detections: Detection[] }) {
   const [annotationItems, setAnnotationItems] = useState<DatasetItemRow[]>([]);
   const [loadingAnnotation, setLoadingAnnotation] = useState(false);
   const [corrections, setCorrections] = useState<Map<string, CorrectionEntry> | null>(null);
+  const [correctionsExcludeAttributes, setCorrectionsExcludeAttributes] = useState(false);
   const [itemFlags, setItemFlags] = useState<Record<string, { reason: string }>>({});
 
   useEffect(() => {
@@ -2103,14 +2245,33 @@ export function Annotation({ detections }: { detections: Detection[] }) {
     if (ds.qa_status === "archived") {
       const cRes = await fetch(`/api/datasets?corrections=${ds.dataset_id}`);
       const cData = await cRes.json();
+      setCorrectionsExcludeAttributes(!!cData.exclude_attributes);
       if (Array.isArray(cData.corrections)) {
         const map = new Map<string, CorrectionEntry>();
+        const mapStage = (s: any): StageCorrection | null => s ? {
+          labelCorrected: !!s.label_corrected,
+          labelFrom: s.label_from ?? null,
+          labelTo: s.label_to ?? null,
+          addedTags: s.added_tags || [],
+          removedTags: s.removed_tags || [],
+          attrDetailKnown: s.attr_detail_known !== false,
+        } : null;
         for (const c of cData.corrections) {
           map.set(c.image_id, {
-            parentLabel: c.parent_label,
-            parentTags: c.parent_tags,
-            childLabel: c.child_label,
-            childTags: c.child_tags,
+            stages: c.stages || [],
+            qa: mapStage(c.qa),
+            discrepancy: mapStage(c.discrepancy),
+            annotatorLabel: c.annotator_label ?? null,
+            annotatorTags: c.annotator_tags || [],
+            finalLabel: c.final_label ?? null,
+            finalTags: c.final_tags || [],
+            labelCorrected: !!c.label_corrected,
+            labelFrom: c.label_from ?? null,
+            labelTo: c.label_to ?? null,
+            attrCorrected: !!c.attr_corrected,
+            addedTags: c.added_tags || [],
+            removedTags: c.removed_tags || [],
+            attrDetailKnown: c.attr_detail_known !== false,
           });
         }
         setCorrections(map);
@@ -2265,6 +2426,7 @@ export function Annotation({ detections }: { detections: Detection[] }) {
         detection={detection}
         readOnly={readOnly}
         corrections={corrections}
+        excludeAttributes={correctionsExcludeAttributes}
         flags={itemFlags}
         onBack={() => { setActiveDatasetId(null); setCorrections(null); }}
         onSelectImage={(idx) => setActiveItemIndex(idx)}
