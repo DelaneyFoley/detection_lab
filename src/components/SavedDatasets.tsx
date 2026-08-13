@@ -33,7 +33,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const [segmentOptionsDraft, setSegmentOptionsDraft] = useState<string[]>([]);
   const [newSegmentOption, setNewSegmentOption] = useState("");
-  const [savingSegments, setSavingSegments] = useState(false);
 
   // Review flags state
   const [flaggedItemIds, setFlaggedItemIds] = useState<Set<string>>(new Set());
@@ -47,6 +46,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [assignAnnotators, setAssignAnnotators] = useState<string[]>([]);
   const [assignResetLabels, setAssignResetLabels] = useState(true);
   const [assignResetSegments, setAssignResetSegments] = useState(true);
+  const [assignSkipQa, setAssignSkipQa] = useState(false);
+  const [assignSkipDiscrepancy, setAssignSkipDiscrepancy] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [availableAnnotators, setAvailableAnnotators] = useState<string[]>([]);
   const [alreadyAssignedAnnotators, setAlreadyAssignedAnnotators] = useState<string[]>([]);
@@ -426,6 +427,61 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
         }
       }
 
+      // Save image-attribute edits as part of the unified dataset save (no separate button).
+      if (!assigningDetection) {
+        const originalAttrs = selectedDetection
+          ? (Array.isArray(selectedDetection.segment_taxonomy) ? selectedDetection.segment_taxonomy : [])
+          : (Array.isArray(selectedDataset.segment_taxonomy) ? selectedDataset.segment_taxonomy : []);
+        const attrsChanged = [...segmentOptionsDraft].sort().join("\u0000") !== [...originalAttrs].sort().join("\u0000");
+        if (attrsChanged) {
+          if (selectedDetection) {
+            // Attributes live on the detection and are shared by all its datasets.
+            const proceed = await confirm({
+              title: "Update Detection Attributes",
+              message: `Saving will also update the image attributes for the "${selectedDetection.display_name}" detection. All datasets assigned to this detection will be affected.`,
+              confirmLabel: "Save & Update Detection",
+              tone: "warning",
+            });
+            if (proceed) {
+              const attrRes = await fetch("/api/detections", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  detection_id: selectedDetection.detection_id,
+                  display_name: selectedDetection.display_name,
+                  description: selectedDetection.description,
+                  detection_category: selectedDetection.detection_category,
+                  label_policy: selectedDetection.label_policy,
+                  user_prompt_addendum: selectedDetection.user_prompt_addendum,
+                  decision_rubric: Array.isArray(selectedDetection.decision_rubric) ? selectedDetection.decision_rubric : [],
+                  segment_taxonomy: segmentOptionsDraft,
+                  metric_thresholds: selectedDetection.metric_thresholds,
+                  approved_prompt_version: selectedDetection.approved_prompt_version,
+                }),
+              });
+              if (!attrRes.ok) {
+                const payload = await attrRes.json().catch(() => null);
+                throw new Error(payload?.error || "Failed to update detection attributes");
+              }
+            }
+          } else {
+            const attrRes = await fetch("/api/datasets", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "update_attributes",
+                dataset_id: selectedDataset.dataset_id,
+                segment_taxonomy: segmentOptionsDraft,
+              }),
+            });
+            if (!attrRes.ok) {
+              const payload = await attrRes.json().catch(() => null);
+              throw new Error(payload?.error || "Failed to update dataset attributes");
+            }
+          }
+        }
+      }
+
       const itemRes = await fetch("/api/datasets", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -488,63 +544,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
 
   const removeSegmentOption = (value: string) => {
     setSegmentOptionsDraft((prev) => prev.filter((item) => item !== value));
-  };
-
-  const saveSegmentOptions = async () => {
-    setSavingSegments(true);
-    try {
-      if (selectedDetection) {
-        const proceed = await confirm({
-          title: "Update Detection Attributes",
-          message: `This will update the image attributes for the "${selectedDetection.display_name}" detection. All datasets assigned to this detection will be affected.`,
-          confirmLabel: "Update Detection Attributes",
-          tone: "warning",
-        });
-        if (!proceed) { setSavingSegments(false); return; }
-
-        const res = await fetch("/api/detections", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            detection_id: selectedDetection.detection_id,
-            display_name: selectedDetection.display_name,
-            description: selectedDetection.description,
-            detection_category: selectedDetection.detection_category,
-            label_policy: selectedDetection.label_policy,
-            user_prompt_addendum: selectedDetection.user_prompt_addendum,
-            decision_rubric: Array.isArray(selectedDetection.decision_rubric) ? selectedDetection.decision_rubric : [],
-            segment_taxonomy: segmentOptionsDraft,
-            metric_thresholds: selectedDetection.metric_thresholds,
-            approved_prompt_version: selectedDetection.approved_prompt_version,
-          }),
-        });
-        if (!res.ok) {
-          const payload = await res.json().catch(() => null);
-          throw new Error(payload?.error || "Failed to update detection attributes");
-        }
-      } else {
-        if (!selectedDataset) { setSavingSegments(false); return; }
-        const res = await fetch("/api/datasets", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "update_attributes",
-            dataset_id: selectedDataset.dataset_id,
-            segment_taxonomy: segmentOptionsDraft,
-          }),
-        });
-        if (!res.ok) {
-          const payload = await res.json().catch(() => null);
-          throw new Error(payload?.error || "Failed to update dataset attributes");
-        }
-      }
-      triggerRefresh();
-      notify({ message: "Image attributes saved.", tone: "success" });
-    } catch (error: unknown) {
-      notify({ message: error instanceof Error ? error.message : "Failed to update image attributes", tone: "error" });
-    } finally {
-      setSavingSegments(false);
-    }
   };
 
   const updateItemField = (itemId: string, patch: Partial<DatasetItem>) => {
@@ -704,6 +703,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     setAssignAnnotators([]);
     setAssignResetLabels(true);
     setAssignResetSegments(true);
+    setAssignSkipQa(false);
+    setAssignSkipDiscrepancy(false);
     setShowAssignModal(true);
   };
 
@@ -720,6 +721,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           annotators: assignAnnotators,
           reset_labels: assignResetLabels,
           reset_segments: assignResetSegments,
+          skip_qa: assignSkipQa,
+          skip_discrepancy: assignSkipDiscrepancy,
         }),
       });
       if (!res.ok) {
@@ -1245,6 +1248,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                   <option value="ITERATION">TRAIN</option>
                   <option value="HELD_OUT_EVAL">EVALUATE</option>
                   <option value="CUSTOM">CUSTOM</option>
+                  <option value="DISCOVERY">DISCOVERY</option>
                 </select>
               </div>
             </div>
@@ -1298,14 +1302,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 />
                 <button type="button" onClick={addSegmentOption} className="app-btn app-btn-secondary app-btn-sm">
                   Add
-                </button>
-                <button
-                  type="button"
-                  onClick={saveSegmentOptions}
-                  disabled={savingSegments}
-                  className="app-btn app-btn-secondary app-btn-sm disabled:opacity-50"
-                >
-                  {savingSegments ? "Saving..." : "Save Attributes"}
                 </button>
               </div>
             </div>
@@ -1682,6 +1678,32 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               />
               Reset segment attributes
             </label>
+            {selectedDataset?.split_type === "DISCOVERY" && (
+              <div className="space-y-2 rounded-lg border border-[color:color-mix(in_srgb,#ff8ac8_30%,transparent)] bg-[rgba(74,20,52,0.35)] p-3">
+                <p className="text-[11px] text-[#ff8ac8]">Discovery flow — skip review steps after submit:</p>
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={assignSkipQa}
+                    onChange={(e) => setAssignSkipQa(e.target.checked)}
+                    className="rounded border-gray-600"
+                  />
+                  Skip QA
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={assignSkipDiscrepancy}
+                    onChange={(e) => setAssignSkipDiscrepancy(e.target.checked)}
+                    className="rounded border-gray-600"
+                  />
+                  Skip Discrepancy Resolution
+                </label>
+                {assignSkipQa && assignSkipDiscrepancy && (
+                  <p className="text-[11px] text-[var(--app-text-subtle)]">On submit, children auto-approve; the parent auto-finalizes (attribute union) once all are approved.</p>
+                )}
+              </div>
+            )}
             <div className="flex gap-2 pt-2">
               <button
                 onClick={submitAssignAnnotators}
@@ -2044,6 +2066,7 @@ function GlobalDatasetUploadForm({
             <option value="GOLDEN">TEST</option>
             <option value="HELD_OUT_EVAL">EVALUATE</option>
             <option value="CUSTOM">CUSTOM</option>
+            <option value="DISCOVERY">DISCOVERY</option>
           </select>
         </div>
       </div>

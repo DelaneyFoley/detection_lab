@@ -6,6 +6,7 @@ export const DATASET_SPLIT_TYPES: SplitType[] = [
   "GOLDEN",
   "HELD_OUT_EVAL",
   "CUSTOM",
+  "DISCOVERY",
 ];
 
 export function isDatasetSplitType(value: string): value is SplitType {
@@ -24,6 +25,8 @@ export function splitTypeLabel(splitType: string): string {
       return "EVALUATE";
     case "CUSTOM":
       return "CUSTOM";
+    case "DISCOVERY":
+      return "DISCOVERY";
     default:
       return splitType;
   }
@@ -41,6 +44,8 @@ export function splitTypeBadgeClass(splitType: string): string {
       return "app-pill app-pill-evaluate";
     case "CUSTOM":
       return "app-pill app-pill-custom";
+    case "DISCOVERY":
+      return "app-pill app-pill-discovery";
     default:
       return "app-pill app-pill-custom";
   }

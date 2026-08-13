@@ -947,7 +947,10 @@ function AnnotationView({
     }
     return [];
   }, [detection?.segment_taxonomy, dataset.segment_taxonomy]);
+  const isDiscovery = dataset.split_type === "DISCOVERY";
   const labeledCount = items.filter((i) => i.ground_truth_label !== null).length;
+  const taggedCount = items.filter((i) => Array.isArray(i.segment_tags) && i.segment_tags.length > 0).length;
+  const completeCount = isDiscovery ? taggedCount : labeledCount;
 
   const resetZoom = useCallback(() => {
     setImageZoom(1);
@@ -1185,7 +1188,7 @@ function AnnotationView({
     );
   }
 
-  const pct = items.length > 0 ? Math.round((labeledCount / items.length) * 100) : 0;
+  const pct = items.length > 0 ? Math.round((completeCount / items.length) * 100) : 0;
   const isFlagged = flaggedItemIds.has(currentItem.item_id);
   const currentFlag = flagsByItemId[currentItem.item_id];
   const resolvedFlags = resolvedFlagsByItemId[currentItem.item_id] || [];
@@ -1201,7 +1204,7 @@ function AnnotationView({
           <div className="min-w-0 flex-1">
             <h2 className="text-xl font-semibold text-[var(--app-text)]">{dataset.name}</h2>
             <p className="mt-1 text-sm text-[var(--app-text-muted)]">
-              {detection?.display_name || "Unassigned"} &middot; {labeledCount}/{items.length} labeled ({pct}%)
+              {detection?.display_name || "Unassigned"} &middot; {completeCount}/{items.length} {isDiscovery ? "tagged" : "labeled"} ({pct}%)
             </p>
           </div>
           {readOnly && (
@@ -1228,7 +1231,9 @@ function AnnotationView({
           <div className="app-card-strong p-6 w-full max-w-md space-y-4">
             <h3 className="text-sm font-semibold text-white">Submit Dataset for Review?</h3>
             <p className="text-xs text-gray-400">
-              All {items.length} items have been labeled. Once submitted, you won&apos;t be able to make changes until a manager reviews and returns the dataset.
+              {isDiscovery
+                ? `All ${items.length} images have at least one attribute tag. Once submitted, you won't be able to make changes.`
+                : `All ${items.length} items have been labeled. Once submitted, you won't be able to make changes until a manager reviews and returns the dataset.`}
             </p>
             {Object.keys(flagsByItemId).length > 0 && (
               <p className="text-xs text-amber-400">
@@ -1349,6 +1354,7 @@ function AnnotationView({
           ) : (
             <>
               {/* Ground Truth Label */}
+              {!isDiscovery && (
               <div className="app-card p-4">
                 <h4 className="text-xs text-gray-500 font-medium mb-2">Ground Truth Label</h4>
                 <div className="flex items-center gap-3 flex-wrap">
@@ -1370,6 +1376,7 @@ function AnnotationView({
                   >UNSET</button>
                 </div>
               </div>
+              )}
 
               {/* Attributes */}
               {segmentOptions.length > 0 && (

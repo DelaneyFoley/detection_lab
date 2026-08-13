@@ -390,11 +390,17 @@ export class DatasetRepository {
   }
 
   getDatasetProgress(datasetId: string): { total: number; labeled: number } {
+    // DISCOVERY datasets have no labels; "progress" is images with >=1 attribute tag.
     const row = dataStore.get<{ total: number; labeled: number }>(
       `SELECT
         COUNT(*) as total,
-        SUM(CASE WHEN ground_truth_label IS NOT NULL THEN 1 ELSE 0 END) as labeled
-      FROM dataset_items WHERE dataset_id = ?`,
+        SUM(CASE
+          WHEN d.split_type = 'DISCOVERY'
+            THEN (CASE WHEN di.segment_tags IS NOT NULL AND di.segment_tags <> '[]' AND di.segment_tags <> '' THEN 1 ELSE 0 END)
+          ELSE (CASE WHEN di.ground_truth_label IS NOT NULL THEN 1 ELSE 0 END)
+        END) as labeled
+      FROM dataset_items di JOIN datasets d ON d.dataset_id = di.dataset_id
+      WHERE di.dataset_id = ?`,
       datasetId
     );
     return { total: row?.total ?? 0, labeled: row?.labeled ?? 0 };
@@ -403,10 +409,13 @@ export class DatasetRepository {
   refreshItemsLabeledCount(datasetId: string) {
     dataStore.run(
       `UPDATE datasets SET items_labeled = (
-        SELECT COUNT(*) FROM dataset_items
-        WHERE dataset_items.dataset_id = ? AND ground_truth_label IS NOT NULL
+        SELECT COUNT(*) FROM dataset_items di
+        WHERE di.dataset_id = datasets.dataset_id
+          AND (
+            (datasets.split_type = 'DISCOVERY' AND di.segment_tags IS NOT NULL AND di.segment_tags <> '[]' AND di.segment_tags <> '')
+            OR (datasets.split_type <> 'DISCOVERY' AND di.ground_truth_label IS NOT NULL)
+          )
       ) WHERE dataset_id = ?`,
-      datasetId,
       datasetId
     );
   }
@@ -850,6 +859,79 @@ export class DatasetRepository {
 
       store.run("UPDATE datasets SET qa_status = 'finalized', split_type = 'MASTER', updated_at = ? WHERE dataset_id = ?", now, parentId);
 
+      for (const child of children) {
+        store.run("UPDATE datasets SET qa_status = 'archived', updated_at = ? WHERE dataset_id = ?", now, child.dataset_id);
+      }
+    });
+    tx(null);
+
+    this.refreshDatasetStats(parentId, now);
+    this.refreshItemsLabeledCount(parentId);
+  }
+
+  // Persist the Discovery skip flags on the parent at assignment time.
+  setSkipFlags(datasetId: string, skipQa: boolean, skipDiscrepancy: boolean): void {
+    dataStore.run(
+      "UPDATE datasets SET skip_qa = ?, skip_discrepancy = ?, updated_at = ? WHERE dataset_id = ?",
+      skipQa ? 1 : 0,
+      skipDiscrepancy ? 1 : 0,
+      new Date().toISOString(),
+      datasetId
+    );
+  }
+
+  // Finalize a DISCOVERY parent: the parent's tags per image become the UNION of
+  // every child's attribute tags (no labels), then children are archived.
+  mergeDiscoveryChildrenIntoParent(parentId: string): void {
+    const now = new Date().toISOString();
+    const children = this.getChildDatasets(parentId);
+    if (children.length === 0) throw new Error("No child datasets to merge");
+
+    const imageTagUnion = new Map<string, Set<string>>();
+    const imageNotes = new Map<string, string[]>();
+    for (const child of children) {
+      const items = dataStore.all<{ image_id: string; segment_tags: string; image_description: string | null }>(
+        "SELECT image_id, segment_tags, image_description FROM dataset_items WHERE dataset_id = ?",
+        child.dataset_id
+      );
+      for (const item of items) {
+        if (!imageTagUnion.has(item.image_id)) imageTagUnion.set(item.image_id, new Set<string>());
+        const union = imageTagUnion.get(item.image_id)!;
+        try {
+          const parsed = JSON.parse(item.segment_tags || "[]");
+          if (Array.isArray(parsed)) parsed.forEach((t) => union.add(String(t)));
+        } catch {
+          /* ignore malformed tags */
+        }
+        const note = (item.image_description || "").trim();
+        if (note) {
+          if (!imageNotes.has(item.image_id)) imageNotes.set(item.image_id, []);
+          const notes = imageNotes.get(item.image_id)!;
+          if (!notes.includes(note)) notes.push(note);
+        }
+      }
+    }
+
+    const tx = dataStore.transaction((store, _payload: null) => {
+      for (const [imageId, tags] of imageTagUnion) {
+        store.run(
+          "UPDATE dataset_items SET segment_tags = ?, item_status = 'labeled' WHERE dataset_id = ? AND image_id = ?",
+          JSON.stringify([...tags]),
+          parentId,
+          imageId
+        );
+        const notes = imageNotes.get(imageId);
+        if (notes && notes.length > 0) {
+          store.run(
+            "UPDATE dataset_items SET image_description = ? WHERE dataset_id = ? AND image_id = ?",
+            notes.join("\n"),
+            parentId,
+            imageId
+          );
+        }
+      }
+      // Keep split_type = DISCOVERY (unlike the MASTER merge which reclassifies).
+      store.run("UPDATE datasets SET qa_status = 'finalized', updated_at = ? WHERE dataset_id = ?", now, parentId);
       for (const child of children) {
         store.run("UPDATE datasets SET qa_status = 'archived', updated_at = ? WHERE dataset_id = ?", now, child.dataset_id);
       }

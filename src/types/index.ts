@@ -1,7 +1,7 @@
 // ============ Core Enums ============
 
 export type Decision = "DETECTED" | "NOT_DETECTED";
-export type SplitType = "MASTER" | "GOLDEN" | "ITERATION" | "HELD_OUT_EVAL" | "CUSTOM";
+export type SplitType = "MASTER" | "GOLDEN" | "ITERATION" | "HELD_OUT_EVAL" | "CUSTOM" | "DISCOVERY";
 export type PrimaryMetric = "precision" | "recall" | "f1";
 export type DetectionCategory = "INCORRECT_CAPTURE" | "HAZARD_IDENTIFICATION";
 
@@ -186,6 +186,8 @@ export interface Dataset {
   assigned_to: string | null;
   linked_dataset_id: string | null;
   split_parent_id: string | null;
+  skip_qa?: number | null;
+  skip_discrepancy?: number | null;
   qa_notes: string;
   items_labeled: number;
   revision_note: string | null;

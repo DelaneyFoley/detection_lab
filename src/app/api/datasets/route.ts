@@ -665,6 +665,11 @@ export async function PUT(req: NextRequest) {
       resetLabels: data.reset_labels,
       resetSegments: data.reset_segments,
     });
+    // DISCOVERY datasets carry skip flags chosen in the assign modal; they gate
+    // whether children route through QA / discrepancy after submit.
+    if (parent.split_type === "DISCOVERY") {
+      datasetRepository.setSkipFlags(data.parent_dataset_id, data.skip_qa, data.skip_discrepancy);
+    }
     for (let i = 0; i < childIds.length; i++) {
       qaRepository.createLog({
         datasetId: childIds[i],
@@ -693,6 +698,22 @@ export async function PUT(req: NextRequest) {
     const allApproved = children.every((c: any) => c.qa_status === "approved");
     if (!allApproved) {
       return NextResponse.json({ error: "All child datasets must be approved before finalizing" }, { status: 400 });
+    }
+    // DISCOVERY parents finalize by unioning attribute tags (no labels, no conflicts).
+    if (parent.split_type === "DISCOVERY") {
+      datasetRepository.mergeDiscoveryChildrenIntoParent(data.parent_dataset_id);
+      for (const child of children) {
+        if (child.assigned_to) {
+          notificationRepository.createNotification({
+            recipient: child.assigned_to,
+            type: "archive_complete",
+            datasetId: child.dataset_id,
+            title: "Dataset Finalized",
+            message: `Your tagging for "${child.name}" has been merged into the master dataset.`,
+          });
+        }
+      }
+      return NextResponse.json({ ok: true, status: "finalized" });
     }
     const excludeAttributes = !!parent.exclude_attributes;
     const conflicts = datasetRepository.getMergeConflicts(data.parent_dataset_id, excludeAttributes);

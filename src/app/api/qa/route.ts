@@ -429,6 +429,36 @@ export async function PUT(req: NextRequest) {
       if (!dataset) {
         return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
       }
+
+      // DISCOVERY datasets skip the normal QA/discrepancy pipeline based on the
+      // parent's skip flags. Skip both -> auto-approve, then auto-finalize the
+      // parent (attribute union) once every child is approved.
+      if (dataset.split_type === "DISCOVERY" && data.new_status === "submitted") {
+        const parentId = dataset.linked_dataset_id;
+        const parent = parentId ? datasetRepository.getDatasetById(parentId) : null;
+        const skipQa = !!(parent?.skip_qa);
+        const skipDiscrepancy = !!(parent?.skip_discrepancy);
+        const from = dataset.qa_status || "in_annotation";
+        datasetRepository.setRevisionNote(dataset.dataset_id, null);
+        if (skipQa && skipDiscrepancy) {
+          qaRepository.updateQaStatus(dataset.dataset_id, "approved");
+          qaRepository.createLog({ datasetId: dataset.dataset_id, action: "submitted", actor: data.actor, details: { from, discovery: true } });
+          qaRepository.createLog({ datasetId: dataset.dataset_id, action: "approved", actor: data.actor, details: { discovery_auto: true } });
+          if (parent) {
+            const children = datasetRepository.getChildDatasets(parent.dataset_id);
+            const allApproved = children.length > 0 && children.every((c: any) => c.qa_status === "approved");
+            if (allApproved) {
+              datasetRepository.mergeDiscoveryChildrenIntoParent(parent.dataset_id);
+              qaRepository.createLog({ datasetId: parent.dataset_id, action: "finalized", actor: data.actor, details: { discovery_auto: true } });
+            }
+          }
+          return NextResponse.json({ ok: true, status: "approved" });
+        }
+        qaRepository.updateQaStatus(dataset.dataset_id, "submitted");
+        qaRepository.createLog({ datasetId: dataset.dataset_id, action: "submitted", actor: data.actor, details: { from, discovery: true, skip_qa: skipQa, skip_discrepancy: skipDiscrepancy } });
+        return NextResponse.json({ ok: true, status: "submitted" });
+      }
+
       const oldStatus = dataset.qa_status || "draft";
       const allowedNext = QA_STATUS_TRANSITIONS[oldStatus] || [];
       if (!allowedNext.includes(data.new_status)) {

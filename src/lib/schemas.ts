@@ -236,6 +236,8 @@ export const DatasetAssignAnnotatorsSchema = z.object({
   annotators: z.array(z.string().trim().min(1)).min(1).max(20),
   reset_labels: z.boolean().default(true),
   reset_segments: z.boolean().default(true),
+  skip_qa: z.boolean().default(false),
+  skip_discrepancy: z.boolean().default(false),
 });
 
 export const DatasetFinalizeParentSchema = z.object({

@@ -61,7 +61,7 @@ function initSchema(db: Database.Database) {
       dataset_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       detection_id TEXT,
-      split_type TEXT NOT NULL CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
+      split_type TEXT NOT NULL CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM','DISCOVERY')),
       dataset_hash TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -254,6 +254,7 @@ function initSchema(db: Database.Database) {
   ensureReviewFlagResolutionSnapshot(db);
   ensureItemStatusColumn(db);
   ensureDatasetProgressColumns(db);
+  ensureDatasetSplitTypeDiscovery(db);
   ensureAnnotatorsTable(db);
   ensureQaSamplesAttemptColumn(db);
   ensureQaSamplesCorrectionColumns(db);
@@ -391,7 +392,7 @@ function ensureDatasetTableShape(db: Database.Database) {
       dataset_id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       detection_id TEXT,
-      split_type TEXT NOT NULL CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM')),
+      split_type TEXT NOT NULL CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM','DISCOVERY')),
       dataset_hash TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
@@ -581,6 +582,31 @@ function ensurePredictionRuntimeColumns(db: Database.Database) {
   }
 }
 
+// Adds DISCOVERY to the datasets.split_type CHECK on existing DBs by rebuilding
+// the table (SQLite can't alter a CHECK in place). No-op once DISCOVERY is present.
+function ensureDatasetSplitTypeDiscovery(db: Database.Database) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='datasets'").get() as { sql?: string } | undefined;
+  const sql = String(row?.sql || "");
+  if (!sql || sql.includes("'DISCOVERY'")) return;
+  const newSql = sql
+    .replace(/CREATE TABLE\s+"?datasets"?/i, "CREATE TABLE datasets_new")
+    .replace(
+      /CHECK\s*\(\s*split_type\s+IN\s*\([^)]*\)\s*\)/i,
+      "CHECK(split_type IN ('MASTER','GOLDEN','ITERATION','HELD_OUT_EVAL','CUSTOM','DISCOVERY'))"
+    );
+  if (!newSql.includes("'DISCOVERY'") || !newSql.includes("datasets_new")) return;
+  db.exec("PRAGMA foreign_keys = OFF;");
+  const tx = db.transaction(() => {
+    db.exec(newSql);
+    db.exec("INSERT INTO datasets_new SELECT * FROM datasets;");
+    db.exec("DROP TABLE datasets;");
+    db.exec("ALTER TABLE datasets_new RENAME TO datasets;");
+  });
+  tx();
+  db.exec("CREATE INDEX IF NOT EXISTS idx_datasets_linked_dataset_id ON datasets(linked_dataset_id);");
+  db.exec("PRAGMA foreign_keys = ON;");
+}
+
 function ensureDatasetQaColumns(db: Database.Database) {
   const columns = db.prepare("PRAGMA table_info(datasets)").all() as Array<{ name: string }>;
   if (!columns.some((c) => c.name === "qa_status")) {
@@ -600,6 +626,12 @@ function ensureDatasetQaColumns(db: Database.Database) {
   }
   if (!columns.some((c) => c.name === "segment_taxonomy")) {
     db.exec("ALTER TABLE datasets ADD COLUMN segment_taxonomy TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!columns.some((c) => c.name === "skip_qa")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN skip_qa INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.some((c) => c.name === "skip_discrepancy")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN skip_discrepancy INTEGER NOT NULL DEFAULT 0");
   }
 }
 
