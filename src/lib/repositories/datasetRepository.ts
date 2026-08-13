@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { dataStore } from "@/lib/services";
 import { sortByImageId } from "@/lib/imageIdSort";
+import { DEFAULT_IMAGE_ATTRIBUTES } from "@/lib/defaultAttributes";
 import { deriveImageCorrection, type AnnotatorCorrection, type QaSampleInput, type DiscrepancyInput } from "@/lib/annotatorCorrections";
 
 export type { AnnotatorCorrection, StageCorrection } from "@/lib/annotatorCorrections";
@@ -75,16 +76,24 @@ export class DatasetRepository {
     size: number;
     createdAt: string;
     updatedAt: string;
+    splitParentId?: string | null;
+    qaStatus?: string;
   }) {
+    // Detection-less datasets start with the common default attributes (removable);
+    // datasets tied to a detection inherit that detection's taxonomy instead.
+    const segmentTaxonomyJson = input.detectionId ? "[]" : JSON.stringify(DEFAULT_IMAGE_ATTRIBUTES);
     dataStore.run(
-      `INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, segment_taxonomy, split_parent_id, qa_status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.datasetId,
       input.name,
       input.detectionId,
       input.splitType,
       input.datasetHash,
       input.size,
+      segmentTaxonomyJson,
+      input.splitParentId ?? null,
+      input.qaStatus ?? "draft",
       input.createdAt,
       input.updatedAt
     );

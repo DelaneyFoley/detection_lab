@@ -419,7 +419,7 @@ function normalizeSegmentTags(value: unknown): string[] {
     seen.add(key);
     tags.push(clean);
   }
-  return tags.length > 0 ? tags : ["Baseline"];
+  return tags;
 }
 
 export async function PUT(req: NextRequest) {

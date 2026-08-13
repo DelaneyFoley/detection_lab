@@ -164,7 +164,7 @@ export class ReviewRepository {
         return this.normalizeSegmentTags(value);
       }
     }
-    return ["Baseline"];
+    return [];
   }
 
   private normalizeSegmentTags(value: unknown): string[] {
@@ -183,7 +183,7 @@ export class ReviewRepository {
       seen.add(key);
       tags.push(clean);
     }
-    return tags.length > 0 ? tags : ["Baseline"];
+    return tags;
   }
 }
 

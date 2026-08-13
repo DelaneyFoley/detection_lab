@@ -40,6 +40,7 @@ import {
   parseVersionLabel,
 } from "@/lib/detectionPrompts";
 import { localDateTime } from "@/lib/dateFmt";
+import { DEFAULT_IMAGE_ATTRIBUTES } from "@/lib/defaultAttributes";
 
 type AdminPromptSettings = {
   incorrect_capture_system_prompt: string;
@@ -183,7 +184,7 @@ export function DetectionSetup({
     label_policy: "",
     user_prompt_addendum: "",
     decision_rubric: [""],
-    segment_taxonomy: [""],
+    segment_taxonomy: [...DEFAULT_IMAGE_ATTRIBUTES],
     production_label: "",
     metric_thresholds: { primary_metric: "f1", min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 } as MetricThresholds,
   });
@@ -814,7 +815,7 @@ export function DetectionSetup({
       label_policy: "",
       user_prompt_addendum: "",
       decision_rubric: [""],
-      segment_taxonomy: [""],
+      segment_taxonomy: [...DEFAULT_IMAGE_ATTRIBUTES],
       production_label: "",
       metric_thresholds: { primary_metric: "f1", min_precision: 0.8, min_recall: 0.8, min_f1: 0.8 },
     });
@@ -2296,11 +2297,20 @@ export function DetectionSetup({
                   className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm"
                   value={segment}
                   onChange={(e) => {
+                    const raw = e.target.value;
                     const next = [...form.segment_taxonomy];
-                    next[index] = e.target.value;
+                    if (raw.includes(",")) {
+                      // Bulk entry: split on commas, commit all but the last part as new rows.
+                      const parts = raw.split(",");
+                      const tail = parts.pop() ?? "";
+                      const additions = parts.map((p) => p.trim()).filter(Boolean);
+                      next.splice(index, 1, ...additions, tail);
+                    } else {
+                      next[index] = raw;
+                    }
                     setForm({ ...form, segment_taxonomy: next });
                   }}
-                  placeholder="e.g. daytime, underwater, blurry"
+                  placeholder="e.g. dark_image, blurry_image (comma-separated)"
                 />
                 {form.segment_taxonomy.length > 1 && (
                   <button

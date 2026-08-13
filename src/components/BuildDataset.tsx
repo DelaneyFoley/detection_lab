@@ -693,7 +693,7 @@ function delay(ms: number) {
 }
 
 function normalizeSegmentTags(value: unknown): string[] {
-  if (value == null) return ["Baseline"];
+  if (value == null) return [];
   if (Array.isArray(value)) {
     const parts = value.map((v) => String(v || "").trim()).filter(Boolean);
     return dedupeStrings(parts);
@@ -719,7 +719,7 @@ function dedupeStrings(parts: string[]): string[] {
     seen.add(key);
     tags.push(part);
   }
-  return tags.length > 0 ? tags : ["Baseline"];
+  return tags;
 }
 
 function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {

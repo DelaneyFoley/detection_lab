@@ -185,6 +185,7 @@ export interface Dataset {
   qa_status: QaStatus;
   assigned_to: string | null;
   linked_dataset_id: string | null;
+  split_parent_id: string | null;
   qa_notes: string;
   items_labeled: number;
   revision_note: string | null;

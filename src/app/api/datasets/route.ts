@@ -162,6 +162,7 @@ export async function POST(req: NextRequest) {
       if (body?.action === "create_split_datasets") {
         const namePrefix = String(body.name_prefix || "").trim();
         const detectionId = String(body.detection_id || "").trim() || null;
+        const masterDatasetId = String(body.master_dataset_id || "").trim() || null;
         const rawItems = Array.isArray(body.items) ? body.items : [];
         if (!namePrefix) {
           return NextResponse.json({ error: "name_prefix is required" }, { status: 400 });
@@ -246,6 +247,8 @@ export async function POST(req: NextRequest) {
             size: splitItems.length,
             createdAt: now,
             updatedAt: now,
+            splitParentId: masterDatasetId,
+            qaStatus: "finalized",
           });
 
           datasetRepository.insertDatasetItems(
@@ -962,5 +965,5 @@ function normalizeSegmentTags(value: unknown): string[] {
     seen.add(key);
     tags.push(clean);
   }
-  return tags.length > 0 ? tags : ["Baseline"];
+  return tags;
 }

@@ -213,14 +213,17 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   }, [datasets, statusFilter, STATUS_TABS]);
 
   const displayGroups = useMemo(() => {
-    const groups: { parent: Dataset; children: Dataset[] }[] = [];
-    const childIds = new Set(filteredDatasets.filter((d) => d.linked_dataset_id).map((d) => d.dataset_id));
+    const groups: { parent: Dataset; children: Dataset[]; splitChildren: Dataset[] }[] = [];
     const filteredIds = new Set(filteredDatasets.map((d) => d.dataset_id));
 
     for (const d of filteredDatasets) {
+      // Skip datasets that nest under another: assigned annotator copies (linked_dataset_id)
+      // or auto-split TRAIN/TEST/EVALUATE derived from a MASTER (split_parent_id).
       if (d.linked_dataset_id && filteredIds.has(d.linked_dataset_id)) continue;
+      if (d.split_parent_id && filteredIds.has(d.split_parent_id)) continue;
       const children = filteredDatasets.filter((c) => c.linked_dataset_id === d.dataset_id);
-      groups.push({ parent: d, children });
+      const splitChildren = filteredDatasets.filter((c) => c.split_parent_id === d.dataset_id);
+      groups.push({ parent: d, children, splitChildren });
     }
 
     if (!searchQuery.trim()) return groups;
@@ -468,10 +471,18 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   };
 
   const addSegmentOption = () => {
-    const next = String(newSegmentOption || "").trim();
-    if (!next) return;
-    if (segmentOptionsDraft.some((item) => item.toLowerCase() === next.toLowerCase())) return;
-    setSegmentOptionsDraft((prev) => [...prev, next]);
+    const parts = String(newSegmentOption || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+    setSegmentOptionsDraft((prev) => {
+      const merged = [...prev];
+      for (const part of parts) {
+        if (!merged.some((item) => item.toLowerCase() === part.toLowerCase())) merged.push(part);
+      }
+      return merged;
+    });
     setNewSegmentOption("");
   };
 
@@ -826,6 +837,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           action: "create_split_datasets",
           name_prefix: baseName,
           detection_id: selectedDataset.detection_id,
+          master_dataset_id: selectedDataset.dataset_id,
           items: datasetItems.map((item) => ({
             image_id: item.image_id.trim(),
             image_uri: item.image_uri,
@@ -997,10 +1009,12 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
             </thead>
             <tbody>
               {paginatedGroups.map((group) => {
-                const { parent: d, children } = group;
-                const hasChildren = children.length > 0;
+                const { parent: d, children, splitChildren } = group;
+                const nested = [...children, ...splitChildren];
+                const hasAssignedChildren = children.length > 0;
+                const hasNested = nested.length > 0;
                 const isExpanded = expandedParents.has(d.dataset_id);
-                const parentStatus = hasChildren ? derivedStatus(children) : (d.qa_status || "draft");
+                const parentStatus = hasAssignedChildren ? derivedStatus(children) : (d.qa_status || "draft");
 
                 return (
                   <React.Fragment key={d.dataset_id}>
@@ -1014,7 +1028,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                     >
                       <td className="text-[var(--app-text)]">
                         <div className="flex items-center gap-2">
-                          {hasChildren && (
+                          {hasNested && (
                             <button
                               className="p-0.5 rounded hover:bg-white/5"
                               onClick={(e) => {
@@ -1030,7 +1044,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                               {isExpanded ? <ChevronDown className="h-3 w-3 text-[var(--app-text-subtle)]" /> : <ChevronRight className="h-3 w-3 text-[var(--app-text-subtle)]" />}
                             </button>
                           )}
-                          {hasChildren && <Link2 className="h-3 w-3 text-[var(--app-text-subtle)] shrink-0" />}
+                          {hasNested && <Link2 className="h-3 w-3 text-[var(--app-text-subtle)] shrink-0" />}
                           <span className="truncate">{d.name}</span>
                         </div>
                       </td>
@@ -1044,7 +1058,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                       <td><span className={`app-badge ${(STATUS_DISPLAY[parentStatus] || STATUS_DISPLAY.draft).color}`}>{(STATUS_DISPLAY[parentStatus] || STATUS_DISPLAY.draft).label}</span></td>
                       <td className="app-table-subtle">{new Date(d.updated_at).toLocaleDateString()}</td>
                     </tr>
-                    {hasChildren && isExpanded && children.map((child) => (
+                    {hasNested && isExpanded && nested.map((child) => (
                       <tr
                         key={child.dataset_id}
                         className={`cursor-pointer border-t border-white/5 ${
@@ -1277,7 +1291,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               <div className="flex items-center gap-2">
                 <input
                   className="app-input min-w-0 flex-1 px-3 py-1.5 text-sm"
-                  placeholder="Add image attribute"
+                  placeholder="Add attribute(s) — comma-separated"
                   value={newSegmentOption}
                   onChange={(e) => setNewSegmentOption(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSegmentOption(); } }}
@@ -2440,7 +2454,7 @@ function normalizeManifestRows(
 }
 
 function normalizeSegmentTags(value: unknown): string[] {
-  if (value == null) return ["Baseline"];
+  if (value == null) return [];
   if (Array.isArray(value)) {
     const parts = value.map((v) => String(v || "").trim()).filter(Boolean);
     return dedupeStrings(parts);
@@ -2466,7 +2480,7 @@ function dedupeStrings(parts: string[]): string[] {
     seen.add(key);
     tags.push(part);
   }
-  return tags.length > 0 ? tags : ["Baseline"];
+  return tags;
 }
 
 function SegmentTagList({ value }: { value: string[] }) {

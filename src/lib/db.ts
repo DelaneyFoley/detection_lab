@@ -592,6 +592,9 @@ function ensureDatasetQaColumns(db: Database.Database) {
   if (!columns.some((c) => c.name === "linked_dataset_id")) {
     db.exec("ALTER TABLE datasets ADD COLUMN linked_dataset_id TEXT");
   }
+  if (!columns.some((c) => c.name === "split_parent_id")) {
+    db.exec("ALTER TABLE datasets ADD COLUMN split_parent_id TEXT");
+  }
   if (!columns.some((c) => c.name === "qa_notes")) {
     db.exec("ALTER TABLE datasets ADD COLUMN qa_notes TEXT NOT NULL DEFAULT ''");
   }
