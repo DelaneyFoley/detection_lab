@@ -665,11 +665,6 @@ export async function PUT(req: NextRequest) {
       resetLabels: data.reset_labels,
       resetSegments: data.reset_segments,
     });
-    // DISCOVERY datasets carry skip flags chosen in the assign modal; they gate
-    // whether children route through QA / discrepancy after submit.
-    if (parent.split_type === "DISCOVERY") {
-      datasetRepository.setSkipFlags(data.parent_dataset_id, data.skip_qa, data.skip_discrepancy);
-    }
     for (let i = 0; i < childIds.length; i++) {
       qaRepository.createLog({
         datasetId: childIds[i],

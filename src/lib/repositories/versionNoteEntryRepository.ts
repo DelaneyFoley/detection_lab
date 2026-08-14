@@ -105,10 +105,6 @@ export class VersionNoteEntryRepository {
   deleteEntry(entryId: string): void {
     dataStore.run("DELETE FROM version_note_entries WHERE entry_id = ?", entryId);
   }
-
-  deleteEntriesForPromptVersion(promptVersionId: string): void {
-    dataStore.run("DELETE FROM version_note_entries WHERE prompt_version_id = ?", promptVersionId);
-  }
 }
 
 export const versionNoteEntryRepository = new VersionNoteEntryRepository();

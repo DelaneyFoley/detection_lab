@@ -46,8 +46,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [assignAnnotators, setAssignAnnotators] = useState<string[]>([]);
   const [assignResetLabels, setAssignResetLabels] = useState(true);
   const [assignResetSegments, setAssignResetSegments] = useState(true);
-  const [assignSkipQa, setAssignSkipQa] = useState(false);
-  const [assignSkipDiscrepancy, setAssignSkipDiscrepancy] = useState(false);
   const [assigning, setAssigning] = useState(false);
   const [availableAnnotators, setAvailableAnnotators] = useState<string[]>([]);
   const [alreadyAssignedAnnotators, setAlreadyAssignedAnnotators] = useState<string[]>([]);
@@ -703,8 +701,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     setAssignAnnotators([]);
     setAssignResetLabels(true);
     setAssignResetSegments(true);
-    setAssignSkipQa(false);
-    setAssignSkipDiscrepancy(false);
     setShowAssignModal(true);
   };
 
@@ -721,8 +717,6 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           annotators: assignAnnotators,
           reset_labels: assignResetLabels,
           reset_segments: assignResetSegments,
-          skip_qa: assignSkipQa,
-          skip_discrepancy: assignSkipDiscrepancy,
         }),
       });
       if (!res.ok) {
@@ -1679,30 +1673,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               Reset segment attributes
             </label>
             {selectedDataset?.split_type === "DISCOVERY" && (
-              <div className="space-y-2 rounded-lg border border-[color:color-mix(in_srgb,#ff8ac8_30%,transparent)] bg-[rgba(74,20,52,0.35)] p-3">
-                <p className="text-[11px] text-[#ff8ac8]">Discovery flow — skip review steps after submit:</p>
-                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={assignSkipQa}
-                    onChange={(e) => setAssignSkipQa(e.target.checked)}
-                    className="rounded border-gray-600"
-                  />
-                  Skip QA
-                </label>
-                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={assignSkipDiscrepancy}
-                    onChange={(e) => setAssignSkipDiscrepancy(e.target.checked)}
-                    className="rounded border-gray-600"
-                  />
-                  Skip Discrepancy Resolution
-                </label>
-                {assignSkipQa && assignSkipDiscrepancy && (
-                  <p className="text-[11px] text-[var(--app-text-subtle)]">On submit, children auto-approve; the parent auto-finalizes (attribute union) once all are approved.</p>
-                )}
-              </div>
+              <p className="text-[11px] text-[#ff8ac8]">Discovery datasets go through QA, then auto-finalize into the parent (union of every annotator&apos;s attribute tags) once all annotator datasets are approved. There is no discrepancy review.</p>
             )}
             <div className="flex gap-2 pt-2">
               <button

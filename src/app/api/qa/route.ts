@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
         const children = datasetRepository.getChildDatasets(parentId, { includeArchived: false });
         if (children.length >= 2 && children.every((c: any) => c.qa_status === "approved")) {
           const parent = datasetRepository.getDatasetById(parentId);
-          if (parent && parent.qa_status !== "finalized" && parent.qa_status !== "archived") {
+          if (parent && parent.qa_status !== "finalized" && parent.qa_status !== "archived" && parent.split_type !== "DISCOVERY") {
             eligible.push({ ...parent, child_count: children.length, children: children.map((c: any) => ({ dataset_id: c.dataset_id, name: c.name, assigned_to: c.assigned_to })) });
           }
         }
@@ -430,35 +430,6 @@ export async function PUT(req: NextRequest) {
         return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
       }
 
-      // DISCOVERY datasets skip the normal QA/discrepancy pipeline based on the
-      // parent's skip flags. Skip both -> auto-approve, then auto-finalize the
-      // parent (attribute union) once every child is approved.
-      if (dataset.split_type === "DISCOVERY" && data.new_status === "submitted") {
-        const parentId = dataset.linked_dataset_id;
-        const parent = parentId ? datasetRepository.getDatasetById(parentId) : null;
-        const skipQa = !!(parent?.skip_qa);
-        const skipDiscrepancy = !!(parent?.skip_discrepancy);
-        const from = dataset.qa_status || "in_annotation";
-        datasetRepository.setRevisionNote(dataset.dataset_id, null);
-        if (skipQa && skipDiscrepancy) {
-          qaRepository.updateQaStatus(dataset.dataset_id, "approved");
-          qaRepository.createLog({ datasetId: dataset.dataset_id, action: "submitted", actor: data.actor, details: { from, discovery: true } });
-          qaRepository.createLog({ datasetId: dataset.dataset_id, action: "approved", actor: data.actor, details: { discovery_auto: true } });
-          if (parent) {
-            const children = datasetRepository.getChildDatasets(parent.dataset_id);
-            const allApproved = children.length > 0 && children.every((c: any) => c.qa_status === "approved");
-            if (allApproved) {
-              datasetRepository.mergeDiscoveryChildrenIntoParent(parent.dataset_id);
-              qaRepository.createLog({ datasetId: parent.dataset_id, action: "finalized", actor: data.actor, details: { discovery_auto: true } });
-            }
-          }
-          return NextResponse.json({ ok: true, status: "approved" });
-        }
-        qaRepository.updateQaStatus(dataset.dataset_id, "submitted");
-        qaRepository.createLog({ datasetId: dataset.dataset_id, action: "submitted", actor: data.actor, details: { from, discovery: true, skip_qa: skipQa, skip_discrepancy: skipDiscrepancy } });
-        return NextResponse.json({ ok: true, status: "submitted" });
-      }
-
       const oldStatus = dataset.qa_status || "draft";
       const allowedNext = QA_STATUS_TRANSITIONS[oldStatus] || [];
       if (!allowedNext.includes(data.new_status)) {
@@ -494,6 +465,18 @@ export async function PUT(req: NextRequest) {
       }
 
       qaRepository.updateQaStatus(data.dataset_id, data.new_status);
+
+      // DISCOVERY datasets never go through discrepancy review: once every child
+      // is approved via QA, auto-finalize the parent (union of attribute tags).
+      if (data.new_status === "approved" && dataset.split_type === "DISCOVERY" && dataset.linked_dataset_id) {
+        const parentId = dataset.linked_dataset_id;
+        const children = datasetRepository.getChildDatasets(parentId);
+        const allApproved = children.length > 0 && children.every((c: any) => c.qa_status === "approved");
+        if (allApproved) {
+          datasetRepository.mergeDiscoveryChildrenIntoParent(parentId);
+          qaRepository.createLog({ datasetId: parentId, action: "finalized", actor: data.actor, details: { discovery_auto: true } });
+        }
+      }
 
       if (data.new_status === "needs_revision" && data.revision_note) {
         datasetRepository.setRevisionNote(data.dataset_id, data.revision_note);

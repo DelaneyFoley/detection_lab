@@ -45,7 +45,6 @@ export async function GET(req: NextRequest) {
   sheet.columns = [
     { header: "Image", key: "image", width: IMAGE_COL_WIDTH },
     { header: "Image ID", key: "image_id", width: 16 },
-    { header: "Image URL", key: "image_url", width: 50 },
     { header: "Predicted Label", key: "predicted_decision", width: 18 },
     { header: "Ground Truth", key: "ground_truth_label", width: 16 },
     { header: "Corrected Label", key: "corrected_label", width: 16 },
@@ -69,7 +68,6 @@ export async function GET(req: NextRequest) {
     sheet.addRow({
       image: "",
       image_id: pred.image_id,
-      image_url: pred.image_uri || "",
       predicted_decision: pred.predicted_decision || "N/A",
       ground_truth_label: pred.ground_truth_label || "",
       corrected_label: pred.corrected_label || "",

@@ -122,19 +122,14 @@ describe("deriveImageCorrection", () => {
     expect(sortT(r.final_tags)).toEqual(["a"]);
   });
 
-  it("8. QA removes a tag, discrepancy adds it back — annotator==final on tags", () => {
+  it("8. QA removes a tag, discrepancy adds it back (no annotator edit) — net zero, null", () => {
     const r = deriveImageCorrection(build({
       qaSamples: [{ outcome: "attributes_corrected", original_label: D, corrected_label: D, original_tags: ["rust", "x"], corrected_tags: ["x"] }],
       discrepancy: { resolved_label: D, corrected_tags: ["x", "rust"] },
       childCurrent: { label: D, tags: ["x"] },
       parentFinal: { label: D, tags: ["x", "rust"] },
-    }))!;
-    expect(sortT(r.annotator_tags)).toEqual(["rust", "x"]);
-    expect(sortT(r.final_tags)).toEqual(["rust", "x"]);
-    expect(sortT(r.qa!.removed_tags)).toEqual(["rust"]);
-    expect(sortT(r.discrepancy!.added_tags)).toEqual(["rust"]);
-    expect(r.label_corrected).toBe(false);
-    expect(r.attr_corrected).toBe(true);
+    }));
+    expect(r).toBeNull();
   });
 
   it("9. Pure self-revision (no QA, no discrepancy) — no correction at all", () => {
@@ -181,20 +176,14 @@ describe("deriveImageCorrection", () => {
     expect(r.discrepancy).toBeNull(); // no label change (N==N) and attrs excluded
   });
 
-  it("12. Label toggle D->N->D across stages — annotator=final=D, both flips shown", () => {
+  it("12. Label toggle D->N->D across stages (no annotator edit) — net zero, null", () => {
     const r = deriveImageCorrection(build({
       qaSamples: [{ outcome: "label_corrected", original_label: D, corrected_label: N, original_tags: ["a"], corrected_tags: ["a"] }],
       discrepancy: { resolved_label: D, corrected_tags: ["a"] },
       childCurrent: { label: N, tags: ["a"] },
       parentFinal: { label: D, tags: ["a"] },
-    }))!;
-    expect(r.annotator_label).toBe(D);
-    expect(r.final_label).toBe(D);
-    expect(r.qa!.label_from).toBe(D);
-    expect(r.qa!.label_to).toBe(N);
-    expect(r.discrepancy!.label_from).toBe(N);
-    expect(r.discrepancy!.label_to).toBe(D);
-    expect(r.label_corrected).toBe(true);
+    }));
+    expect(r).toBeNull();
   });
 
   it("13. Historical QA row with no stored diff — counts via outcome, detail unknown", () => {
@@ -263,5 +252,86 @@ describe("deriveImageCorrection", () => {
     expect(sortT(r.discrepancy!.added_tags)).toEqual(["b"]);
     expect(r.label_corrected).toBe(false);
     expect(r.attr_corrected).toBe(true);
+  });
+
+  // ── Provenance / span scenario matrix (source-of-truth semantics) ──
+
+  it("S1. Annotator N -> QA D (final D) — 1 label correction", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [{ outcome: "label_corrected", original_label: N, corrected_label: D, original_tags: [], corrected_tags: [] }],
+      childCurrent: { label: D, tags: [] },
+      parentFinal: { label: D, tags: [] },
+    }))!;
+    expect(r.label_corrected).toBe(true);
+    expect(r.label_correction_count).toBe(1);
+  });
+
+  it("S2. N -> QA D -> DR N (final N, no annotator edit) — net zero, null", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [{ outcome: "label_corrected", original_label: N, corrected_label: D, original_tags: [], corrected_tags: [] }],
+      discrepancy: { resolved_label: N, corrected_tags: [] },
+      childCurrent: { label: D, tags: [] },
+      parentFinal: { label: N, tags: [] },
+    }));
+    expect(r).toBeNull();
+  });
+
+  it("S3. Two QA rounds each correct the label — counts twice", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [
+        { outcome: "label_corrected", original_label: N, corrected_label: D, original_tags: [], corrected_tags: [] },
+        { outcome: "label_corrected", original_label: N, corrected_label: D, original_tags: [], corrected_tags: [] },
+      ],
+      childCurrent: { label: D, tags: [] },
+      parentFinal: { label: D, tags: [] },
+    }))!;
+    expect(r.label_corrected).toBe(true);
+    expect(r.label_correction_count).toBe(2);
+  });
+
+  it("S4. Annotator self-revises an unsampled image, DR corrects it — 1 (DR)", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [],
+      discrepancy: { resolved_label: N, corrected_tags: [] },
+      childCurrent: { label: D, tags: [] },
+      parentFinal: { label: N, tags: [] },
+    }))!;
+    expect(r.label_corrected).toBe(true);
+    expect(r.label_correction_count).toBe(1);
+    expect(r.stages).toEqual(["Discrepancy"]);
+  });
+
+  it("S5. Annotator self-fixes, no reviewer ever changes it — null", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [],
+      discrepancy: null,
+      childCurrent: { label: D, tags: [] },
+      parentFinal: { label: D, tags: [] },
+    }));
+    expect(r).toBeNull();
+  });
+
+  it("S6. Attribute: annotator absent -> QA add -> annotator remove -> DR add — counts twice", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [{ outcome: "both_corrected", original_label: D, corrected_label: D, original_tags: [], corrected_tags: ["rust"] }],
+      discrepancy: { resolved_label: D, corrected_tags: ["rust"] },
+      childCurrent: { label: D, tags: [] },
+      parentFinal: { label: D, tags: ["rust"] },
+    }))!;
+    expect(r.attribute_correction_count).toBe(2);
+    expect(sortT(r.added_tags)).toEqual(["rust"]);
+  });
+
+  it("S7. exclude_attributes: net-zero attribute dropped, surviving label kept", () => {
+    const r = deriveImageCorrection(build({
+      qaSamples: [{ outcome: "both_corrected", original_label: N, corrected_label: D, original_tags: [], corrected_tags: ["rust"] }],
+      discrepancy: { resolved_label: D, corrected_tags: [] },
+      childCurrent: { label: D, tags: ["rust"] },
+      parentFinal: { label: D, tags: [] },
+      excludeAttributes: true,
+    }))!;
+    expect(r.label_corrected).toBe(true);
+    expect(r.attr_corrected).toBe(false);
+    expect(r.attribute_correction_count).toBe(0);
   });
 });

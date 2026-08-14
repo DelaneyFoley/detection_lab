@@ -867,9 +867,15 @@ function DiscrepancyView({ datasets, detections, onRefresh }: { datasets: Datase
       {loading && <p className="text-sm text-[var(--app-text-muted)]">Loading discrepancies...</p>}
 
       {!loading && selectedParent && conflicts.length === 0 && resolvedConflicts.length === 0 && (
-        <div className="app-card p-8 text-center">
+        <div className="app-card p-8 text-center space-y-3">
           <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-400" />
-          <p className="mt-2 text-sm text-[var(--app-text-muted)]">All annotators agree. No discrepancies found.</p>
+          <p className="text-sm text-[var(--app-text-muted)]">All annotators agree. No discrepancies found.</p>
+          <p className="text-xs text-[var(--app-text-muted)]">Finalize to merge the annotators&apos; work into the parent dataset and archive the child datasets.</p>
+          <button
+            onClick={() => setShowFinalizeConfirm(true)}
+            disabled={submitting}
+            className="app-btn app-btn-success app-btn-sm text-xs disabled:opacity-40"
+          >Finalize &amp; Merge</button>
         </div>
       )}
 
@@ -1926,6 +1932,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
   const [reviewError, setReviewError] = useState<string | null>(null);
 
   const selectedDatasetObj = datasets.find((d) => d.dataset_id === selectedDataset);
+  const isDiscovery = selectedDatasetObj?.split_type === "DISCOVERY";
   const computedCount = countMode === "percentage" && selectedDatasetObj
     ? Math.ceil(selectedDatasetObj.size * percentage / 100)
     : count;
@@ -2786,6 +2793,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
             )}
 
             {/* Editable Ground Truth Label */}
+            {!isDiscovery && (
             <div className={`${SECTION_DIVIDER_CLASS} space-y-2`}>
               <div className={SECTION_LABEL_CLASS}>Ground Truth Label</div>
               {currentSample.item_id ? (
@@ -2830,6 +2838,7 @@ function SamplingView({ datasets, detections, onRefresh }: { datasets: DatasetQa
                 </p>
               )}
             </div>
+            )}
 
             {/* Editable Attributes */}
             {(segmentOptions.length > 0 || displayTags.length > 0) && (

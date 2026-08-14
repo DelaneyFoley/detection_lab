@@ -1,6 +1,5 @@
 import type { Prediction } from "@/types";
 import { dataStore } from "@/lib/services";
-import { v4 as uuid } from "uuid";
 
 export class ReviewRepository {
   getPredictionById(predictionId: string): any | undefined {
@@ -86,72 +85,6 @@ export class ReviewRepository {
 
   updateRunMetrics(runId: string, metricsJson: string) {
     dataStore.run("UPDATE runs SET metrics_summary = ? WHERE run_id = ?", metricsJson, runId);
-  }
-
-  /**
-   * Re-sync a run's per-prediction ground_truth_label snapshot to the dataset's
-   * CURRENT canonical ground truth, so runs scored under an older GT snapshot can
-   * be recomputed against today's labels. Only touches predictions whose image
-   * still exists in the dataset (never nulls a snapshot to a missing item).
-   */
-  syncRunGroundTruthFromDataset(runId: string, datasetId: string): void {
-    dataStore.run(
-      `UPDATE predictions SET ground_truth_label = (
-         SELECT di.ground_truth_label FROM dataset_items di
-         WHERE di.dataset_id = ? AND di.image_id = predictions.image_id
-       )
-       WHERE run_id = ? AND EXISTS (
-         SELECT 1 FROM dataset_items di
-         WHERE di.dataset_id = ? AND di.image_id = predictions.image_id
-       )`,
-      datasetId,
-      runId,
-      datasetId
-    );
-  }
-
-  logGroundtruthCorrection(input: {
-    predictionId: string;
-    runId: string;
-    datasetId: string;
-    imageId: string;
-    oldLabel: string | null;
-    newLabel: string | null;
-    predictedDecision: string | null;
-    reason: string | null;
-    actor?: string | null;
-  }): string {
-    const id = uuid();
-    const now = new Date().toISOString();
-    let aiMatches: number | null = null;
-    if (input.newLabel && input.predictedDecision && input.predictedDecision !== "PARSE_FAIL") {
-      aiMatches = input.predictedDecision === input.newLabel ? 1 : 0;
-    }
-    dataStore.run(
-      `INSERT INTO groundtruth_corrections
-        (correction_id, prediction_id, run_id, dataset_id, image_id, old_label, new_label, predicted_decision, ai_matches_new_gt, reason, actor, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      input.predictionId,
-      input.runId,
-      input.datasetId,
-      input.imageId,
-      input.oldLabel,
-      input.newLabel,
-      input.predictedDecision,
-      aiMatches,
-      input.reason,
-      input.actor || "user",
-      now
-    );
-    return id;
-  }
-
-  getGroundtruthCorrectionsByRun(runId: string): any[] {
-    return dataStore.all<any>(
-      `SELECT * FROM groundtruth_corrections WHERE run_id = ? ORDER BY created_at DESC`,
-      runId
-    );
   }
 
   private parseSegmentTags(value: unknown): string[] {

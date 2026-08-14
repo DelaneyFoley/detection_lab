@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import type { QaSample, QaLog, AnnotatorMetrics, MetricsSnapshot, DatasetMetric } from "@/types";
 import { dataStore } from "@/lib/services";
+import { datasetRepository } from "@/lib/repositories/datasetRepository";
 
 export class QaRepository {
   // ============ Dataset QA operations ============
@@ -545,45 +546,36 @@ export class QaRepository {
           );
           const taxonomy = parseTags(detRow?.segment_taxonomy ?? null);
 
-          const pairs = dataStore.all<{
-            ann_label: string | null;
-            ref_label: string | null;
-            ann_tags: string | null;
-            ref_tags: string | null;
-          }>(
-            `SELECT
-              a.ground_truth_label AS ann_label,
-              b.ground_truth_label AS ref_label,
-              a.segment_tags AS ann_tags,
-              b.segment_tags AS ref_tags
-            FROM dataset_items a
-            INNER JOIN dataset_items b ON a.image_id = b.image_id
-            WHERE a.dataset_id = ? AND b.dataset_id = ?`,
+          const compared = dataStore.all<{ image_id: string }>(
+            `SELECT a.image_id AS image_id
+             FROM dataset_items a
+             INNER JOIN dataset_items b ON a.image_id = b.image_id
+             WHERE a.dataset_id = ? AND b.dataset_id = ? AND b.ground_truth_label IS NOT NULL`,
             ds.dataset_id,
             ds.linked_dataset_id!
           );
+          const comparedIds = new Set(compared.map((c) => c.image_id));
+          const comparedCount = comparedIds.size;
 
-          for (const pair of pairs) {
-            // Only score images that were actually annotated in the finalized reference.
-            if (!pair.ref_label) continue;
+          // Score from the SAME provenance/span corrections as the archived-dataset
+          // tiles and the corrections table (surviving reviewer corrections vs the
+          // annotator's authored value), never a raw child-vs-parent diff — so all
+          // three surfaces agree by construction.
+          const corrections = datasetRepository
+            .getAnnotatorCorrections(ds.dataset_id)
+            .filter((c) => comparedIds.has(c.image_id));
 
-            annotatorLabelsCompared++;
-            if (pair.ann_label === pair.ref_label) {
-              annotatorLabelMatches++;
+          annotatorLabelsCompared += comparedCount;
+          annotatorLabelMatches += comparedCount - corrections.filter((c) => c.label_corrected).length;
+
+          if (taxonomy.length > 0 && !excludeAttributes) {
+            annotatorAttrCount += comparedCount * taxonomy.length;
+            let wrongAttrs = 0;
+            for (const c of corrections) {
+              const changed = new Set<string>([...c.added_tags, ...c.removed_tags].filter((t) => taxonomy.includes(t)));
+              wrongAttrs += changed.size;
             }
-
-            if (taxonomy.length > 0 && !excludeAttributes) {
-              const refTags = parseTags(pair.ref_tags);
-              const annTags = parseTags(pair.ann_tags);
-              annotatorAttrCount += taxonomy.length;
-              for (const attr of taxonomy) {
-                // Correct when the annotator's apply/omit decision matches the
-                // reference — a correct application or a correct omission.
-                if (refTags.includes(attr) === annTags.includes(attr)) {
-                  annotatorAttrMatches++;
-                }
-              }
-            }
+            annotatorAttrMatches += comparedCount * taxonomy.length - wrongAttrs;
           }
         }
 
