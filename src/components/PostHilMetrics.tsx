@@ -6,6 +6,7 @@ import { MetricsDisplay } from "@/components/MetricsDisplay";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import type { Detection, Run, Prediction, PromptVersion, PromptEditSuggestion } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
+import { buildVersionLabel, parseVersionLabel } from "@/lib/detectionPrompts";
 import { formatMetricValue } from "@/lib/ui/metrics";
 
 export function PostHilMetrics({ detection }: { detection: Detection }) {
@@ -135,10 +136,13 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
 
     let newLabelPolicy = (prompt.prompt_structure as any)?.label_policy || "";
     let newDecisionRubric = (prompt.prompt_structure as any)?.decision_rubric || "";
-    let newUserPromptAddendum = (prompt.prompt_structure as any)?.user_prompt_addendum || detection.user_prompt_addendum || "";
+    let newUserPromptAddendum =
+      (prompt.prompt_structure as any)?.user_prompt_addendum || detection.user_prompt_addendum || "";
 
-    for (const i of selectedSuggestions) {
-      const s = editableSuggestions[i];
+    const accepted = editableSuggestions.filter((_, i) => selectedSuggestions.has(i));
+    const rejected = editableSuggestions.filter((_, i) => !selectedSuggestions.has(i));
+
+    for (const s of accepted) {
       if (s.section === "label_policy" || s.section === "decision_policy") {
         newLabelPolicy = newLabelPolicy.replace(s.old_text, s.new_text);
       } else if (s.section === "decision_rubric") {
@@ -148,40 +152,30 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       }
     }
 
-    const versionNum = prompts.length + 1;
-    const acceptedCount = selectedSuggestions.size;
+    const acceptedCount = accepted.length;
     const suggestedCount = editableSuggestions.length;
 
-    try {
-      if (newUserPromptAddendum !== (detection.user_prompt_addendum || "")) {
-        const detectionRes = await fetch("/api/detections", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            detection_id: detection.detection_id,
-            display_name: detection.display_name,
-            description: detection.description,
-            detection_category: detection.detection_category,
-            label_policy: detection.label_policy,
-            user_prompt_addendum: newUserPromptAddendum,
-            decision_rubric: detection.decision_rubric,
-            segment_taxonomy: detection.segment_taxonomy,
-            metric_thresholds: detection.metric_thresholds,
-            approved_prompt_version: detection.approved_prompt_version,
-          }),
-        });
-        const detectionPayload = await detectionRes.json().catch(() => null);
-        if (!detectionRes.ok) {
-          throw new Error(detectionPayload?.error || "Failed to update detection addendum");
-        }
-      }
+    // Keep the same version group as the run's prompt; just bump to the next V#.
+    const baseName = parseVersionLabel(prompt.version_label).base;
+    const versionLabel = buildVersionLabel(baseName, prompts.map((p) => p.version_label));
 
+    const editedSections = Array.from(new Set(accepted.map((s) => formatSectionLabel(s.section))));
+    const changeNote = `AI-assisted prompt feedback: accepted ${acceptedCount}/${suggestedCount} suggestions (${editedSections.join(", ") || "no sections"}).`;
+    const versionNotes = [
+      `Iterated from ${prompt.version_label} via Prompt Feedback.`,
+      `Accepted ${acceptedCount} of ${suggestedCount} AI suggestions:`,
+      ...accepted.map((s) => `• ${formatSectionLabel(s.section)}: ${s.rationale || "updated"}`),
+    ].join("\n");
+
+    try {
+      // Create exactly ONE new version carrying the accepted edits.
       const res = await fetch("/api/prompts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           detection_id: detection.detection_id,
-          version_label: `v${versionNum}.0`,
+          version_label: versionLabel,
+          source_prompt_version_id: prompt.prompt_version_id,
           prompt_structure: {
             ...(prompt.prompt_structure || {}),
             label_policy: newLabelPolicy,
@@ -192,7 +186,8 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
           temperature: prompt.temperature,
           top_p: prompt.top_p,
           max_output_tokens: prompt.max_output_tokens,
-          change_notes: `AI edits accepted: ${acceptedCount}/${suggestedCount}`,
+          change_notes: changeNote,
+          version_notes: versionNotes,
           created_by: "ai-assistant",
         }),
       });
@@ -200,67 +195,70 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       if (!res.ok || !data?.prompt_version_id) {
         throw new Error(data?.error || "Failed to create new prompt version");
       }
-      const accepted = editableSuggestions.filter((_, i) => selectedSuggestions.has(i));
-      const rejected = editableSuggestions.filter((_, i) => !selectedSuggestions.has(i));
 
-      // Run test regression for both previous and candidate prompt versions, if TEST dataset exists.
-      const datasetsRes = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
-      const datasets = await datasetsRes.json();
-      const testDataset = datasets.find((d: any) => d.split_type === "GOLDEN");
+      // Regress the candidate against the PRE-edit version on the GOLDEN set.
+      // Best-effort: a regression failure must not discard the already-saved
+      // version or surface as a hard failure (that previously caused retries to
+      // pile up duplicate versions).
       let regressionResult: {
         previous: { run_id: string; metrics_summary: any } | null;
         candidate: { run_id: string; metrics_summary: any } | null;
         passed: boolean | null;
         evaluated_at: string;
       } | null = null;
+      let regressionError: string | null = null;
 
-      if (testDataset) {
-        const previousPrompt =
-          [...prompts]
-            .sort((a, b) => Date.parse(String(b.created_at || 0)) - Date.parse(String(a.created_at || 0)))[0] || prompt;
-        const previousRun = await runPromptOnDataset({
-          apiKey,
-          selectedModel,
-          promptVersionId: previousPrompt.prompt_version_id,
-          datasetId: testDataset.dataset_id,
-          detectionId: detection.detection_id,
-        });
-        const candidateRun = await runPromptOnDataset({
-          apiKey,
-          selectedModel,
-          promptVersionId: data.prompt_version_id,
-          datasetId: testDataset.dataset_id,
-          detectionId: detection.detection_id,
-        });
-        if (!previousRun?.metrics_summary || !candidateRun?.metrics_summary) {
-          throw new Error("TEST regression runs did not produce metrics.");
+      try {
+        const datasetsRes = await fetch(`/api/datasets?detection_id=${detection.detection_id}`);
+        const datasets = await datasetsRes.json();
+        const testDataset = datasets.find((d: any) => d.split_type === "GOLDEN");
+        if (testDataset) {
+          const previousRun = await runPromptOnDataset({
+            apiKey,
+            selectedModel,
+            promptVersionId: prompt.prompt_version_id,
+            datasetId: testDataset.dataset_id,
+            detectionId: detection.detection_id,
+          });
+          const candidateRun = await runPromptOnDataset({
+            apiKey,
+            selectedModel,
+            promptVersionId: data.prompt_version_id,
+            datasetId: testDataset.dataset_id,
+            detectionId: detection.detection_id,
+          });
+          if (!previousRun?.metrics_summary || !candidateRun?.metrics_summary) {
+            throw new Error("TEST regression runs did not produce metrics.");
+          }
+          const passed = checkThresholds(candidateRun.metrics_summary, detection.metric_thresholds);
+          regressionResult = {
+            previous: { run_id: previousRun.run_id, metrics_summary: previousRun.metrics_summary },
+            candidate: { run_id: candidateRun.run_id, metrics_summary: candidateRun.metrics_summary },
+            passed,
+            evaluated_at: new Date().toISOString(),
+          };
+          setTestRegressionResult(regressionResult);
+
+          await fetch("/api/prompts", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt_version_id: data.prompt_version_id,
+              golden_set_regression_result: {
+                passed,
+                run_id: candidateRun.run_id,
+                metrics: candidateRun.metrics_summary,
+                previous_metrics: previousRun.metrics_summary,
+                evaluated_at: regressionResult.evaluated_at,
+              },
+            }),
+          });
         }
-
-        const thresholds = detection.metric_thresholds;
-        const passed = checkThresholds(candidateRun.metrics_summary, thresholds);
-        regressionResult = {
-          previous: { run_id: previousRun.run_id, metrics_summary: previousRun.metrics_summary },
-          candidate: { run_id: candidateRun.run_id, metrics_summary: candidateRun.metrics_summary },
-          passed,
-          evaluated_at: new Date().toISOString(),
-        };
-        setTestRegressionResult(regressionResult);
-
-        await fetch("/api/prompts", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt_version_id: data.prompt_version_id,
-            golden_set_regression_result: {
-              passed,
-              run_id: candidateRun.run_id,
-              metrics: candidateRun.metrics_summary,
-              previous_metrics: previousRun.metrics_summary,
-              evaluated_at: new Date().toISOString(),
-            },
-          }),
-        });
+      } catch (regErr) {
+        regressionError = regErr instanceof Error ? regErr.message : String(regErr);
+        console.error("Prompt feedback regression failed", regErr);
       }
+
       await fetch("/api/runs", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -269,7 +267,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
           prompt_feedback_log: {
             accepted,
             rejected,
-            created_prompt_version_id: data?.prompt_version_id || null,
+            created_prompt_version_id: data.prompt_version_id,
             created_at: new Date().toISOString(),
             test_regression_result: regressionResult,
           },
@@ -278,17 +276,27 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
 
       notify({
         message: regressionResult
-          ? `New prompt version saved. TEST regression: ${regressionResult.passed ? "PASSED" : "FAILED"}`
-          : "New prompt version saved. No TEST dataset found for regression.",
-        tone: "success",
+          ? `Saved ${versionLabel}. TEST regression: ${regressionResult.passed ? "PASSED" : "FAILED"}.`
+          : regressionError
+            ? `Saved ${versionLabel}. Regression skipped: ${regressionError}`
+            : `Saved ${versionLabel}. No TEST dataset found for regression.`,
+        tone: regressionError ? "warning" : "success",
       });
 
+      // Clear the selection so the (now re-enabled) button can't re-apply the
+      // same edits and create a duplicate version.
+      setSelectedSuggestions(new Set());
       loadRuns();
       triggerRefresh();
     } catch (err) {
       console.error(err);
+      notify({
+        message: err instanceof Error ? err.message : "Failed to save new prompt version.",
+        tone: "error",
+      });
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const metrics = runData?.metrics_summary;
@@ -550,16 +558,20 @@ async function runPromptOnDataset(input: {
   datasetId: string;
   detectionId: string;
 }): Promise<any> {
+  const body: Record<string, unknown> = {
+    prompt_version_id: input.promptVersionId,
+    dataset_id: input.datasetId,
+    detection_id: input.detectionId,
+  };
+  // Optional fields are rejected by the runs schema when sent as empty strings;
+  // omit them so the server falls back to the env API key / prompt's model.
+  if (input.apiKey.trim()) body.api_key = input.apiKey.trim();
+  if (input.selectedModel.trim()) body.model_override = input.selectedModel.trim();
+
   const regRes = await fetch("/api/runs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: input.apiKey,
-      model_override: input.selectedModel,
-      prompt_version_id: input.promptVersionId,
-      dataset_id: input.datasetId,
-      detection_id: input.detectionId,
-    }),
+    body: JSON.stringify(body),
   });
   const regStart = await regRes.json();
   if (!regRes.ok || !regStart?.run_id) {

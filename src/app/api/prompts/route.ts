@@ -53,13 +53,19 @@ export async function POST(req: NextRequest) {
     const byKey = new Map(rows.map((row) => [row.key, row.value]));
     const defaults = DEFAULT_CATEGORY_PROMPT_TEMPLATES[category];
     const systemPrompt = byKey.get(keys.system) || defaults.system_prompt;
+    // Honor the addendum authored for THIS version; fall back to the detection default.
+    const submittedStructure = (body.prompt_structure || {}) as Record<string, unknown>;
+    const versionAddendum =
+      typeof submittedStructure.user_prompt_addendum === "string"
+        ? submittedStructure.user_prompt_addendum
+        : detection.user_prompt_addendum;
     const userPromptTemplate = buildUserPromptTemplate(
       byKey.get(keys.user) || defaults.user_prompt_template,
-      detection.user_prompt_addendum
+      versionAddendum
     );
     const promptStructure = {
-      ...(body.prompt_structure || {}),
-      user_prompt_addendum: String(detection.user_prompt_addendum || ""),
+      ...submittedStructure,
+      user_prompt_addendum: String(versionAddendum || ""),
     };
 
     const mode = body.mode === "PRODUCTION_MODE" ? "PRODUCTION_MODE" : "DEVELOPMENT_MODE";

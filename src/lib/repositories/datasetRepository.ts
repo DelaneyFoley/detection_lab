@@ -78,10 +78,13 @@ export class DatasetRepository {
     updatedAt: string;
     splitParentId?: string | null;
     qaStatus?: string;
+    segmentTaxonomy?: string[];
   }) {
-    // Detection-less datasets start with the common default attributes (removable);
-    // datasets tied to a detection inherit that detection's taxonomy instead.
-    const segmentTaxonomyJson = input.detectionId ? "[]" : JSON.stringify(DEFAULT_IMAGE_ATTRIBUTES);
+    // Detection-less datasets start with the common default attributes (removable) or a
+    // caller-provided list; datasets tied to a detection inherit that detection's taxonomy.
+    const segmentTaxonomyJson = input.detectionId
+      ? "[]"
+      : JSON.stringify(input.segmentTaxonomy ?? DEFAULT_IMAGE_ATTRIBUTES);
     dataStore.run(
       `INSERT INTO datasets (dataset_id, name, detection_id, split_type, dataset_hash, size, segment_taxonomy, split_parent_id, qa_status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

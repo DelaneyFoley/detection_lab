@@ -28,7 +28,7 @@ const AUTO_ERROR_TAGS = new Set<ErrorTag>([
   "INFERENCE_CALL_FAILED",
 ]);
 
-type FilterType = "all" | "fp" | "fn" | "parse_fail" | "correct" | "corrected" | "gt_corrected" | "flagged_open" | "flagged_resolved";
+type FilterType = "all" | "fp" | "fn" | "parse_fail" | "correct" | "gt_corrected" | "flagged_open" | "flagged_resolved";
 
 const RESOLUTION_ACTIONS: { value: ResolutionAction; label: string }[] = [
   { value: "label_confirmed", label: "Label Confirmed" },
@@ -70,8 +70,8 @@ export function HilReview({ detection }: { detection: Detection }) {
     () =>
       predictions.filter(
         (p) =>
-          (p.corrected_label || p.ground_truth_label) === "DETECTED" ||
-          (p.corrected_label || p.ground_truth_label) === "NOT_DETECTED"
+          p.ground_truth_label === "DETECTED" ||
+          p.ground_truth_label === "NOT_DETECTED"
       ).length,
     [predictions]
   );
@@ -216,13 +216,12 @@ export function HilReview({ detection }: { detection: Detection }) {
   }, [loadRun]);
 
   const filteredPredictions = predictions.filter((p) => {
-    const gt = p.corrected_label || p.ground_truth_label;
+    const gt = p.ground_truth_label;
     switch (filter) {
       case "fp": return p.parse_ok && p.predicted_decision === "DETECTED" && gt === "NOT_DETECTED";
       case "fn": return p.parse_ok && p.predicted_decision === "NOT_DETECTED" && gt === "DETECTED";
       case "parse_fail": return !p.parse_ok && !isInferenceCallFailure(p);
       case "correct": return p.parse_ok && p.predicted_decision === gt;
-      case "corrected": return p.corrected_label !== null;
       case "gt_corrected": return (gtCorrectionsByPredictionId[p.prediction_id]?.length || 0) > 0;
       case "flagged_open": return flaggedPredictionIds.has(p.prediction_id);
       case "flagged_resolved": return resolvedFlaggedPredictionIds.has(p.prediction_id);
@@ -231,7 +230,6 @@ export function HilReview({ detection }: { detection: Detection }) {
   });
 
   const updatePrediction = async (predictionId: string, updates: Partial<{
-    corrected_label: Decision | null;
     ground_truth_label: Decision | null;
     error_tag: ErrorTag | null;
     reviewer_note: string | null;
@@ -245,7 +243,6 @@ export function HilReview({ detection }: { detection: Detection }) {
         if (p.prediction_id !== predictionId) return p;
         const next: Prediction = {
           ...p,
-          corrected_label: updates.corrected_label !== undefined ? updates.corrected_label : p.corrected_label,
           ground_truth_label:
             updates.ground_truth_label !== undefined ? updates.ground_truth_label : p.ground_truth_label,
           error_tag: updates.error_tag !== undefined ? updates.error_tag : p.error_tag,
@@ -298,8 +295,7 @@ export function HilReview({ detection }: { detection: Detection }) {
     }
 
     const metricsImpactingUpdate =
-      Object.prototype.hasOwnProperty.call(updates, "ground_truth_label") ||
-      Object.prototype.hasOwnProperty.call(updates, "corrected_label");
+      Object.prototype.hasOwnProperty.call(updates, "ground_truth_label");
     if (metricsImpactingUpdate) {
       loadRuns();
       triggerRefresh();
@@ -664,19 +660,17 @@ export function HilReview({ detection }: { detection: Detection }) {
               ["fn", "False Negatives"],
               ["parse_fail", "Parse Failures"],
               ["correct", "Correct"],
-              ["corrected", "Corrected"],
               ["gt_corrected", "GT Updated"],
               ["flagged_open", "Flagged — Open"],
               ["flagged_resolved", "Flagged — Resolved"],
             ] as [FilterType, string][]).map(([key, label]) => {
               const count = predictions.filter((p) => {
-                const gt = p.corrected_label || p.ground_truth_label;
+                const gt = p.ground_truth_label;
                 switch (key) {
                   case "fp": return p.parse_ok && p.predicted_decision === "DETECTED" && gt === "NOT_DETECTED";
                   case "fn": return p.parse_ok && p.predicted_decision === "NOT_DETECTED" && gt === "DETECTED";
                   case "parse_fail": return !p.parse_ok && !isInferenceCallFailure(p);
                   case "correct": return p.parse_ok && p.predicted_decision === gt;
-                  case "corrected": return p.corrected_label !== null;
                   case "gt_corrected": return (gtCorrectionsByPredictionId[p.prediction_id]?.length || 0) > 0;
                   case "flagged_open": return flaggedPredictionIds.has(p.prediction_id);
                   case "flagged_resolved": return resolvedFlaggedPredictionIds.has(p.prediction_id);
@@ -936,7 +930,7 @@ function PredictionRow({
   onResolve: () => void;
   flagReason?: string;
 }) {
-  const gt = p.corrected_label || p.ground_truth_label;
+  const gt = p.ground_truth_label;
   const isCorrect = p.parse_ok && p.predicted_decision === gt;
   const isMatch = p.parse_ok && !!p.ground_truth_label && p.predicted_decision === p.ground_truth_label;
 
@@ -983,7 +977,6 @@ function PredictionRow({
             onChange={(e) =>
               onUpdate(p.prediction_id, {
                 ground_truth_label: (e.target.value || null) as Decision | null,
-                corrected_label: null,
               })
             }
           >
@@ -1439,14 +1432,13 @@ function ImageReviewMode({
 
         {/* Decision Toggle */}
         <div className="app-card p-4">
-          <h4 className="text-xs text-gray-500 font-medium mb-2">Label Correction</h4>
+          <h4 className="text-xs text-gray-500 font-medium mb-2">Ground Truth</h4>
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-xs text-gray-400">Ground truth:</span>
             <button
               onClick={() =>
                 onUpdate(p.prediction_id, {
                   ground_truth_label: "DETECTED",
-                  corrected_label: null,
                 })
               }
               className={`px-3 py-1.5 rounded text-xs border ${
@@ -1461,7 +1453,6 @@ function ImageReviewMode({
               onClick={() =>
                 onUpdate(p.prediction_id, {
                   ground_truth_label: "NOT_DETECTED",
-                  corrected_label: null,
                 })
               }
               className={`px-3 py-1.5 rounded text-xs border ${
@@ -1476,7 +1467,6 @@ function ImageReviewMode({
               onClick={() =>
                 onUpdate(p.prediction_id, {
                   ground_truth_label: null,
-                  corrected_label: null,
                 })
               }
               className={`px-3 py-1.5 rounded text-xs border ${
@@ -1488,28 +1478,8 @@ function ImageReviewMode({
               UNSET
             </button>
           </div>
-          {p.corrected_label && (
-            <div className="flex items-center gap-3 mt-1">
-              <span className="text-xs text-gray-400">Corrected to:</span>
-              <span
-                className={`text-sm font-medium ${
-                  p.corrected_label === "DETECTED" ? "text-purple-300" : "text-emerald-300"
-                }`}
-              >
-                {p.corrected_label}
-              </span>
-            </div>
-          )}
           {isIteration && (
-            <p className="text-xs text-gray-500 mt-1">Corrections will update ground truth for TRAIN datasets.</p>
-          )}
-          {p.corrected_label && (
-            <button
-              onClick={() => onUpdate(p.prediction_id, { corrected_label: null })}
-              className="mt-2 text-xs text-gray-500 hover:text-gray-300 underline"
-            >
-              Reset correction
-            </button>
+            <p className="text-xs text-gray-500 mt-1">Ground truth edits propagate to the dataset.</p>
           )}
         </div>
 
@@ -1708,7 +1678,7 @@ function SegmentTagsEditor({
 }
 
 function deriveAutoErrorTag(prediction: Prediction): ErrorTag | null {
-  const resolvedGt = prediction.corrected_label || prediction.ground_truth_label;
+  const resolvedGt = prediction.ground_truth_label;
   if (isInferenceCallFailure(prediction)) return "INFERENCE_CALL_FAILED";
   if (!prediction.parse_ok) return "SCHEMA_VIOLATION";
   if (!resolvedGt || !prediction.predicted_decision) return null;

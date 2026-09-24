@@ -10,6 +10,7 @@ import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
 import { compareImageIds } from "@/lib/imageIdSort";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
 import { STATUS_LABELS, STATUS_BADGE_CLASSES, QA_STATUS_ORDER, derivedParentStatus } from "@/lib/statusConstants";
+import { DEFAULT_IMAGE_ATTRIBUTES } from "@/lib/defaultAttributes";
 import { Flag, Link2, LayoutGrid, PackageCheck, Scale, RefreshCw, Archive, FileText, MoreHorizontal, ChevronRight, ChevronDown, Search, X } from "lucide-react";
 
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -48,6 +49,10 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [assignResetSegments, setAssignResetSegments] = useState(true);
   const [assigning, setAssigning] = useState(false);
   const [availableAnnotators, setAvailableAnnotators] = useState<string[]>([]);
+
+  // Export CSV modal state
+  const [showExportCsvModal, setShowExportCsvModal] = useState(false);
+  const [includeThumbnailColumn, setIncludeThumbnailColumn] = useState(false);
   const [alreadyAssignedAnnotators, setAlreadyAssignedAnnotators] = useState<string[]>([]);
 
   // Accordion expand state
@@ -765,8 +770,15 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     URL.revokeObjectURL(url);
   };
 
-  const exportSelectedDatasetCsv = () => {
+  const exportSelectedDatasetCsv = (includeThumbnail: boolean) => {
     if (!selectedDataset) return;
+    if (includeThumbnail) {
+      // Thumbnails require real embedded images, so export an XLSX built server-side.
+      const a = document.createElement("a");
+      a.href = `/api/datasets/export?dataset_id=${encodeURIComponent(selectedDataset.dataset_id)}`;
+      a.click();
+      return;
+    }
     const headers = ["imageId", "imageUrl", "groundTruthLabel", "attributes", "imageDescription"];
     const rows = sortedDatasetItems.map((item) => [
       item.image_id || "",
@@ -1172,7 +1184,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                       </button>
                     )}
                     <button
-                      onClick={() => { setShowActionsMenu(false); exportSelectedDatasetCsv(); }}
+                      onClick={() => { setShowActionsMenu(false); setIncludeThumbnailColumn(false); setShowExportCsvModal(true); }}
                       disabled={datasetItems.length === 0}
                       className="w-full text-left px-3 py-2 text-sm text-[var(--app-text)] hover:bg-[var(--app-table-row-hover)] disabled:opacity-40"
                     >
@@ -1694,6 +1706,43 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           </div>
         </div>
       )}
+
+      {showExportCsvModal && selectedDataset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="app-card-strong p-6 w-full max-w-md space-y-4">
+            <h3 className="text-lg font-semibold text-gray-100">Export CSV</h3>
+            <p className="text-sm text-gray-400">
+              Export &ldquo;{selectedDataset.name}&rdquo; as a CSV file.
+            </p>
+            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeThumbnailColumn}
+                onChange={(e) => setIncludeThumbnailColumn(e.target.checked)}
+                className="rounded border-gray-600"
+              />
+              Include image thumbnail column (first column)
+            </label>
+            <p className="text-[11px] text-[var(--app-text-subtle)]">
+              Embeds real image thumbnails and exports as an Excel (.xlsx) file, the same way run logs export from HIL Review.
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => { exportSelectedDatasetCsv(includeThumbnailColumn); setShowExportCsvModal(false); }}
+                className="app-btn app-btn-primary app-btn-md flex-1"
+              >
+                Export
+              </button>
+              <button
+                onClick={() => setShowExportCsvModal(false)}
+                className="app-btn app-btn-subtle app-btn-md"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1812,6 +1861,42 @@ function GlobalDatasetUploadForm({
   const selectedDetection = detections.find((d) => d.detection_id === detectionId) || null;
   const segmentOptions = Array.isArray(selectedDetection?.segment_taxonomy) ? selectedDetection.segment_taxonomy : [];
 
+  // Editable dataset attribute list, shown before saving. Detection-less datasets
+  // start from the common defaults; a detection's own taxonomy is used when assigned.
+  const [attributeDraft, setAttributeDraft] = useState<string[]>([...DEFAULT_IMAGE_ATTRIBUTES]);
+  const [newAttribute, setNewAttribute] = useState("");
+
+  useEffect(() => {
+    setAttributeDraft(selectedDetection ? [...segmentOptions] : [...DEFAULT_IMAGE_ATTRIBUTES]);
+    // Reseed whenever the chosen detection changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detectionId]);
+
+  // Attribute options offered on each image row: the detection's taxonomy when
+  // assigned, otherwise the dataset attribute list being edited here.
+  const itemAttributeOptions = selectedDetection ? segmentOptions : attributeDraft;
+
+  const addAttributeOptions = () => {
+    const parts = String(newAttribute || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((s) => s.toLowerCase() !== "baseline");
+    if (parts.length === 0) return;
+    setAttributeDraft((prev) => {
+      const merged = [...prev];
+      for (const part of parts) {
+        if (!merged.some((item) => item.toLowerCase() === part.toLowerCase())) merged.push(part);
+      }
+      return merged;
+    });
+    setNewAttribute("");
+  };
+
+  const removeAttributeOption = (value: string) => {
+    setAttributeDraft((prev) => prev.filter((item) => item !== value));
+  };
+
   useEffect(() => {
     return () => {
       fileRows.forEach((r) => URL.revokeObjectURL(r.preview));
@@ -1903,6 +1988,7 @@ function GlobalDatasetUploadForm({
             formData.append("name", `${name.trim()} (${split.label})`);
             if (detectionId) formData.append("detection_id", detectionId);
             formData.append("split_type", split.key);
+            if (!detectionId) formData.append("segment_taxonomy", JSON.stringify(attributeDraft));
             formData.append(
               "items",
               JSON.stringify(
@@ -1930,6 +2016,7 @@ function GlobalDatasetUploadForm({
           formData.append("name", name.trim());
           if (detectionId) formData.append("detection_id", detectionId);
           formData.append("split_type", splitType);
+          if (!detectionId) formData.append("segment_taxonomy", JSON.stringify(attributeDraft));
           formData.append(
             "items",
             JSON.stringify(
@@ -1983,6 +2070,7 @@ function GlobalDatasetUploadForm({
               detection_id: detectionId || null,
               split_type: splitType,
               items,
+              ...(detectionId ? {} : { segment_taxonomy: attributeDraft }),
             }),
           });
           const payload = await res.json().catch(() => null);
@@ -2177,7 +2265,7 @@ function GlobalDatasetUploadForm({
                       <td className="min-w-[220px]">
                         <SegmentTagsEditor
                           value={normalizeSegmentTags(row.segment_tags)}
-                          options={segmentOptions}
+                          options={itemAttributeOptions}
                           onChange={(next) =>
                             setFileRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, segment_tags: next } : r)))
                           }
@@ -2194,6 +2282,40 @@ function GlobalDatasetUploadForm({
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {!detectionId && (
+        <div className="space-y-3 border-t border-white/8 pt-4">
+          <div className="flex items-center justify-between">
+            <div className="app-label">Image Attributes</div>
+            <div className="text-[11px] text-gray-500">{attributeDraft.length} total</div>
+          </div>
+          <div className="min-h-8 px-0 py-1">
+            <div className="flex flex-wrap gap-1.5">
+              {attributeDraft.map((attr) => (
+                <span key={attr} className="inline-flex items-center gap-1 rounded-lg bg-white/6 px-2 py-0.5 text-xs text-gray-200">
+                  {attr}
+                  <button type="button" className="text-gray-400 hover:text-red-300" onClick={() => removeAttributeOption(attr)}>
+                    &times;
+                  </button>
+                </span>
+              ))}
+              {attributeDraft.length === 0 && <span className="text-xs text-gray-500">No image attributes yet.</span>}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              className="app-input min-w-0 flex-1 px-3 py-1.5 text-sm"
+              placeholder="Add attribute(s) — comma-separated"
+              value={newAttribute}
+              onChange={(e) => setNewAttribute(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addAttributeOptions(); } }}
+            />
+            <button type="button" onClick={addAttributeOptions} className="app-btn app-btn-secondary app-btn-sm">
+              Add
+            </button>
+          </div>
         </div>
       )}
 
@@ -2240,7 +2362,7 @@ function GlobalDatasetUploadForm({
                   <td className="min-w-[220px]">
                     <SegmentTagsEditor
                       value={normalizeSegmentTags(row.segment_tags)}
-                      options={segmentOptions}
+                      options={itemAttributeOptions}
                       onChange={(next) => {
                         setCsvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, segment_tags: next } : r)));
                       }}

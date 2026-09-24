@@ -87,6 +87,75 @@ export class ReviewRepository {
     dataStore.run("UPDATE runs SET metrics_summary = ? WHERE run_id = ?", metricsJson, runId);
   }
 
+  getGroundtruthCorrectionsByRun(runId: string): any[] {
+    return dataStore.all<any>(
+      "SELECT * FROM groundtruth_corrections WHERE run_id = ? ORDER BY created_at DESC",
+      runId
+    );
+  }
+
+  recordGroundtruthCorrection(input: {
+    predictionId: string;
+    runId: string;
+    datasetId: string;
+    imageId: string;
+    oldLabel: string | null;
+    newLabel: string | null;
+    predictedDecision: string | null;
+    reason: string | null;
+    actor: string | null;
+    createdAt: string;
+  }) {
+    const aiMatchesNewGt =
+      input.newLabel === null || input.predictedDecision === null
+        ? null
+        : input.predictedDecision === input.newLabel
+          ? 1
+          : 0;
+    dataStore.run(
+      `INSERT INTO groundtruth_corrections
+         (correction_id, prediction_id, run_id, dataset_id, image_id, old_label, new_label, predicted_decision, ai_matches_new_gt, reason, actor, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      crypto.randomUUID(),
+      input.predictionId,
+      input.runId,
+      input.datasetId,
+      input.imageId,
+      input.oldLabel,
+      input.newLabel,
+      input.predictedDecision,
+      aiMatchesNewGt,
+      input.reason,
+      input.actor,
+      input.createdAt
+    );
+  }
+
+  /**
+   * Re-sync a run's prediction ground truth from the dataset's canonical labels,
+   * matched by image_id, so re-scoring uses today's ground truth.
+   */
+  syncRunGroundTruthFromDataset(runId: string, datasetId: string) {
+    dataStore.run(
+      `UPDATE predictions
+       SET ground_truth_label = (
+         SELECT di.ground_truth_label
+         FROM dataset_items di
+         WHERE di.dataset_id = ?
+           AND di.image_id = predictions.image_id
+       )
+       WHERE run_id = ?
+         AND EXISTS (
+           SELECT 1 FROM dataset_items di
+           WHERE di.dataset_id = ?
+             AND di.image_id = predictions.image_id
+         )`,
+      datasetId,
+      runId,
+      datasetId
+    );
+  }
+
   private parseSegmentTags(value: unknown): string[] {
     if (Array.isArray(value)) return this.normalizeSegmentTags(value);
     if (typeof value === "string") {

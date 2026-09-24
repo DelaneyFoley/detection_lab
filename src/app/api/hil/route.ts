@@ -43,17 +43,34 @@ export async function PUT(req: NextRequest) {
   // Reviewer can set ground truth directly during HIL review.
     const metricsImpactedByGroundTruthChange = Object.prototype.hasOwnProperty.call(body, "ground_truth_label");
     if (metricsImpactedByGroundTruthChange) {
-      reviewRepository.updatePredictionGroundTruth(body.prediction_id, body.ground_truth_label ?? null);
+      const previousGroundTruth = pred.ground_truth_label ?? null;
+      const nextGroundTruth = body.ground_truth_label ?? null;
+      reviewRepository.updatePredictionGroundTruth(body.prediction_id, nextGroundTruth);
 
-      if (body.update_ground_truth) {
-        const run = reviewRepository.getRunById(pred.run_id);
-        if (run) {
-          reviewRepository.updateDatasetItemGroundTruth(
-            run.dataset_id,
-            pred.image_id,
-            body.ground_truth_label ?? null
-          );
-        }
+      const run = reviewRepository.getRunById(pred.run_id);
+      if (body.update_ground_truth && run) {
+        reviewRepository.updateDatasetItemGroundTruth(
+          run.dataset_id,
+          pred.image_id,
+          nextGroundTruth
+        );
+      }
+
+      // Log the change into the GT correction audit trail so it surfaces in the
+      // "GT Updated" queue. Only record actual transitions.
+      if (run && previousGroundTruth !== nextGroundTruth) {
+        reviewRepository.recordGroundtruthCorrection({
+          predictionId: body.prediction_id,
+          runId: pred.run_id,
+          datasetId: run.dataset_id,
+          imageId: pred.image_id,
+          oldLabel: previousGroundTruth,
+          newLabel: nextGroundTruth,
+          predictedDecision: pred.predicted_decision ?? null,
+          reason: body.correction_reason ?? null,
+          actor: null,
+          createdAt: now,
+        });
       }
     }
 

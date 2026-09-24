@@ -160,7 +160,7 @@ describe("deriveImageCorrection", () => {
     expect(sortT(r.final_tags)).toEqual(["borderline", "oxidation"]);
   });
 
-  it("11. exclude_attributes — attribute changes are dropped, only label counts", () => {
+  it("11. exclude_attributes — QA attribute corrections still count, discrepancy attribute changes dropped", () => {
     const r = deriveImageCorrection(build({
       qaSamples: [{ outcome: "both_corrected", original_label: D, corrected_label: N, original_tags: ["a"], corrected_tags: ["a", "b"] }],
       discrepancy: { resolved_label: N, corrected_tags: ["a", "b", "c"] },
@@ -169,11 +169,13 @@ describe("deriveImageCorrection", () => {
       excludeAttributes: true,
     }))!;
     expect(r.qa!.label_corrected).toBe(true);
-    expect(r.qa!.added_tags).toEqual([]);
-    expect(r.qa!.removed_tags).toEqual([]);
-    expect(r.attr_corrected).toBe(false);
-    expect(r.added_tags).toEqual([]);
-    expect(r.discrepancy).toBeNull(); // no label change (N==N) and attrs excluded
+    // QA added "b" — still counted under Rule 1.
+    expect(sortT(r.qa!.added_tags)).toEqual(["b"]);
+    expect(r.attr_corrected).toBe(true);
+    expect(sortT(r.added_tags)).toEqual(["b"]);
+    expect(r.attribute_correction_count).toBe(1);
+    // Discrepancy only added "c" (excluded) and made no label change (N==N).
+    expect(r.discrepancy).toBeNull();
   });
 
   it("12. Label toggle D->N->D across stages (no annotator edit) — net zero, null", () => {
@@ -322,7 +324,7 @@ describe("deriveImageCorrection", () => {
     expect(sortT(r.added_tags)).toEqual(["rust"]);
   });
 
-  it("S7. exclude_attributes: net-zero attribute dropped, surviving label kept", () => {
+  it("S7. exclude_attributes: QA attribute correction still counts; discrepancy attribute change excluded", () => {
     const r = deriveImageCorrection(build({
       qaSamples: [{ outcome: "both_corrected", original_label: N, corrected_label: D, original_tags: [], corrected_tags: ["rust"] }],
       discrepancy: { resolved_label: D, corrected_tags: [] },
@@ -331,7 +333,9 @@ describe("deriveImageCorrection", () => {
       excludeAttributes: true,
     }))!;
     expect(r.label_corrected).toBe(true);
-    expect(r.attr_corrected).toBe(false);
-    expect(r.attribute_correction_count).toBe(0);
+    // QA added "rust" (survives the QA span); discrepancy removal is excluded.
+    expect(r.attr_corrected).toBe(true);
+    expect(r.attribute_correction_count).toBe(1);
+    expect(sortT(r.added_tags)).toEqual(["rust"]);
   });
 });

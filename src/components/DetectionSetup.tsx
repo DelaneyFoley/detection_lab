@@ -762,11 +762,11 @@ export function DetectionSetup({
     if (!selectedDetection) return;
     const sourceStructure = promptStructureOf(sourcePrompt);
     const versionLabelPolicy =
-      typeof sourceStructure.label_policy === "string" && sourceStructure.label_policy.trim()
+      typeof sourceStructure.label_policy === "string"
         ? sourceStructure.label_policy
         : selectedDetection.label_policy || "";
     const versionRubric =
-      typeof sourceStructure.decision_rubric === "string" && sourceStructure.decision_rubric.trim()
+      typeof sourceStructure.decision_rubric === "string"
         ? parseDecisionRubricCriteria(sourceStructure.decision_rubric)
         : selectedDetection.decision_rubric;
     const versionAddendum =
@@ -1605,11 +1605,16 @@ export function DetectionSetup({
     (activePromptForTopPanel?.composition as PromptComposition | undefined)?.members?.find((m) => m.is_target)
       ?.description || "";
   const activePromptStructure = promptStructureOf(activePromptForTopPanel);
+  // Honor the version's stored policy (including an explicitly emptied one);
+  // only fall back to the detection seed when the field is truly absent.
   const activePromptPolicy =
-    activePromptStructure.label_policy || selectedDetection?.label_policy || "";
+    typeof activePromptStructure.label_policy === "string"
+      ? activePromptStructure.label_policy
+      : selectedDetection?.label_policy || "";
   const activePromptRubricText: string =
-    activePromptStructure.decision_rubric ||
-    (selectedDetection?.decision_rubric || []).map((r, i) => `${i + 1}. ${r}`).join("\n");
+    typeof activePromptStructure.decision_rubric === "string"
+      ? activePromptStructure.decision_rubric
+      : (selectedDetection?.decision_rubric || []).map((r, i) => `${i + 1}. ${r}`).join("\n");
   const draftCategory =
     mode === "view" ? (selectedDetection?.detection_category || DEFAULT_DETECTION_CATEGORY) : form.detection_category;
   const currentCategoryTemplates = useMemo(
@@ -2571,7 +2576,9 @@ export function DetectionSetup({
                     <div className="px-3 py-2 text-sm whitespace-pre-wrap text-[var(--app-text)]">
                       {activeIsProduction
                         ? activeTargetDescription || "No target detection description."
-                        : selectedDetection.user_prompt_addendum || "No addendum."}
+                        : (activePromptForTopPanel
+                            ? activePromptStructure.user_prompt_addendum
+                            : selectedDetection.user_prompt_addendum) || "No addendum."}
                     </div>
                   </div>
                 </details>
@@ -3937,11 +3944,13 @@ function PromptForm({
     version_notes: initialData?.version_notes || "",
     created_by: "user",
   });
-  const [labelPolicyParts, setLabelPolicyParts] = useState(() =>
-    parseLabelPolicySections(promptStructureOf(initialData || undefined).label_policy || detectionLabelPolicy || "")
-  );
+  const [labelPolicyParts, setLabelPolicyParts] = useState(() => {
+    const seeded = promptStructureOf(initialData || undefined).label_policy;
+    return parseLabelPolicySections(typeof seeded === "string" ? seeded : detectionLabelPolicy || "");
+  });
   const [rubricCriteria, setRubricCriteria] = useState<string[]>(() => {
-    const raw = promptStructureOf(initialData || undefined).decision_rubric || defaultDecisionRubric;
+    const seeded = promptStructureOf(initialData || undefined).decision_rubric;
+    const raw = typeof seeded === "string" ? seeded : defaultDecisionRubric;
     const parsed = parseDecisionRubricCriteria(typeof raw === "string" ? raw : "");
     return parsed.length > 0 ? parsed : [""];
   });
@@ -3995,7 +4004,7 @@ function PromptForm({
   useEffect(() => {
     const seeded = promptStructureOf(initialData || undefined).label_policy;
     setLabelPolicyParts(
-      parseLabelPolicySections((seeded && seeded.trim() ? seeded : detectionLabelPolicy) || "")
+      parseLabelPolicySections(typeof seeded === "string" ? seeded : detectionLabelPolicy || "")
     );
   }, [detectionLabelPolicy, initialData]);
 

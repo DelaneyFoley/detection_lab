@@ -83,6 +83,7 @@ export async function POST(req: NextRequest) {
     let detectionId: string | null = null;
     let splitType = "ITERATION";
     let items: any[] = [];
+    let segmentTaxonomy: string[] | undefined;
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
@@ -91,6 +92,15 @@ export async function POST(req: NextRequest) {
       splitType = String(formData.get("split_type") || "ITERATION").trim();
       if (!isDatasetSplitType(splitType)) {
         return NextResponse.json({ error: `Invalid split_type: ${splitType}` }, { status: 400 });
+      }
+      const taxonomyRaw = formData.get("segment_taxonomy");
+      if (typeof taxonomyRaw === "string" && taxonomyRaw.length > 0) {
+        try {
+          const parsed = JSON.parse(taxonomyRaw);
+          if (Array.isArray(parsed)) segmentTaxonomy = parsed.map(String);
+        } catch {
+          /* ignore malformed taxonomy */
+        }
       }
 
       const metaRaw = String(formData.get("items") || "[]");
@@ -298,6 +308,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `Invalid split_type: ${splitType}` }, { status: 400 });
       }
       items = body.items || [];
+      if (Array.isArray(body.segment_taxonomy)) {
+        segmentTaxonomy = body.segment_taxonomy.map(String);
+      }
     }
 
     const postValidation = validateAndNormalizeItems(items);
@@ -334,6 +347,7 @@ export async function POST(req: NextRequest) {
       size: items.length,
       createdAt: now,
       updatedAt: now,
+      segmentTaxonomy,
     });
 
     datasetRepository.insertDatasetItems(

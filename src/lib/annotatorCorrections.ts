@@ -60,6 +60,8 @@ export interface ImageCorrectionInput {
   childCurrent: { label: string | null; tags: string[] };
   /** The finalized master value. */
   parentFinal: { label: string | null; tags: string[] };
+  /** Rule 1: when true, attribute corrections are skipped at Discrepancy Review
+   * only; QA-stage attribute corrections are still counted. */
   excludeAttributes: boolean;
 }
 
@@ -145,7 +147,7 @@ export function deriveImageCorrection(input: ImageCorrectionInput): Omit<Annotat
         }
       }
     }
-    if (attrOutcome && !excludeAttributes) {
+    if (attrOutcome) {
       if (s.original_tags != null && s.corrected_tags != null) {
         const orig = new Set(s.original_tags);
         const corr = new Set(s.corrected_tags);
@@ -226,7 +228,13 @@ export function deriveImageCorrection(input: ImageCorrectionInput): Omit<Annotat
   const chargedRemoved = new Set<string>();
   let attrCount = 0;
   let attrDetailUnknown = false;
-  if (!excludeAttributes) {
+  {
+    // Rule 1: exclude_attributes suppresses only the Discrepancy-stage attribute
+    // charge. QA attribute corrections are always counted; when attributes are
+    // excluded, a span ends at the annotator's post-QA child value rather than
+    // the union parent, so union artifacts are never charged.
+    const chargeDiscrepancyAttrs = hasDisc && !excludeAttributes;
+    const attrEndTags = excludeAttributes ? childCurrent.tags : finalTags;
     let coarseAttr = false;
     const universe = new Set<string>([...annotatorTags, ...finalTags]);
     for (const s of qaSamples) {
@@ -235,7 +243,7 @@ export function deriveImageCorrection(input: ImageCorrectionInput): Omit<Annotat
       const attrOutcome = s.outcome === "attributes_corrected" || s.outcome === "both_corrected";
       if (attrOutcome && s.original_tags == null) coarseAttr = true;
     }
-    (discrepancy?.corrected_tags ?? []).forEach((t) => universe.add(t));
+    if (!excludeAttributes) (discrepancy?.corrected_tags ?? []).forEach((t) => universe.add(t));
     for (const attr of universe) {
       const evs: FieldEvent[] = [];
       let cur = false;
@@ -258,14 +266,14 @@ export function deriveImageCorrection(input: ImageCorrectionInput): Omit<Annotat
         cur = childP;
         evs.push({ actor: "ann", val: cur ? "1" : "0" });
       }
-      if (hasDisc) {
+      if (chargeDiscrepancyAttrs) {
         const fp = finalTags.includes(attr);
         if (fp !== cur) { cur = fp; evs.push({ actor: "rev", val: cur ? "1" : "0" }); }
       }
       const c = countCharges(evs);
       if (c > 0) {
         attrCount += c;
-        (finalTags.includes(attr) ? chargedAdded : chargedRemoved).add(attr);
+        (attrEndTags.includes(attr) ? chargedAdded : chargedRemoved).add(attr);
       }
     }
     if (coarseAttr && chargedAdded.size === 0 && chargedRemoved.size === 0) {

@@ -3,6 +3,16 @@ import { z } from "zod";
 const DecisionSchema = z.enum(["DETECTED", "NOT_DETECTED"]);
 const DetectionCategorySchema = z.enum(["INCORRECT_CAPTURE", "HAZARD_IDENTIFICATION"]);
 
+/**
+ * Optional trimmed string that treats an empty/whitespace value as absent, so
+ * callers sending "" for an omitted field don't fail `.min(1)` validation.
+ */
+const optionalNonEmptyString = () =>
+  z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().trim().min(1).optional()
+  );
+
 export const DetectionCreateSchema = z.object({
   detection_code: z.string().trim().min(1),
   display_name: z.string().trim().min(1),
@@ -40,8 +50,8 @@ export const RunCreateSchema = z.object({
   dataset_id: z.string().trim().min(1),
   detection_id: z.string().trim().min(1),
   allow_eval_run: z.boolean().optional(),
-  model_override: z.string().trim().min(1).optional(),
-  api_key: z.string().trim().min(1).optional(),
+  model_override: optionalNonEmptyString(),
+  api_key: optionalNonEmptyString(),
   max_concurrency: z.number().int().min(1).max(12).optional(),
 });
 
