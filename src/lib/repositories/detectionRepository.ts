@@ -113,11 +113,26 @@ export class DetectionRepository {
     const tx = dataStore.transaction((store, targetDetectionId: string) => {
       const runs = store.all<{ run_id: string }>("SELECT run_id FROM runs WHERE detection_id = ?", targetDetectionId);
       for (const r of runs) {
+        // Rows that reference this run's predictions must go before the predictions.
+        store.run(
+          "DELETE FROM review_flags WHERE prediction_id IN (SELECT prediction_id FROM predictions WHERE run_id = ?)",
+          r.run_id
+        );
+        store.run("DELETE FROM groundtruth_corrections WHERE run_id = ?", r.run_id);
+        store.run(
+          "DELETE FROM groundtruth_corrections WHERE prediction_id IN (SELECT prediction_id FROM predictions WHERE run_id = ?)",
+          r.run_id
+        );
         store.run("DELETE FROM predictions WHERE run_id = ?", r.run_id);
       }
       store.run("DELETE FROM runs WHERE detection_id = ?", targetDetectionId);
       // Preserve datasets and dataset_items; unassign them from this detection.
       store.run("UPDATE datasets SET detection_id = NULL WHERE detection_id = ?", targetDetectionId);
+      // version_note_entries reference prompt_versions, so clear them first.
+      store.run(
+        "DELETE FROM version_note_entries WHERE prompt_version_id IN (SELECT prompt_version_id FROM prompt_versions WHERE detection_id = ?)",
+        targetDetectionId
+      );
       store.run("DELETE FROM prompt_versions WHERE detection_id = ?", targetDetectionId);
       store.run("DELETE FROM detections WHERE detection_id = ?", targetDetectionId);
     });

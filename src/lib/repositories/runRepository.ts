@@ -112,8 +112,8 @@ export class RunRepository {
     dataStore.run(
       `INSERT INTO predictions (
         prediction_id, run_id, image_id, image_uri, ground_truth_label, predicted_decision, confidence, evidence,
-        parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count, error_tag, sibling_detections
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        parse_ok, raw_response, parse_error_reason, parse_fix_suggestion, inference_runtime_ms, parse_retry_count, error_tag, sibling_detections, detection_label
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       pred.prediction_id,
       pred.run_id,
       pred.image_id,
@@ -129,7 +129,8 @@ export class RunRepository {
       pred.inference_runtime_ms ?? null,
       pred.parse_retry_count ?? 0,
       errorTag,
-      JSON.stringify(pred.sibling_detections ?? [])
+      JSON.stringify(pred.sibling_detections ?? []),
+      pred.detection_label ?? null
     );
   }
 

@@ -25,7 +25,7 @@ if (!run) {
 
 const predictions = db.prepare(
   `SELECT p.image_id, p.image_uri, p.predicted_decision, p.confidence, p.evidence,
-          p.ground_truth_label, p.corrected_label, p.error_tag, p.reviewer_note,
+          p.ground_truth_label, p.corrected_label, p.error_tag, p.reviewer_note, p.detection_label,
           di.image_description, di.segment_tags
    FROM predictions p
    LEFT JOIN dataset_items di ON di.dataset_id = ? AND di.image_id = p.image_id
@@ -70,6 +70,7 @@ const IMAGE_COL_WIDTH = 22;
 sheet.columns = [
   { header: "Image", key: "image", width: IMAGE_COL_WIDTH },
   { header: "Image ID", key: "image_id", width: 16 },
+  { header: "Label", key: "detection_label", width: 18 },
   { header: "Predicted Label", key: "predicted_decision", width: 18 },
   { header: "Ground Truth", key: "ground_truth_label", width: 16 },
   { header: "Corrected Label", key: "corrected_label", width: 16 },
@@ -94,6 +95,7 @@ for (let i = 0; i < predictions.length; i++) {
   sheet.addRow({
     image: "",
     image_id: pred.image_id,
+    detection_label: pred.detection_label || "",
     predicted_decision: pred.predicted_decision || "N/A",
     ground_truth_label: pred.ground_truth_label || "",
     corrected_label: pred.corrected_label || "",

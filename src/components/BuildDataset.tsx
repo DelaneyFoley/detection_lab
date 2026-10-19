@@ -14,6 +14,7 @@ type BuildRow = {
   preview: string;
   imageId: string;
   groundTruthLabel: "DETECTED" | "NOT_DETECTED" | null;
+  groundTruthLabels?: string[];
   segmentTags: string[];
   aiAssignedLabel?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL" | "";
   aiConfidence?: number | null;
@@ -110,6 +111,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
           preview: item.image_uri,
           imageId: item.image_id,
           groundTruthLabel: item.ground_truth_label ?? null,
+          groundTruthLabels: parseGroundTruthLabels((item as { ground_truth_labels?: unknown }).ground_truth_labels),
           segmentTags: normalizeSegmentTags(item.segment_tags),
           aiAssignedLabel: "",
           aiConfidence: null,
@@ -346,6 +348,8 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
   };
 
   const previewRow = previewIndex != null ? rows[previewIndex] : null;
+  // Multi-label dataset when any item carries a ground-truth label set.
+  const isMultiLabel = rows.some((r) => (r.groundTruthLabels?.length ?? 0) > 0);
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -444,7 +448,7 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 <tr>
                   <th className="app-table-col-label">Preview</th>
                   <th className="app-table-col-label">Image ID</th>
-                  <th className="app-table-col-label">Ground Truth</th>
+                  <th className="app-table-col-label">{isMultiLabel ? "Ground Truth Labels" : "Ground Truth"}</th>
                   <th className="app-table-col-label">Attributes</th>
                   <th className="app-table-col-label">AI Label</th>
                   <th className="app-table-col-label">Confidence</th>
@@ -474,7 +478,21 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                     </td>
                     <td className="app-table-col-label">
                       <div className="app-table-left-slot">
-                        <GroundTruthBadge value={r.groundTruthLabel || null} />
+                        {isMultiLabel ? (
+                          (r.groundTruthLabels?.length ?? 0) > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {r.groundTruthLabels!.map((l) => (
+                                <span key={l} className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[10px] text-sky-200">
+                                  {l}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )
+                        ) : (
+                          <GroundTruthBadge value={r.groundTruthLabel || null} />
+                        )}
                       </div>
                     </td>
                     <td>
@@ -601,9 +619,23 @@ export function BuildDataset({ detection }: { detection: Detection | null }) {
                 <div className="w-full py-1.5 text-xs font-mono text-gray-300">{previewRow.imageId}</div>
               </div>
               <div>
-                <label className="text-xs text-gray-500 block mb-1">Ground Truth</label>
+                <label className="text-xs text-gray-500 block mb-1">{isMultiLabel ? "Ground Truth Labels" : "Ground Truth"}</label>
                 <div className="w-full py-1.5 text-xs text-gray-300">
-                  <GroundTruthBadge value={previewRow.groundTruthLabel || null} />
+                  {isMultiLabel ? (
+                    (previewRow.groundTruthLabels?.length ?? 0) > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {previewRow.groundTruthLabels!.map((l) => (
+                          <span key={l} className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[10px] text-sky-200">
+                            {l}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-600">—</span>
+                    )
+                  ) : (
+                    <GroundTruthBadge value={previewRow.groundTruthLabel || null} />
+                  )}
                 </div>
               </div>
               <div>
@@ -725,6 +757,22 @@ function dedupeStrings(parts: string[]): string[] {
 function GroundTruthBadge({ value }: { value: "DETECTED" | "NOT_DETECTED" | null }) {
   if (value) return <DecisionBadge decision={value} />;
   return <span className="app-badge app-badge-muted">Unset</span>;
+}
+
+/** Parse a dataset item's stored multi-label ground truth (JSON string or array). */
+function parseGroundTruthLabels(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => String(v || "").trim()).filter(Boolean);
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (!s) return [];
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+    } catch {
+      return s.split(/[,|;\n]/).map((v) => v.trim()).filter(Boolean);
+    }
+  }
+  return [];
 }
 
 function SegmentTagList({ value }: { value: string[] }) {

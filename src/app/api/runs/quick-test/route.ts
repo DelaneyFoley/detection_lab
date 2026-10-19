@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Production-mode versions run the whole context aggregate and report siblings.
-    let aggregate: { snapshot: NonNullable<ReturnType<typeof snapshotRepository.getSnapshotById>>; composition: PromptComposition; targetLabel: string } | null = null;
+    let aggregate: { snapshot: NonNullable<ReturnType<typeof snapshotRepository.getSnapshotById>>; composition: PromptComposition; targetLabel: string; multiLabel: boolean } | null = null;
     let effectiveModel = modelOverride || prompt.model;
     if (prompt.mode === "PRODUCTION_MODE") {
       const composition = prompt.composition ? (JSON.parse(prompt.composition) as PromptComposition) : null;
@@ -47,18 +47,19 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+      const multiLabel = composition.multi_label === true;
       const targetLabel =
         composition.members.find((m) => m.is_target)?.label ??
         prompt.production_label ??
         detection.production_label ??
         null;
-      if (!targetLabel) {
+      if (!multiLabel && !targetLabel) {
         return NextResponse.json(
           { error: "This production-mode version has no target detection in its aggregate." },
           { status: 400 }
         );
       }
-      aggregate = { snapshot, composition, targetLabel };
+      aggregate = { snapshot, composition, targetLabel: targetLabel ?? "", multiLabel };
       effectiveModel = composition.google_model || snapshot.google_model || effectiveModel;
     }
 
@@ -87,12 +88,15 @@ export async function POST(req: NextRequest) {
             model: effectiveModel,
             snapshot: aggregate.snapshot,
             composition: aggregate.composition,
-            targetLabel: aggregate.targetLabel,
+            targetLabel: aggregate.multiLabel ? null : aggregate.targetLabel,
             imageUri: dataUri,
+            multiLabel: aggregate.multiLabel,
           });
           return {
             image_name: file.name || "image",
-            predicted_decision: r.decision,
+            predicted_decision: aggregate.multiLabel
+              ? (r.labelVerdicts.filter((v) => v.present).map((v) => v.label).join(", ") || "NONE")
+              : r.decision,
             confidence: null,
             evidence: r.evidence,
             parse_ok: r.parseOk,

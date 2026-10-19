@@ -35,6 +35,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
   }
 
+  // Thumbnails are opt-out: absent param or any value other than 0/false embeds images.
+  const thumbParam = searchParams.get("thumbnails");
+  const includeThumbnails = thumbParam !== "0" && thumbParam !== "false";
+
   const predictions = runRepository.getRunPredictions(runId);
 
   const workbook = new ExcelJS.Workbook();
@@ -42,9 +46,100 @@ export async function GET(req: NextRequest) {
   const IMAGE_COL_WIDTH = 22;
   const IMAGE_ROW_HEIGHT = 120;
 
+  const parseTags = (value: unknown): string[] => {
+    try {
+      return JSON.parse((value as string) || "[]");
+    } catch {
+      return [];
+    }
+  };
+
+  // Multi-label runs score one prediction row per (image, label). Collapse to a
+  // single row per image with the arrays of predicted and ground-truth labels,
+  // mirroring the single-label export shape.
+  const isMultiLabel = predictions.some((p) => !!p.detection_label);
+
+  if (isMultiLabel) {
+    sheet.columns = [
+      ...(includeThumbnails ? [{ header: "Image", key: "image", width: IMAGE_COL_WIDTH }] : []),
+      { header: "Image ID", key: "image_id", width: 16 },
+      { header: "Image URL", key: "image_url", width: 40 },
+      { header: "Predicted Labels", key: "predicted_labels", width: 40 },
+      { header: "Ground Truth Labels", key: "ground_truth_labels", width: 40 },
+      { header: "Correct", key: "correct", width: 10 },
+      { header: "Attributes", key: "attributes", width: 30 },
+      { header: "Notes", key: "notes", width: 40 },
+    ];
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.alignment = { vertical: "middle", horizontal: "center" };
+
+    // Group predictions by image, preserving composition (insertion) order.
+    const byImage = new Map<string, typeof predictions>();
+    for (const p of predictions) {
+      const key = String(p.image_id || "");
+      const arr = byImage.get(key) ?? [];
+      arr.push(p);
+      byImage.set(key, arr);
+    }
+
+    let rowIndex = 1;
+    for (const [imageId, rows] of byImage) {
+      rowIndex += 1;
+      const predicted = rows
+        .filter((r) => r.parse_ok && r.predicted_decision === "DETECTED")
+        .map((r) => String(r.detection_label || ""))
+        .filter(Boolean);
+      const groundTruth = rows
+        .filter((r) => (r.corrected_label || r.ground_truth_label) === "DETECTED")
+        .map((r) => String(r.detection_label || ""))
+        .filter(Boolean);
+      const correct =
+        JSON.stringify([...predicted].sort()) === JSON.stringify([...groundTruth].sort()) ? "Yes" : "No";
+      const first = rows[0];
+      const tags = parseTags((first as { segment_tags?: unknown }).segment_tags);
+
+      sheet.addRow({
+        image: "",
+        image_id: imageId,
+        image_url: first.image_uri || "",
+        predicted_labels: JSON.stringify(predicted),
+        ground_truth_labels: JSON.stringify(groundTruth),
+        correct,
+        attributes: tags.join(", "),
+        notes: first.image_description || first.reviewer_note || "",
+      });
+      const row = sheet.getRow(rowIndex);
+      if (includeThumbnails) row.height = IMAGE_ROW_HEIGHT;
+      row.alignment = { vertical: "middle", wrapText: true };
+
+      if (includeThumbnails && first.image_uri) {
+        const buffer = await fetchImageBuffer(first.image_uri);
+        if (buffer) {
+          const ext = getImageExtension(first.image_uri);
+          const imageId2 = workbook.addImage({ buffer: buffer as any, extension: ext });
+          sheet.addImage(imageId2, {
+            tl: { col: 0, row: rowIndex - 1 },
+            ext: { width: 150, height: 150 },
+          });
+        }
+      }
+    }
+
+    const xlsxBufferML = Buffer.from(await workbook.xlsx.writeBuffer());
+    return new NextResponse(xlsxBufferML, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="run_export_${runId.substring(0, 8)}.xlsx"`,
+      },
+    });
+  }
+
   sheet.columns = [
-    { header: "Image", key: "image", width: IMAGE_COL_WIDTH },
+    ...(includeThumbnails ? [{ header: "Image", key: "image", width: IMAGE_COL_WIDTH }] : []),
     { header: "Image ID", key: "image_id", width: 16 },
+    { header: "Image URL", key: "image_url", width: 40 },
     { header: "Predicted Label", key: "predicted_decision", width: 18 },
     { header: "Ground Truth", key: "ground_truth_label", width: 16 },
     { header: "Corrected Label", key: "corrected_label", width: 16 },
@@ -63,11 +158,12 @@ export async function GET(req: NextRequest) {
     const pred = predictions[i];
     const rowIndex = i + 2;
 
-    const tags: string[] = (() => { try { return JSON.parse((pred as any).segment_tags || "[]"); } catch { return []; } })();
+    const tags: string[] = parseTags((pred as { segment_tags?: unknown }).segment_tags);
 
     sheet.addRow({
       image: "",
       image_id: pred.image_id,
+      image_url: pred.image_uri || "",
       predicted_decision: pred.predicted_decision || "N/A",
       ground_truth_label: pred.ground_truth_label || "",
       corrected_label: pred.corrected_label || "",
@@ -79,10 +175,10 @@ export async function GET(req: NextRequest) {
     });
 
     const row = sheet.getRow(rowIndex);
-    row.height = IMAGE_ROW_HEIGHT;
+    if (includeThumbnails) row.height = IMAGE_ROW_HEIGHT;
     row.alignment = { vertical: "middle", wrapText: true };
 
-    if (pred.image_uri) {
+    if (includeThumbnails && pred.image_uri) {
       const buffer = await fetchImageBuffer(pred.image_uri);
       if (buffer) {
         const ext = getImageExtension(pred.image_uri);

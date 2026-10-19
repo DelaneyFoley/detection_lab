@@ -49,11 +49,22 @@ export async function PUT(req: NextRequest) {
 
       const run = reviewRepository.getRunById(pred.run_id);
       if (body.update_ground_truth && run) {
-        reviewRepository.updateDatasetItemGroundTruth(
-          run.dataset_id,
-          pred.image_id,
-          nextGroundTruth
-        );
+        if (pred.detection_label) {
+          // Multi-label run: update the image's ground-truth label SET, not the
+          // single binary column.
+          reviewRepository.updateDatasetItemMultiLabel(
+            run.dataset_id,
+            pred.image_id,
+            pred.detection_label,
+            nextGroundTruth === "DETECTED"
+          );
+        } else {
+          reviewRepository.updateDatasetItemGroundTruth(
+            run.dataset_id,
+            pred.image_id,
+            nextGroundTruth
+          );
+        }
       }
 
       // Log the change into the GT correction audit trail so it surfaces in the
@@ -81,7 +92,17 @@ export async function PUT(req: NextRequest) {
       if (run) {
         const dataset = reviewRepository.getDatasetById(run.dataset_id);
         if (dataset && dataset.split_type === "ITERATION") {
-          reviewRepository.updateDatasetItemGroundTruth(run.dataset_id, pred.image_id, body.corrected_label);
+          if (pred.detection_label) {
+            // Multi-label run: fold the corrected label into the image's GT set.
+            reviewRepository.updateDatasetItemMultiLabel(
+              run.dataset_id,
+              pred.image_id,
+              pred.detection_label,
+              body.corrected_label === "DETECTED"
+            );
+          } else {
+            reviewRepository.updateDatasetItemGroundTruth(run.dataset_id, pred.image_id, body.corrected_label);
+          }
         }
       }
     }

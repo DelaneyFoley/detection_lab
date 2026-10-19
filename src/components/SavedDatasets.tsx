@@ -11,6 +11,7 @@ import { compareImageIds } from "@/lib/imageIdSort";
 import { DecisionBadge } from "@/components/shared/DecisionBadge";
 import { STATUS_LABELS, STATUS_BADGE_CLASSES, QA_STATUS_ORDER, derivedParentStatus } from "@/lib/statusConstants";
 import { DEFAULT_IMAGE_ATTRIBUTES } from "@/lib/defaultAttributes";
+import { MergeDatasets } from "@/components/MergeDatasets";
 import { Flag, Link2, LayoutGrid, PackageCheck, Scale, RefreshCw, Archive, FileText, MoreHorizontal, ChevronRight, ChevronDown, Search, X } from "lucide-react";
 
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -28,6 +29,8 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [selectedPreviewIndex, setSelectedPreviewIndex] = useState<number | null>(null);
   const [isEditingDetails, setIsEditingDetails] = useState(false);
   const [isSavingDetails, setIsSavingDetails] = useState(false);
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [bulkRemoving, setBulkRemoving] = useState(false);
   const [autoSplittingMaster, setAutoSplittingMaster] = useState(false);
   const [itemSortBy, setItemSortBy] = useState<"image_id" | "ground_truth_label">("image_id");
   const [itemSortDir, setItemSortDir] = useState<"asc" | "desc">("asc");
@@ -54,6 +57,9 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
   const [showExportCsvModal, setShowExportCsvModal] = useState(false);
   const [includeThumbnailColumn, setIncludeThumbnailColumn] = useState(false);
   const [alreadyAssignedAnnotators, setAlreadyAssignedAnnotators] = useState<string[]>([]);
+
+  // Add images (append to existing dataset) modal state
+  const [showAppend, setShowAppend] = useState(false);
 
   // Accordion expand state
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
@@ -82,6 +88,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       items.map((item: any) => ({
         ...item,
         segment_tags: normalizeSegmentTags(item.segment_tags),
+        ground_truth_labels: parseMultiLabelCell(item.ground_truth_labels),
       }))
     );
 
@@ -129,6 +136,11 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     loadDatasetItems(selectedDatasetId);
   }, [loadDatasetItems, selectedDatasetId]);
 
+  // Clear bulk selection when the dataset changes or edit mode is exited.
+  useEffect(() => {
+    setSelectedItemIds(new Set());
+  }, [selectedDatasetId, isEditingDetails]);
+
   const sortedDatasetItems = useMemo(() => {
     const copy = [...datasetItems];
     copy.sort((a, b) => {
@@ -147,6 +159,23 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     });
     return copy;
   }, [datasetItems, itemSortBy, itemSortDir]);
+
+  // Multi-label dataset when any item carries a ground-truth label set. The
+  // option vocabulary is the union of all labels present across the dataset.
+  const datasetIsMultiLabel = useMemo(
+    () => datasetItems.some((i) => (i.ground_truth_labels?.length ?? 0) > 0),
+    [datasetItems]
+  );
+  const multiLabelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const i of datasetItems) for (const l of i.ground_truth_labels ?? []) set.add(l);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [datasetItems]);
+  // An item counts as labeled when it has a binary label or a multi-label set.
+  const labeledItemCount = useMemo(
+    () => datasetItems.filter((i) => i.ground_truth_label != null || (i.ground_truth_labels?.length ?? 0) > 0).length,
+    [datasetItems]
+  );
 
   useEffect(() => {
     if (selectedPreviewIndex == null) return;
@@ -497,6 +526,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
             image_uri: item.image_uri,
             image_description: item.image_description || "",
             ground_truth_label: item.ground_truth_label,
+            ground_truth_labels: item.ground_truth_labels ?? [],
             segment_tags: normalizeSegmentTags(item.segment_tags),
           })),
         }),
@@ -578,6 +608,55 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
     await loadDatasets();
     await loadDatasetItems(selectedDatasetId);
     triggerRefresh();
+  };
+
+  const toggleItemSelected = (itemId: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllItems = () => {
+    setSelectedItemIds((prev) =>
+      prev.size === sortedDatasetItems.length ? new Set() : new Set(sortedDatasetItems.map((i) => i.item_id))
+    );
+  };
+
+  const deleteSelectedItems = async () => {
+    if (!selectedDatasetId || selectedItemIds.size === 0) return;
+    const count = selectedItemIds.size;
+    if (
+      !(await confirm({
+        title: "Remove Images",
+        message: `Remove ${count} selected image${count === 1 ? "" : "s"} from this dataset? This cannot be undone.`,
+        confirmLabel: `Remove ${count}`,
+        tone: "danger",
+      }))
+    ) {
+      return;
+    }
+    setBulkRemoving(true);
+    try {
+      const res = await fetch("/api/datasets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete_items", item_ids: Array.from(selectedItemIds) }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        notify({ message: text || "Failed to remove images.", tone: "error" });
+        return;
+      }
+      setSelectedItemIds(new Set());
+      await loadDatasets();
+      await loadDatasetItems(selectedDatasetId);
+      triggerRefresh();
+    } finally {
+      setBulkRemoving(false);
+    }
   };
 
   const createItemFlag = async (itemId: string, reason: string) => {
@@ -779,14 +858,19 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       a.click();
       return;
     }
-    const headers = ["imageId", "imageUrl", "groundTruthLabel", "attributes", "imageDescription"];
-    const rows = sortedDatasetItems.map((item) => [
-      item.image_id || "",
-      item.image_uri || "",
-      item.ground_truth_label || "",
-      JSON.stringify(normalizeSegmentTags(item.segment_tags).filter((t) => t !== "Baseline")),
-      item.image_description || "",
-    ]);
+    const headers = datasetIsMultiLabel
+      ? ["imageId", "imageUrl", "groundTruthLabel", "groundTruthLabels", "attributes", "imageDescription"]
+      : ["imageId", "imageUrl", "groundTruthLabel", "attributes", "imageDescription"];
+    const rows = sortedDatasetItems.map((item) => {
+      const attributes = JSON.stringify(normalizeSegmentTags(item.segment_tags).filter((t) => t !== "Baseline"));
+      const row = [item.image_id || "", item.image_uri || "", item.ground_truth_label || ""];
+      if (datasetIsMultiLabel) {
+        // Match the multi-label CSV import format: a JSON array like ["dog", "pool"].
+        row.push(`[${(item.ground_truth_labels ?? []).map((l) => JSON.stringify(l)).join(", ")}]`);
+      }
+      row.push(attributes, item.image_description || "");
+      return row;
+    });
     const csv = [headers, ...rows]
       .map((row) => row.map((value) => csvEscape(value)).join(","))
       .join("\n");
@@ -812,7 +896,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
       return;
     }
 
-    const unlabeled = datasetItems.find((item) => !item.ground_truth_label);
+    const unlabeled = datasetIsMultiLabel ? null : datasetItems.find((item) => !item.ground_truth_label);
     if (unlabeled) {
       notify({
         message: `Every MASTER item needs a ground-truth label before auto-splitting. Missing label on ${unlabeled.image_id}.`,
@@ -852,6 +936,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
             image_uri: item.image_uri,
             image_description: item.image_description || "",
             ground_truth_label: item.ground_truth_label,
+            ground_truth_labels: item.ground_truth_labels ?? [],
             segment_tags: normalizeSegmentTags(item.segment_tags),
           })),
         }),
@@ -913,6 +998,15 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           }}
         />
       )}
+
+      <MergeDatasets
+        datasets={datasets}
+        detections={detections}
+        onCreated={async () => {
+          await loadDatasets();
+          triggerRefresh();
+        }}
+      />
 
       <div className="flex items-center gap-3 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-soft)] p-1">
         <div className="flex gap-1">
@@ -1184,6 +1278,13 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                       </button>
                     )}
                     <button
+                      onClick={() => { setShowActionsMenu(false); setShowAppend(true); }}
+                      disabled={isEditingDetails}
+                      className="w-full text-left px-3 py-2 text-sm text-[var(--app-text)] hover:bg-[var(--app-table-row-hover)] disabled:opacity-40"
+                    >
+                      Add Images
+                    </button>
+                    <button
                       onClick={() => { setShowActionsMenu(false); setIncludeThumbnailColumn(false); setShowExportCsvModal(true); }}
                       disabled={datasetItems.length === 0}
                       className="w-full text-left px-3 py-2 text-sm text-[var(--app-text)] hover:bg-[var(--app-table-row-hover)] disabled:opacity-40"
@@ -1274,7 +1375,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
               </div>
               <div>
                 <div className="app-label mb-1">Labeled</div>
-                <div className="text-sm text-gray-300">{datasetItems.filter((i) => i.ground_truth_label != null).length}/{datasetItems.length} ({datasetItems.length > 0 ? Math.round((datasetItems.filter((i) => i.ground_truth_label != null).length / datasetItems.length) * 100) : 0}%)</div>
+                <div className="text-sm text-gray-300">{labeledItemCount}/{datasetItems.length} ({datasetItems.length > 0 ? Math.round((labeledItemCount / datasetItems.length) * 100) : 0}%)</div>
               </div>
             </div>
           )}
@@ -1328,7 +1429,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           <DatasetStatusBar
             dataset={selectedDataset}
             itemsTotal={datasetItems.length}
-            itemsLabeled={datasetItems.filter((i) => i.ground_truth_label != null).length}
+            itemsLabeled={labeledItemCount}
             onSubmit={async () => {
               try {
                 const res = await fetch("/api/qa", {
@@ -1373,10 +1474,26 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           />
 
           <div>
-            <h4 className="app-label mb-2">Preview ({datasetItems.length} images)</h4>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="app-label">Preview ({datasetItems.length} images)</h4>
+              {isEditingDetails && selectedItemIds.size > 0 && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-gray-400">{selectedItemIds.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => void deleteSelectedItems()}
+                    disabled={bulkRemoving}
+                    className="rounded border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    {bulkRemoving ? "Removing..." : `Remove Selected (${selectedItemIds.size})`}
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="app-table-wrap max-h-[360px] overflow-auto">
               <table className="app-table app-table-fixed text-xs">
                 <colgroup>
+                  {isEditingDetails && <col style={{ width: "2.5rem" }} />}
                   <col style={{ width: "11rem" }} />
                   <col style={{ width: "12rem" }} />
                   <col />
@@ -1386,6 +1503,19 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 </colgroup>
                 <thead className="sticky top-0">
                   <tr>
+                    {isEditingDetails && (
+                      <th className="app-table-col-center">
+                        <input
+                          type="checkbox"
+                          aria-label="Select all images"
+                          checked={sortedDatasetItems.length > 0 && selectedItemIds.size === sortedDatasetItems.length}
+                          ref={(el) => {
+                            if (el) el.indeterminate = selectedItemIds.size > 0 && selectedItemIds.size < sortedDatasetItems.length;
+                          }}
+                          onChange={toggleSelectAllItems}
+                        />
+                      </th>
+                    )}
                     <th className="app-table-col-label">Preview</th>
                     <th className="app-table-col-label">
                       <button type="button" onClick={() => toggleItemSort("image_id")} className="hover:text-gray-300">
@@ -1393,14 +1523,18 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                       </button>
                     </th>
                     <th className="app-table-col-label">Image Description</th>
-                    <th className="app-table-col-center">
-                      <button
-                        type="button"
-                        onClick={() => toggleItemSort("ground_truth_label")}
-                        className="hover:text-gray-300"
-                      >
-                        Ground Truth Label {itemSortBy === "ground_truth_label" ? (itemSortDir === "asc" ? "↑" : "↓") : ""}
-                      </button>
+                    <th className={datasetIsMultiLabel ? "app-table-col-label" : "app-table-col-center"}>
+                      {datasetIsMultiLabel ? (
+                        "Ground Truth Labels"
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => toggleItemSort("ground_truth_label")}
+                          className="hover:text-gray-300"
+                        >
+                          Ground Truth Label {itemSortBy === "ground_truth_label" ? (itemSortDir === "asc" ? "↑" : "↓") : ""}
+                        </button>
+                      )}
                     </th>
                     <th className="app-table-col-label">Attributes</th>
                     {isEditingDetails && <th className="app-table-col-right">Action</th>}
@@ -1409,6 +1543,16 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                 <tbody>
                   {sortedDatasetItems.map((item, index) => (
                     <tr key={item.item_id}>
+                      {isEditingDetails && (
+                        <td className="app-table-col-center">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${item.image_id}`}
+                            checked={selectedItemIds.has(item.item_id)}
+                            onChange={() => toggleItemSelected(item.item_id)}
+                          />
+                        </td>
+                      )}
                       <td className="w-44">
                         <img
                           src={item.image_uri}
@@ -1440,7 +1584,25 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                         )}
                       </td>
                       <td className="app-table-col-center">
-                        {isEditingDetails ? (
+                        {datasetIsMultiLabel ? (
+                          isEditingDetails ? (
+                            <SegmentTagsEditor
+                              value={item.ground_truth_labels ?? []}
+                              options={multiLabelOptions}
+                              onChange={(next) => updateItemField(item.item_id, { ground_truth_labels: next } as Partial<DatasetItem>)}
+                            />
+                          ) : (item.ground_truth_labels?.length ?? 0) > 0 ? (
+                            <div className="flex flex-wrap gap-1 py-1">
+                              {item.ground_truth_labels!.map((l) => (
+                                <span key={l} className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[10px] text-sky-200">
+                                  {l}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-600 text-xs">—</span>
+                          )
+                        ) : isEditingDetails ? (
                           <select
                             className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
                             value={item.ground_truth_label || ""}
@@ -1485,7 +1647,7 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
                   ))}
                   {datasetItems.length === 0 && (
                     <tr>
-                      <td colSpan={isEditingDetails ? 6 : 5} className="px-2 py-5 text-center text-gray-500">
+                      <td colSpan={isEditingDetails ? 7 : 5} className="px-2 py-5 text-center text-gray-500">
                         No images in this dataset.
                       </td>
                     </tr>
@@ -1630,6 +1792,37 @@ export function SavedDatasets({ detections }: { detections: Detection[] }) {
           onSubmit={(action, note) => resolveItemFlag(resolveModalFlagId, action, note)}
           onCancel={() => setResolveModalFlagId(null)}
         />
+      )}
+
+      {showAppend && selectedDataset && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="app-card-strong w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <h3 className="text-lg font-semibold text-gray-100">Add Images</h3>
+                <p className="text-sm text-gray-400">
+                  Append images to &ldquo;{selectedDataset.name}&rdquo; via uploaded files or a CSV manifest.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowAppend(false)}
+                className="app-btn app-btn-subtle app-btn-sm"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <AppendImagesForm
+              dataset={selectedDataset}
+              segmentOptions={segmentOptions}
+              onAppended={async () => {
+                setShowAppend(false);
+                await loadDatasetItems(selectedDataset.dataset_id);
+                await loadDatasets();
+                triggerRefresh();
+              }}
+            />
+          </div>
+        </div>
       )}
 
       {showAssignModal && selectedDataset && (
@@ -1824,6 +2017,405 @@ function SavedDatasetResolveModal({
   );
 }
 
+function AppendImagesForm({
+  dataset,
+  segmentOptions,
+  onAppended,
+}: {
+  dataset: Dataset;
+  segmentOptions: string[];
+  onAppended: () => void;
+}) {
+  const [mode, setMode] = useState<"csv" | "files">("files");
+  const [csvRows, setCsvRows] = useState<
+    Array<{
+      image_id: string;
+      image_url: string;
+      ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+      ground_truth_labels?: string[];
+      segment_tags?: string[] | string;
+    }>
+  >([]);
+  const [csvFileName, setCsvFileName] = useState("");
+  const [fileRows, setFileRows] = useState<
+    Array<{
+      id: string;
+      file: File;
+      preview: string;
+      imageId: string;
+      label: "DETECTED" | "NOT_DETECTED" | "";
+      segment_tags: string[];
+    }>
+  >([]);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      fileRows.forEach((r) => URL.revokeObjectURL(r.preview));
+    };
+  }, [fileRows]);
+
+  const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(event.target.files || []);
+    if (picked.length === 0) return;
+    const nextRows = picked.map((file, i) => {
+      const base = file.name.replace(/\.[^.]+$/, "");
+      return {
+        id: `${Date.now()}_${i}_${base}`,
+        file,
+        preview: URL.createObjectURL(file),
+        imageId: sanitizeImageId(base || `image_${i + 1}`),
+        label: "" as "DETECTED" | "NOT_DETECTED" | "",
+        segment_tags: [] as string[],
+      };
+    });
+    setFileRows((prev) => [...prev, ...nextRows]);
+    event.currentTarget.value = "";
+  };
+
+  const removeFileRow = (id: string) => {
+    setFileRows((prev) => {
+      const target = prev.find((r) => r.id === id);
+      if (target) URL.revokeObjectURL(target.preview);
+      return prev.filter((r) => r.id !== id);
+    });
+  };
+
+  const handleAppend = async () => {
+    setError("");
+    try {
+      setUploading(true);
+      if (mode === "files") {
+        if (fileRows.length === 0) {
+          setError("Choose at least one image file");
+          return;
+        }
+        const imageIds = new Set<string>();
+        for (const row of fileRows) {
+          const imageId = row.imageId.trim();
+          if (!imageId) {
+            setError("Each image needs an imageId");
+            return;
+          }
+          if (imageIds.has(imageId)) {
+            setError(`Duplicate imageId: ${imageId}`);
+            return;
+          }
+          imageIds.add(imageId);
+        }
+        const formData = new FormData();
+        formData.append("action", "append_files");
+        formData.append("dataset_id", dataset.dataset_id);
+        formData.append(
+          "items",
+          JSON.stringify(
+            fileRows.map((r) => ({
+              image_id: r.imageId.trim(),
+              image_description: "",
+              ground_truth_label: r.label || null,
+              segment_tags: normalizeSegmentTags(r.segment_tags),
+            }))
+          )
+        );
+        fileRows.forEach((r) => formData.append("files", r.file));
+        const res = await fetch("/api/datasets", { method: "PUT", body: formData });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(payload?.error || "Failed to add images");
+      } else {
+        if (csvRows.length === 0) {
+          setError("Choose a CSV manifest with at least one row");
+          return;
+        }
+        const res = await fetch("/api/datasets", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "append_items",
+            dataset_id: dataset.dataset_id,
+            items: csvRows.map((row) => ({
+              image_id: row.image_id,
+              image_uri: row.image_url,
+              ground_truth_label: row.ground_truth_label,
+              ground_truth_labels: row.ground_truth_labels ?? [],
+              segment_tags: normalizeSegmentTags(row.segment_tags),
+            })),
+          }),
+        });
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(payload?.error || "Failed to add images");
+      }
+      onAppended();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add images");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const count = mode === "files" ? fileRows.length : csvRows.length;
+  // Multi-label CSV when any parsed row carries a ground-truth label set.
+  const csvIsMultiLabel = csvRows.some((r) => (r.ground_truth_labels?.length ?? 0) > 0);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => setMode("files")}
+          className={`app-btn app-btn-sm ${mode === "files" ? "app-btn-primary" : "app-btn-secondary"}`}
+        >
+          Upload Image Files
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("csv")}
+          className={`app-btn app-btn-sm ${mode === "csv" ? "app-btn-primary" : "app-btn-secondary"}`}
+        >
+          CSV Manifest
+        </button>
+      </div>
+
+      {mode === "csv" ? (
+        <div className="space-y-2">
+          <input
+            id="append-images-csv-input"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              const input = e.target;
+              if (!file) return;
+              try {
+                const parsed = await parseCsvManifest(file);
+                setCsvRows(parsed);
+                setCsvFileName(file.name);
+                setError("");
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Failed to parse CSV file.");
+                setCsvRows([]);
+                setCsvFileName("");
+              }
+              input.value = "";
+            }}
+            className="hidden"
+          />
+          <label
+            htmlFor="append-images-csv-input"
+            className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+          >
+            Choose CSV
+          </label>
+          {csvFileName && (
+            <span className="ml-3 text-xs text-gray-400">
+              {csvRows.length} row{csvRows.length !== 1 ? "s" : ""} parsed
+            </span>
+          )}
+          <p className="text-[11px] text-gray-500">
+            Columns: imageId, imageUrl, groundTruthLabel, attributes.{" "}
+            <a href="/dataset-manifest-example.csv" download className="text-sky-400 hover:underline">Download template</a>
+            {" · "}
+            <a href="/dataset-manifest-multilabel-example.csv" download className="text-sky-400 hover:underline">Download multi-label template</a>
+          </p>
+          {csvRows.length > 0 && (
+            <div className="app-table-wrap max-h-72 overflow-y-auto">
+              <table className="app-table app-table-fixed text-xs">
+                <thead className="sticky top-0">
+                  <tr>
+                    <th className="app-table-col-label">imageId</th>
+                    <th className="app-table-col-label">imageUrl</th>
+                    <th className={csvIsMultiLabel ? "app-table-col-label" : "app-table-col-center"}>
+                      {csvIsMultiLabel ? "GT Labels (multi)" : "Label"}
+                    </th>
+                    <th className="app-table-col-label">Attributes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {csvRows.map((row, idx) => (
+                    <tr key={`${row.image_id}_${idx}`}>
+                      <td className="font-mono">{row.image_id}</td>
+                      <td className="truncate max-w-[16rem]" title={row.image_url}>{row.image_url}</td>
+                      {csvIsMultiLabel ? (
+                        <td className="min-w-[180px]">
+                          {row.ground_truth_labels && row.ground_truth_labels.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {row.ground_truth_labels.map((l) => (
+                                <span key={l} className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[10px] text-sky-200">
+                                  {l}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-gray-600">—</span>
+                          )}
+                        </td>
+                      ) : (
+                        <td className="app-table-col-center">
+                          <select
+                            className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                            value={row.ground_truth_label || ""}
+                            onChange={(e) => {
+                              const nextLabel = (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null;
+                              setCsvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ground_truth_label: nextLabel } : r)));
+                            }}
+                          >
+                            <option value="">UNSET</option>
+                            <option value="DETECTED">DETECTED</option>
+                            <option value="NOT_DETECTED">NOT_DETECTED</option>
+                          </select>
+                        </td>
+                      )}
+                      <td className="min-w-[220px]">
+                        <SegmentTagsEditor
+                          value={normalizeSegmentTags(row.segment_tags)}
+                          options={segmentOptions}
+                          onChange={(next) => {
+                            setCsvRows((prev) => prev.map((r, i) => (i === idx ? { ...r, segment_tags: next } : r)));
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <input
+            id="append-images-files-input"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={onPickFiles}
+            className="hidden"
+          />
+          <label
+            htmlFor="append-images-files-input"
+            className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+          >
+            Choose Files
+          </label>
+          {fileRows.length > 0 && (
+            <span className="ml-3 text-xs text-gray-400">{fileRows.length} file{fileRows.length !== 1 ? "s" : ""} selected</span>
+          )}
+          {fileRows.length > 0 && (
+            <div className="app-table-wrap max-h-72 overflow-y-auto">
+              <table className="app-table app-table-fixed text-xs">
+                <colgroup>
+                  <col style={{ width: "8rem" }} />
+                  <col />
+                  <col style={{ width: "9rem" }} />
+                  <col style={{ width: "14rem" }} />
+                  <col style={{ width: "5.5rem" }} />
+                </colgroup>
+                <thead className="sticky top-0">
+                  <tr>
+                    <th className="app-table-col-label">Preview</th>
+                    <th className="app-table-col-label">imageId</th>
+                    <th className="app-table-col-center">Label</th>
+                    <th className="app-table-col-label">Attributes</th>
+                    <th className="app-table-col-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fileRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>
+                        <img
+                          src={row.preview}
+                          alt={row.file.name}
+                          className="w-24 h-16 object-cover rounded border border-gray-700 cursor-pointer"
+                          onClick={() => setExpandedIndex(fileRows.findIndex((f) => f.id === row.id))}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                          value={row.imageId}
+                          onChange={(e) =>
+                            setFileRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, imageId: sanitizeImageId(e.target.value) } : r))
+                            )
+                          }
+                        />
+                      </td>
+                      <td className="app-table-col-center">
+                        <select
+                          className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                          value={row.label}
+                          onChange={(e) =>
+                            setFileRows((prev) =>
+                              prev.map((r) => (r.id === row.id ? { ...r, label: e.target.value as "DETECTED" | "NOT_DETECTED" | "" } : r))
+                            )
+                          }
+                        >
+                          <option value="">UNSET</option>
+                          <option value="DETECTED">DETECTED</option>
+                          <option value="NOT_DETECTED">NOT_DETECTED</option>
+                        </select>
+                      </td>
+                      <td className="min-w-[220px]">
+                        <SegmentTagsEditor
+                          value={row.segment_tags}
+                          options={segmentOptions}
+                          onChange={(next) =>
+                            setFileRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, segment_tags: next } : r)))
+                          }
+                        />
+                      </td>
+                      <td className="app-table-col-right">
+                        <button
+                          onClick={() => removeFileRow(row.id)}
+                          className="app-btn app-btn-subtle app-btn-sm text-xs"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2">
+          <span className="font-semibold text-red-300 text-xs">Add rejected:</span>{" "}
+          <span className="text-xs text-red-200/90">{error}</span>
+        </div>
+      )}
+
+      <div className="flex justify-end">
+        <button
+          onClick={handleAppend}
+          disabled={uploading || count === 0}
+          className="app-btn app-btn-primary disabled:opacity-50"
+        >
+          {uploading ? "Adding..." : `Add ${count} Image${count === 1 ? "" : "s"}`}
+        </button>
+      </div>
+
+      <ImagePreviewModal
+        isOpen={expandedIndex != null && !!fileRows[expandedIndex || 0]}
+        imageUrl={expandedIndex != null ? fileRows[expandedIndex]?.preview || "" : ""}
+        imageAlt={expandedIndex != null ? fileRows[expandedIndex]?.file.name || "Preview" : "Preview"}
+        title="Add Images Preview"
+        subtitle={expandedIndex != null ? fileRows[expandedIndex]?.file.name || "" : ""}
+        index={expandedIndex ?? 0}
+        total={fileRows.length}
+        onClose={() => setExpandedIndex(null)}
+        onPrev={() => setExpandedIndex((i) => (i == null ? null : Math.max(0, i - 1)))}
+        onNext={() => setExpandedIndex((i) => (i == null ? null : Math.min(fileRows.length - 1, i + 1)))}
+      />
+    </div>
+  );
+}
+
 function GlobalDatasetUploadForm({
   detections,
   onUploaded,
@@ -1841,6 +2433,7 @@ function GlobalDatasetUploadForm({
       image_id: string;
       image_url: string;
       ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+      ground_truth_labels?: string[];
       segment_tags?: string[] | string;
     }>
   >([]);
@@ -2034,14 +2627,21 @@ function GlobalDatasetUploadForm({
           if (!res.ok) throw new Error(payload?.error || "Failed to create dataset");
         }
       } else if (mode === "csv") {
+        if (csvRows.length === 0) {
+          setError("No CSV rows loaded. Choose a CSV manifest and make sure it parsed without errors before creating.");
+          return;
+        }
         const items = csvRows.map((row) => ({
           image_id: row.image_id,
           image_uri: row.image_url,
           ground_truth_label: row.ground_truth_label,
+          ground_truth_labels: row.ground_truth_labels ?? [],
           segment_tags: normalizeSegmentTags(row.segment_tags),
         }));
         if (splitType === "AUTO_SPLIT") {
-          if (items.some((item) => !item.ground_truth_label)) {
+          // Multi-label CSVs stratify over the label set; only binary CSVs need
+          // a DETECTED/NOT_DETECTED on every row.
+          if (!csvIsMultiLabel && items.some((item) => !item.ground_truth_label)) {
             setError("Auto-split requires all ground truth labels to be set.");
             return;
           }
@@ -2084,6 +2684,9 @@ function GlobalDatasetUploadForm({
       setUploading(false);
     }
   };
+
+  // Multi-label CSV when any parsed row carries a ground-truth label set.
+  const csvIsMultiLabel = csvRows.some((r) => (r.ground_truth_labels?.length ?? 0) > 0);
 
   return (
       <div className="app-section space-y-4">
@@ -2178,11 +2781,15 @@ function GlobalDatasetUploadForm({
             Choose CSV
           </label>
           {csvFileName && (
-            <span className="ml-3 text-xs text-gray-400">1 file selected</span>
+            <span className="ml-3 text-xs text-gray-400">
+              {csvRows.length} row{csvRows.length !== 1 ? "s" : ""} parsed
+            </span>
           )}
           <p className="text-[11px] text-gray-500">
             Columns: imageId, imageUrl, groundTruthLabel, attributes.{" "}
             <a href="/dataset-manifest-example.csv" download className="text-sky-400 hover:underline">Download template</a>
+            {" · "}
+            <a href="/dataset-manifest-multilabel-example.csv" download className="text-sky-400 hover:underline">Download multi-label template</a>
           </p>
         </div>
       ) : (
@@ -2325,14 +2932,16 @@ function GlobalDatasetUploadForm({
             <colgroup>
               <col style={{ width: "12rem" }} />
               <col />
-              <col style={{ width: "9rem" }} />
+              <col style={{ width: csvIsMultiLabel ? "16rem" : "9rem" }} />
               <col style={{ width: "14rem" }} />
             </colgroup>
             <thead className="sticky top-0">
               <tr>
                 <th className="app-table-col-label">Image ID</th>
                 <th className="app-table-col-label">Image URL</th>
-                <th className="app-table-col-center">Ground Truth</th>
+                <th className={csvIsMultiLabel ? "app-table-col-label" : "app-table-col-center"}>
+                  {csvIsMultiLabel ? "GT Labels (multi)" : "Ground Truth"}
+                </th>
                 <th className="app-table-col-label">Attributes</th>
               </tr>
             </thead>
@@ -2343,22 +2952,38 @@ function GlobalDatasetUploadForm({
                   <td className="text-gray-400 max-w-[320px] truncate" title={row.image_url}>
                     {row.image_url}
                   </td>
-                  <td className="app-table-col-center">
-                    <select
-                      className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
-                      value={row.ground_truth_label || ""}
-                      onChange={(e) => {
-                        const nextLabel = (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null;
-                        setCsvRows((prev) =>
-                          prev.map((r, i) => (i === idx ? { ...r, ground_truth_label: nextLabel } : r))
-                        );
-                      }}
-                    >
-                      <option value="">UNSET</option>
-                      <option value="DETECTED">DETECTED</option>
-                      <option value="NOT_DETECTED">NOT_DETECTED</option>
-                    </select>
-                  </td>
+                  {csvIsMultiLabel ? (
+                    <td className="min-w-[180px]">
+                      {row.ground_truth_labels && row.ground_truth_labels.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {row.ground_truth_labels.map((l) => (
+                            <span key={l} className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[10px] text-sky-200">
+                              {l}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-gray-600">—</span>
+                      )}
+                    </td>
+                  ) : (
+                    <td className="app-table-col-center">
+                      <select
+                        className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                        value={row.ground_truth_label || ""}
+                        onChange={(e) => {
+                          const nextLabel = (e.target.value || null) as "DETECTED" | "NOT_DETECTED" | null;
+                          setCsvRows((prev) =>
+                            prev.map((r, i) => (i === idx ? { ...r, ground_truth_label: nextLabel } : r))
+                          );
+                        }}
+                      >
+                        <option value="">UNSET</option>
+                        <option value="DETECTED">DETECTED</option>
+                        <option value="NOT_DETECTED">NOT_DETECTED</option>
+                      </select>
+                    </td>
+                  )}
                   <td className="min-w-[220px]">
                     <SegmentTagsEditor
                       value={normalizeSegmentTags(row.segment_tags)}
@@ -2440,12 +3065,45 @@ async function parseCsvManifest(file: File): Promise<Array<{
   image_id: string;
   image_url: string;
   ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  ground_truth_labels?: string[];
   segment_tags?: string[] | string;
 }>> {
   const text = await file.text();
   const rows = parseCsvText(text);
   if (rows.length === 0) throw new Error("CSV file is empty or has no data rows.");
   return normalizeManifestRows(rows, "CSV");
+}
+
+/** Split a multi-label ground-truth cell into a deduped list of label names. */
+function parseMultiLabelCell(value: unknown): string[] {
+  let parts: string[] = [];
+  if (Array.isArray(value)) {
+    parts = value.map((v) => String(v ?? ""));
+  } else {
+    const raw = String(value ?? "").trim();
+    if (!raw) return [];
+    if (raw.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) parts = parsed.map((v) => String(v ?? ""));
+      } catch {
+        parts = raw.split(/[|;,]/);
+      }
+    } else {
+      parts = raw.split(/[|;,]/);
+    }
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const p of parts) {
+    const label = p.trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out;
 }
 
 function parseCsvText(text: string): Array<Record<string, string>> {
@@ -2498,12 +3156,14 @@ function normalizeManifestRows(
   image_id: string;
   image_url: string;
   ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+  ground_truth_labels?: string[];
   segment_tags?: string[] | string;
 }> {
   const rows: Array<{
     image_id: string;
     image_url: string;
     ground_truth_label: "DETECTED" | "NOT_DETECTED" | null;
+    ground_truth_labels?: string[];
     segment_tags?: string[] | string;
   }> = [];
   const seenImageIds = new Set<string>();
@@ -2512,7 +3172,11 @@ function normalizeManifestRows(
     const row = rowsInput[i] || {};
     const imageId = sanitizeImageId(String(row.image_id || row.imageId || ""));
     const imageUrl = String(row.image_url || row.imageUrl || row.image_uri || row.imageUri || "").trim();
-    const rawLabel = String(row.ground_truth_label || row.ground_truth_labels || row.groundTruthLabel || row.groundTruthLabels || row.label || "").trim().toUpperCase();
+    const rawLabel = String(row.ground_truth_label || row.groundTruthLabel || row.label || "").trim().toUpperCase();
+    // Dedicated multi-label column (set of attribute labels present on the image).
+    const multiLabels = parseMultiLabelCell(
+      row.ground_truth_labels ?? row.groundTruthLabels ?? row.ground_truth_label_set ?? row.labels ?? ""
+    );
     const segmentTags = (row.segment_tags ?? row.segmentTags ?? row.attribute_tags ?? row.attributeTags ?? row.attributes ?? row.segments ?? "") as string[] | string;
     if (!imageId) {
       throw new Error(`${sourceLabel} row ${i + 1} has blank imageId.`);
@@ -2524,10 +3188,16 @@ function normalizeManifestRows(
     if (!imageUrl) {
       throw new Error(`${sourceLabel} row ${i + 1} has blank imageUrl.`);
     }
-    try {
-      new URL(imageUrl);
-    } catch {
-      throw new Error(`${sourceLabel} row ${i + 1} has invalid imageUrl: "${imageUrl}".`);
+    // Accept app-local relative paths (e.g. /uploads/datasets/<id>/img.png) in
+    // addition to absolute URLs (http(s), gs://, data:). Relative paths are
+    // served by the app from the public/ directory.
+    const isAppLocalPath = imageUrl.startsWith("/");
+    if (!isAppLocalPath) {
+      try {
+        new URL(imageUrl);
+      } catch {
+        throw new Error(`${sourceLabel} row ${i + 1} has invalid imageUrl: "${imageUrl}".`);
+      }
     }
     const urlExt = imageUrl.split("?")[0].split("#")[0].split(".").pop()?.toLowerCase() || "";
     const supportedExts = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "svg"]);
@@ -2562,6 +3232,7 @@ function normalizeManifestRows(
       image_id: imageId,
       image_url: imageUrl,
       ground_truth_label: label,
+      ground_truth_labels: multiLabels.length > 0 ? multiLabels : undefined,
       segment_tags: segmentTags,
     });
   }

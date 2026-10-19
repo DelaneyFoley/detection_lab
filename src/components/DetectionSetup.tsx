@@ -28,6 +28,8 @@ import {
 } from "@/lib/productionMirror";
 import { useProductionMirror } from "@/lib/useProductionMirror";
 import { compileAggregatePrompt, extractPreamble } from "@/lib/inference/aggregateCompile";
+import { useGeminiModels } from "@/lib/useGeminiModels";
+import { modelSupportsThinkingLevel } from "@/lib/geminiModels";
 import {
   buildUserPromptTemplate,
   buildVersionLabel,
@@ -92,6 +94,8 @@ const promptStructureOf = (
 const INPUT_CLS = "w-full bg-gray-900 border border-gray-600 rounded px-3 py-2 text-sm";
 const INPUT_CLS_SMALL = "w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm";
 const LABEL_CLS = "text-xs text-gray-400 block mb-1";
+// Gemini thinking levels (matches the aggregate inference thinkingConfig mapping).
+const THINKING_LEVEL_OPTIONS = ["minimal", "low", "medium", "high"] as const;
 
 /**
  * Delete a single prompt version via the /api/prompts DELETE endpoint.
@@ -359,7 +363,7 @@ export function DetectionSetup({
         notify({ message: "Select a production context to import before creating a Production Replication detection.", tone: "warning" });
         return;
       }
-      if (!createMirror.composition.members.some((m) => m.is_target)) {
+      if (!createMirror.multiLabel && !createMirror.composition.members.some((m) => m.is_target)) {
         notify({ message: "Select a Target detection before creating a Production Replication detection.", tone: "warning" });
         return;
       }
@@ -508,17 +512,25 @@ export function DetectionSetup({
     if (!selectedDetection) return;
     setSavingPrompt(true);
     try {
-    await fetch("/api/detections", {
+    const res = await fetch("/api/detections", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         detection_id: selectedDetection.detection_id,
+        display_name: form.display_name || selectedDetection.display_name,
+        detection_category: form.detection_category || selectedDetection.detection_category,
         description: form.description,
         segment_taxonomy: form.segment_taxonomy.map((s) => s.trim()).filter(Boolean),
         metric_thresholds: form.metric_thresholds,
+        production_label: form.production_label.trim() || null,
         approved_prompt_version: selectedDetection.approved_prompt_version,
       }),
     });
+    if (!res.ok) {
+      const payload = await safeJsonObject<{ error?: string }>(res);
+      notify({ message: payload?.error || "Failed to save detection.", tone: "error" });
+      return;
+    }
     setEditingFromVersionRow(false);
     setMode("view");
     await refreshAll();
@@ -2023,7 +2035,7 @@ export function DetectionSetup({
               )}
             </div>
 
-            {mode === "create" && createMode !== "mirror" && (
+            {((mode === "create" && createMode !== "mirror") || mode === "edit") && (
             <div>
               <label className={LABEL_CLS}>Production Label (target)</label>
               <input
@@ -2085,6 +2097,10 @@ export function DetectionSetup({
                   onRemoveMember={createMirror.removeMember}
                   snapshotLabels={createMirror.snapshot ? createMirror.snapshot.ordered_members.map((m) => m.label) : []}
                   compiledPreview={createMirror.compiledPreview}
+                  multiLabel={createMirror.multiLabel}
+                  onToggleMultiLabel={createMirror.toggleMultiLabel}
+                  onSetModel={createMirror.setModel}
+                  onSetThinkingLevel={createMirror.setThinkingLevel}
                 />
               </div>
             )}
@@ -2516,6 +2532,15 @@ export function DetectionSetup({
                     <div className="app-label mb-1">Detection Category</div>
                     <div className="text-sm leading-6 text-gray-200 truncate">
                       {DETECTION_CATEGORY_LABELS[selectedDetection.detection_category]}
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="app-label mb-1">Production Label</div>
+                    <div
+                      className="text-sm leading-6 text-gray-200 truncate"
+                      title={selectedDetection.production_label || "Not set"}
+                    >
+                      {selectedDetection.production_label || "—"}
                     </div>
                   </div>
                   <div className="min-w-0">
@@ -3625,6 +3650,10 @@ function ProductionModePanel({
   onRemoveMember,
   snapshotLabels,
   compiledPreview,
+  multiLabel,
+  onToggleMultiLabel,
+  onSetModel,
+  onSetThinkingLevel,
 }: {
   contextNames: string[];
   selectedContext: string;
@@ -3651,12 +3680,24 @@ function ProductionModePanel({
   onRemoveMember: (index: number) => void;
   snapshotLabels: string[];
   compiledPreview: string;
+  multiLabel: boolean;
+  onToggleMultiLabel: (value: boolean) => void;
+  onSetModel: (value: string) => void;
+  onSetThinkingLevel: (value: string) => void;
 }) {
   const hasTarget = !!composition && composition.members.some((m) => m.is_target);
   const [customTarget, setCustomTarget] = useState(false);
   const isCustomTarget = customTarget || (!!targetLabel && !memberLabels.includes(targetLabel));
   const [newMemberLabel, setNewMemberLabel] = useState("");
   const [newMemberDesc, setNewMemberDesc] = useState("");
+  const geminiModels = useGeminiModels();
+  const thinkingSupported = modelSupportsThinkingLevel(composition?.google_model || "");
+  // Drop a stale thinking level if the selected model can't accept the thinkingLevel enum.
+  useEffect(() => {
+    if (composition?.thinking_level && !modelSupportsThinkingLevel(composition?.google_model || "")) {
+      onSetThinkingLevel("");
+    }
+  }, [composition?.google_model, composition?.thinking_level, onSetThinkingLevel]);
   return (
     <div className="space-y-4">
       <div>
@@ -3683,6 +3724,70 @@ function ProductionModePanel({
 
       {snapshot && (
         <>
+          <div className="rounded-lg border border-[rgba(92,184,255,0.35)] bg-[rgba(10,25,45,0.35)] p-3">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={multiLabel}
+                onChange={(e) => onToggleMultiLabel(e.target.checked)}
+              />
+              <span>
+                <span className="text-sm font-semibold text-white">Multi-label mode</span>
+                <span className="mt-0.5 block text-xs text-[var(--app-text-muted)]">
+                  Score every enabled detection independently against the dataset&apos;s multi-label ground
+                  truth. No single target — each label that appears in an image&apos;s ground-truth set counts
+                  as DETECTED for that label; otherwise NOT_DETECTED.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className={LABEL_CLS}>Model</label>
+              <select
+                className="app-select w-full px-3 py-2 text-sm"
+                value={composition?.google_model || ""}
+                onChange={(e) => onSetModel(e.target.value)}
+              >
+                {composition?.google_model && !geminiModels.includes(composition.google_model) && (
+                  <option value={composition.google_model}>{composition.google_model} (production)</option>
+                )}
+                {geminiModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={LABEL_CLS}>Thinking Level</label>
+              <select
+                className="app-select w-full px-3 py-2 text-sm disabled:opacity-50"
+                value={composition?.thinking_level || ""}
+                onChange={(e) => onSetThinkingLevel(e.target.value)}
+                disabled={!thinkingSupported}
+              >
+                <option value="">— none —</option>
+                {THINKING_LEVEL_OPTIONS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              {!thinkingSupported && composition?.google_model && (
+                <p className="mt-1 text-xs text-[var(--app-text-muted)]">
+                  {composition.google_model} does not support thinking levels (Gemini 3.x only).
+                </p>
+              )}
+            </div>
+          </div>
+          <p className="-mt-1 text-xs text-[var(--app-text-muted)]">
+            Defaults to the frozen production values. Changing either makes this a Modified Replication.
+          </p>
+
+          {!multiLabel && (
           <div>
             <label className={LABEL_CLS}>Target Detection</label>
             <select
@@ -3724,6 +3829,7 @@ function ProductionModePanel({
               </p>
             )}
           </div>
+          )}
 
           {hasTarget && (
             <div>
@@ -4043,6 +4149,10 @@ function PromptForm({
     addMember,
     removeMember,
     compiledPreview,
+    multiLabel,
+    toggleMultiLabel,
+    setModel,
+    setThinkingLevel,
   } = useProductionMirror({
     active: mode === "PRODUCTION_MODE",
     initialData,
@@ -4074,8 +4184,9 @@ function PromptForm({
         setCtxError("Select a production context to import before saving a production-mode version.");
         return;
       }
-      // A production-mirror version must have a target in the aggregate (B1).
-      if (!composition.members.some((m) => m.is_target)) {
+      // A production-mirror version must have a target in the aggregate (B1),
+      // unless it's a multi-label version (every label scored, no single target).
+      if (!multiLabel && !composition.members.some((m) => m.is_target)) {
         setCtxError(
           "Select a Target detection for this version before saving a Production Replication version."
         );
@@ -4190,6 +4301,10 @@ function PromptForm({
           onRemoveMember={removeMember}
           snapshotLabels={snapshot ? snapshot.ordered_members.map((m) => m.label) : []}
           compiledPreview={compiledPreview}
+          multiLabel={multiLabel}
+          onToggleMultiLabel={toggleMultiLabel}
+          onSetModel={setModel}
+          onSetThinkingLevel={setThinkingLevel}
         />
       )}
 

@@ -15,6 +15,7 @@ type AggregateConfig = {
   snapshot: ProductionSnapshot;
   composition: PromptComposition;
   targetLabel: string | null;
+  multiLabel: boolean;
 };
 
 export async function GET(req: NextRequest) {
@@ -109,12 +110,6 @@ export async function POST(req: NextRequest) {
     // Fetch dataset
     const dataset = runRepository.getDatasetById(dataset_id);
     if (!dataset) return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
-    if (dataset.split_type === "MASTER") {
-      return NextResponse.json(
-        { error: "MASTER datasets are for labeling and curation only. Auto-split to TRAIN, TEST, and EVALUATE before running." },
-        { status: 400 }
-      );
-    }
     if (dataset.split_type === "HELD_OUT_EVAL" && !allowEvalRun) {
       return NextResponse.json(
         { error: "EVALUATE datasets can only be run from the Held-Out Eval tab." },
@@ -148,13 +143,14 @@ export async function POST(req: NextRequest) {
         prompt.production_label ??
         detection.production_label ??
         null;
-      if (!targetLabel) {
+      const multiLabel = composition.multi_label === true;
+      if (!multiLabel && !targetLabel) {
         return NextResponse.json(
           { error: "This production-mode version has no target detection in its aggregate. Set the version's Target and re-save the version." },
           { status: 400 }
         );
       }
-      aggregate = { snapshot, composition, targetLabel };
+      aggregate = { snapshot, composition, targetLabel, multiLabel };
     }
 
     const runId = uuid();
@@ -170,8 +166,9 @@ export async function POST(req: NextRequest) {
             context_name: aggregate.composition.context_name,
             provenance_kind: prompt.provenance_kind,
             source_revision: aggregate.snapshot.source_revision,
-            thinking_level_requested: aggregate.snapshot.thinking_level,
+            thinking_level_requested: aggregate.composition.thinking_level || aggregate.snapshot.thinking_level,
             thinking_applied: true,
+            multi_label: aggregate.multiLabel,
           }
         : {}),
     };
@@ -257,16 +254,70 @@ async function executeRunInBackground({
     let nextIndex = 0;
     let processed = 0;
 
-    const processItem = async (item: any): Promise<Prediction> => {
+    const processItem = async (item: any): Promise<Prediction[]> => {
     try {
       if (aggregate) {
         const r = await runAggregateInference(apiKey, {
           model: parsedPrompt.model,
           snapshot: aggregate.snapshot,
           composition: aggregate.composition,
-          targetLabel: aggregate.targetLabel,
+          targetLabel: aggregate.multiLabel ? null : aggregate.targetLabel,
           imageUri: item.image_uri,
+          multiLabel: aggregate.multiLabel,
         });
+
+        // Multi-label: score every enabled member label independently against
+        // the image's multi-label ground truth. One prediction row per label,
+        // storing the model's per-label verdict reasoning (incl. negatives).
+        if (aggregate.multiLabel) {
+          const gtLabels = parseGroundTruthLabels(item.ground_truth_labels);
+          const gtSet = new Set(gtLabels.map((l) => l.toLowerCase()));
+          const verdictByLabel = new Map<string, { present: boolean; reasoning: string }>();
+          for (const v of r.labelVerdicts) {
+            verdictByLabel.set(v.label.toLowerCase(), { present: v.present, reasoning: v.reasoning });
+          }
+          const labels = Array.from(
+            new Map(
+              aggregate.composition.members
+                .filter((m) => m.enabled)
+                .map((m) => [m.label.toLowerCase(), m.label])
+            ).values()
+          );
+          const aggTag = r.parseOk
+            ? null
+            : r.raw.startsWith("ERROR:")
+              ? "INFERENCE_CALL_FAILED"
+              : "SCHEMA_VIOLATION";
+          const rows: Prediction[] = labels.map((label) => {
+            const verdict = verdictByLabel.get(label.toLowerCase());
+            const pred: Prediction = {
+              prediction_id: uuid(),
+              run_id: runId,
+              image_id: item.image_id,
+              image_uri: item.image_uri,
+              ground_truth_label: gtSet.has(label.toLowerCase()) ? "DETECTED" : "NOT_DETECTED",
+              predicted_decision: r.parseOk ? (verdict?.present ? "DETECTED" : "NOT_DETECTED") : null,
+              confidence: null,
+              evidence: verdict?.reasoning || null,
+              parse_ok: r.parseOk,
+              raw_response: r.raw,
+              parse_error_reason: r.parseErrorReason,
+              parse_fix_suggestion: null,
+              inference_runtime_ms: r.runtimeMs,
+              parse_retry_count: 0,
+              corrected_label: null,
+              error_tag: null,
+              reviewer_note: null,
+              corrected_at: null,
+              sibling_detections: [],
+              detection_label: label,
+            };
+            runRepository.insertPrediction(pred, aggTag);
+            return pred;
+          });
+          return rows;
+        }
+
         const aggPred: Prediction = {
           prediction_id: uuid(),
           run_id: runId,
@@ -294,7 +345,7 @@ async function executeRunInBackground({
             ? "INFERENCE_CALL_FAILED"
             : "SCHEMA_VIOLATION";
         runRepository.insertPrediction(aggPred, aggTag);
-        return aggPred;
+        return [aggPred];
       }
 
       const result = await runDetectionInference(
@@ -327,7 +378,7 @@ async function executeRunInBackground({
 
       runRepository.insertPrediction(pred, null);
 
-      return pred;
+      return [pred];
     } catch (error: unknown) {
       const errMsg = error instanceof Error ? error.message : String(error);
       const pred: Prediction = {
@@ -354,7 +405,7 @@ async function executeRunInBackground({
 
       runRepository.insertPrediction(pred, "INFERENCE_CALL_FAILED");
 
-      return pred;
+      return [pred];
     }
     };
 
@@ -366,7 +417,7 @@ async function executeRunInBackground({
       nextIndex += 1;
 
       const pred = await processItem(items[currentIndex]);
-      predictions.push(pred);
+      predictions.push(...pred);
 
       processed += 1;
       runRepository.updateProcessedImages(runId, processed);
@@ -388,6 +439,21 @@ async function executeRunInBackground({
   } finally {
     runQueue.delete(runId);
   }
+}
+
+function parseGroundTruthLabels(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => String(v || "").trim()).filter(Boolean);
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (!s) return [];
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) return parsed.map((v) => String(v || "").trim()).filter(Boolean);
+    } catch {
+      return s.split(/[,|;\n]/).map((v) => v.trim()).filter(Boolean);
+    }
+  }
+  return [];
 }
 
 function parseSegmentTags(value: unknown): string[] {

@@ -46,6 +46,7 @@ export function HilReview({ detection }: { detection: Detection }) {
   const selectedRunId = selectedRunByDetection[detection.detection_id] || "";
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [filter, setFilter] = useState<FilterType>("all");
+  const [labelFilter, setLabelFilter] = useState<string>("");
   const [viewMode, setViewMode] = useState<"table" | "image">("table");
   const [currentIndex, setCurrentIndex] = useState(0);
   const [runData, setRunData] = useState<any>(null);
@@ -215,7 +216,36 @@ export function HilReview({ detection }: { detection: Detection }) {
     loadRun();
   }, [loadRun]);
 
+  // Distinct per-label values for multi-label runs (empty for single-target runs).
+  const labelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of predictions) if (p.detection_label) set.add(p.detection_label);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [predictions]);
+  const isMultiLabel = labelOptions.length > 0;
+
+  // Top summary metrics follow the selected label when one is chosen.
+  const scopedMetrics =
+    labelFilter && liveMetrics.label_metrics?.[labelFilter]
+      ? liveMetrics.label_metrics[labelFilter]
+      : liveMetrics;
+  const isLabeled = (p: Prediction) =>
+    p.ground_truth_label === "DETECTED" || p.ground_truth_label === "NOT_DETECTED";
+  // Multi-label "Labeled" is counted by image (not per-label row) to match the
+  // single image-per-row table; a specific label still counts its own rows.
+  const scopedTotal = labelFilter
+    ? predictions.filter((p) => p.detection_label === labelFilter).length
+    : isMultiLabel
+      ? new Set(predictions.map((p) => String(p.image_id || ""))).size
+      : predictions.length;
+  const scopedLabeled = labelFilter
+    ? predictions.filter((p) => p.detection_label === labelFilter && isLabeled(p)).length
+    : isMultiLabel
+      ? new Set(predictions.filter(isLabeled).map((p) => String(p.image_id || ""))).size
+      : labeledCount;
+
   const filteredPredictions = predictions.filter((p) => {
+    if (labelFilter && p.detection_label !== labelFilter) return false;
     const gt = p.ground_truth_label;
     switch (filter) {
       case "fp": return p.parse_ok && p.predicted_decision === "DETECTED" && gt === "NOT_DETECTED";
@@ -228,6 +258,27 @@ export function HilReview({ detection }: { detection: Detection }) {
       default: return true;
     }
   });
+
+  // Multi-label grouping: all predictions per image, and the distinct images that
+  // survive the current filter (so the table shows one row per image).
+  const predictionsByImage = new Map<string, Prediction[]>();
+  for (const p of predictions) {
+    const key = String(p.image_id || "");
+    const arr = predictionsByImage.get(key) ?? [];
+    arr.push(p);
+    predictionsByImage.set(key, arr);
+  }
+  const visibleImageGroups: { imageId: string; preds: Prediction[] }[] = (() => {
+    const seen = new Set<string>();
+    const out: { imageId: string; preds: Prediction[] }[] = [];
+    for (const p of filteredPredictions) {
+      const key = String(p.image_id || "");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ imageId: key, preds: predictionsByImage.get(key) ?? [] });
+    }
+    return out;
+  })();
 
   const updatePrediction = async (predictionId: string, updates: Partial<{
     ground_truth_label: Decision | null;
@@ -260,19 +311,27 @@ export function HilReview({ detection }: { detection: Detection }) {
       })
     );
 
-    const res = await fetch("/api/hil", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prediction_id: predictionId,
-        ...updates,
-        update_ground_truth:
-          updates.update_ground_truth ??
-          (Object.prototype.hasOwnProperty.call(updates, "ground_truth_label")
-            ? true
-            : runData?.split_type === "ITERATION"),
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/hil", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prediction_id: predictionId,
+          ...updates,
+          update_ground_truth:
+            updates.update_ground_truth ??
+            (Object.prototype.hasOwnProperty.call(updates, "ground_truth_label")
+              ? true
+              : runData?.split_type === "ITERATION"),
+        }),
+      });
+    } catch {
+      // Network-level failure (server unreachable, restart, offline). Roll back.
+      setPredictions(prevPredictions);
+      notify({ tone: "error", message: "Couldn't reach the server. Your change was not saved — please retry." });
+      return;
+    }
     const payload = await res.clone().json().catch(() => null);
     if (!res.ok) {
       // Roll back the optimistic change.
@@ -318,6 +377,8 @@ export function HilReview({ detection }: { detection: Detection }) {
   };
 
   const [exporting, setExporting] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [includeThumbnails, setIncludeThumbnails] = useState(true);
   const [recomputingAll, setRecomputingAll] = useState(false);
   const [finalized, setFinalized] = useState<boolean | null>(null);
   const [finalizing, setFinalizing] = useState(false);
@@ -395,11 +456,13 @@ export function HilReview({ detection }: { detection: Detection }) {
     }
   };
 
-  const exportRunToExcel = async () => {
+  const exportRunToExcel = async (includeThumbnails: boolean) => {
     if (!selectedRunId || exporting) return;
     setExporting(true);
     try {
-      const res = await fetch(`/api/runs/export?run_id=${selectedRunId}`);
+      const res = await fetch(
+        `/api/runs/export?run_id=${selectedRunId}${includeThumbnails ? "" : "&thumbnails=0"}`
+      );
       if (!res.ok) return;
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -494,6 +557,9 @@ export function HilReview({ detection }: { detection: Detection }) {
 
   const currentPrediction = filteredPredictions[currentIndex];
   const currentDatasetItem = currentPrediction ? datasetItemByImageId[currentPrediction.image_id] : null;
+  // Multi-label image review navigates by image group rather than per-label row.
+  const currentImageGroup = isMultiLabel ? visibleImageGroups[currentIndex] : null;
+  const imageReviewTotal = isMultiLabel ? visibleImageGroups.length : filteredPredictions.length;
 
   const updateSegmentTagsForImage = async (imageId: string, nextTags: string[]) => {
     const item = datasetItemByImageId[imageId];
@@ -590,7 +656,7 @@ export function HilReview({ detection }: { detection: Detection }) {
           </select>
           {predictions.length > 0 && (
             <button
-              onClick={exportRunToExcel}
+              onClick={() => setShowExportModal(true)}
               disabled={exporting}
               className="app-btn app-btn-subtle app-btn-sm text-xs whitespace-nowrap"
             >
@@ -653,7 +719,36 @@ export function HilReview({ detection }: { detection: Detection }) {
 
         {/* Filters */}
         {predictions.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-4 space-y-2">
+            {labelOptions.length > 0 && (
+              <div className="flex items-center gap-2 rounded-lg border border-white/8 bg-[rgba(10,25,45,0.35)] px-3 py-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-sky-300">Detection label</span>
+                <select
+                  value={labelFilter}
+                  onChange={(e) => { setLabelFilter(e.target.value); setCurrentIndex(0); }}
+                  className="app-select text-xs min-w-[220px] max-w-[320px]"
+                  title="Scope the table, filters, and summary metrics to a single detection label"
+                >
+                  <option value="">All labels ({labelOptions.length})</option>
+                  {labelOptions.map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+                {labelFilter && (
+                  <button
+                    type="button"
+                    onClick={() => { setLabelFilter(""); setCurrentIndex(0); }}
+                    className="text-[11px] text-gray-400 hover:text-gray-200 underline"
+                  >
+                    clear
+                  </button>
+                )}
+                <span className="ml-auto text-[11px] text-gray-500">
+                  {labelFilter ? "Metrics & filters scoped to this label" : "Showing all labels"}
+                </span>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
             {([
               ["all", "All"],
               ["fp", "False Positives"],
@@ -664,7 +759,10 @@ export function HilReview({ detection }: { detection: Detection }) {
               ["flagged_open", "Flagged — Open"],
               ["flagged_resolved", "Flagged — Resolved"],
             ] as [FilterType, string][]).map(([key, label]) => {
-              const count = predictions.filter((p) => {
+              const countBasis = labelFilter
+                ? predictions.filter((p) => p.detection_label === labelFilter)
+                : predictions;
+              const count = countBasis.filter((p) => {
                 const gt = p.ground_truth_label;
                 switch (key) {
                   case "fp": return p.parse_ok && p.predicted_decision === "DETECTED" && gt === "NOT_DETECTED";
@@ -688,6 +786,7 @@ export function HilReview({ detection }: { detection: Detection }) {
                 </button>
               );
             })}
+            </div>
           </div>
         )}
       </div>
@@ -710,15 +809,15 @@ export function HilReview({ detection }: { detection: Detection }) {
       {viewMode === "table" && predictions.length > 0 && (
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3 px-1 md:grid-cols-4 xl:grid-cols-7">
-            <MetricStat label="Labeled" value={`${labeledCount}/${predictions.length}`} valueClassName="text-white" />
-            <MetricStat label="Accuracy" value={formatMetricValue(liveMetrics, "accuracy")} valueClassName="text-white" />
-            <MetricStat label="Precision" value={formatMetricValue(liveMetrics, "precision")} valueClassName="text-white" />
-            <MetricStat label="Recall" value={formatMetricValue(liveMetrics, "recall")} valueClassName="text-white" />
-            <MetricStat label="F1 Score" value={formatMetricValue(liveMetrics, "f1")} valueClassName="text-white" />
-            <MetricStat label="Prevalence" value={formatMetricValue(liveMetrics, "prevalence")} valueClassName="text-white" />
+            <MetricStat label={labelFilter ? `Labeled · ${labelFilter}` : "Labeled"} value={`${scopedLabeled}/${scopedTotal}`} valueClassName="text-white" />
+            <MetricStat label="Accuracy" value={formatMetricValue(scopedMetrics, "accuracy")} valueClassName="text-white" />
+            <MetricStat label="Precision" value={formatMetricValue(scopedMetrics, "precision")} valueClassName="text-white" />
+            <MetricStat label="Recall" value={formatMetricValue(scopedMetrics, "recall")} valueClassName="text-white" />
+            <MetricStat label="F1 Score" value={formatMetricValue(scopedMetrics, "f1")} valueClassName="text-white" />
+            <MetricStat label="Prevalence" value={formatMetricValue(scopedMetrics, "prevalence")} valueClassName="text-white" />
             <MetricStat
               label="Parse Fail Rate"
-              value={formatMetricValue(liveMetrics, "parse_failure_rate")}
+              value={formatMetricValue(scopedMetrics, "parse_failure_rate")}
               valueClassName="text-white"
             />
           </div>
@@ -760,6 +859,50 @@ export function HilReview({ detection }: { detection: Detection }) {
               </div>
             </details>
           )}
+          {Object.keys(liveMetrics.label_metrics || {}).length > 0 && (
+            <details className="px-1 pt-1" open>
+              <summary className="cursor-pointer text-xs text-sky-300 hover:text-sky-200">
+                Per-Label Breakdown (multi-label)
+              </summary>
+              <div className="app-metric-breakdown mt-2 text-xs">
+                <div
+                  className="app-metric-breakdown-row app-metric-breakdown-head"
+                  style={{ gridTemplateColumns: "minmax(170px, 1.8fr) repeat(5, minmax(90px, 1fr))" }}
+                >
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-label">Label</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Total</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Accuracy</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Precision</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">Recall</div>
+                  <div className="app-metric-breakdown-cell app-metric-breakdown-value">F1</div>
+                </div>
+                <div className="app-metric-breakdown-body">
+                  {Object.entries(liveMetrics.label_metrics || {})
+                    .sort(([, a], [, b]) => b.total - a.total)
+                    .map(([label, m]) => (
+                      <div
+                        key={label}
+                        className="app-metric-breakdown-row"
+                        style={{ gridTemplateColumns: "minmax(170px, 1.8fr) repeat(5, minmax(90px, 1fr))" }}
+                      >
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-label text-gray-300">{label}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-gray-400">{m.total}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-gray-300">{formatMetricValue(m, "accuracy")}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">{formatMetricValue(m, "precision")}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">{formatMetricValue(m, "recall")}</div>
+                        <div className="app-metric-breakdown-cell app-metric-breakdown-value text-[var(--app-text)]">{formatMetricValue(m, "f1")}</div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </details>
+          )}
+          {isMultiLabel ? (
+            <MultiLabelImageTable
+              groups={visibleImageGroups}
+              onReview={(i) => { setCurrentIndex(i); setViewMode("image"); }}
+            />
+          ) : (
           <div className="app-card-strong overflow-hidden">
           <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
             <table className="app-table app-table-fixed text-sm">
@@ -821,6 +964,7 @@ export function HilReview({ detection }: { detection: Detection }) {
             </table>
           </div>
         </div>
+          )}
         </div>
       )}
 
@@ -837,7 +981,32 @@ export function HilReview({ detection }: { detection: Detection }) {
       )}
 
       {/* Image Review Mode */}
-      {viewMode === "image" && currentPrediction && (
+      {viewMode === "image" && isMultiLabel && currentImageGroup && (
+        <MultiLabelImageReview
+          imageId={currentImageGroup.imageId}
+          imageUri={currentImageGroup.preds[0]?.image_uri || ""}
+          preds={currentImageGroup.preds}
+          index={currentIndex}
+          total={imageReviewTotal}
+          onNext={() => setCurrentIndex((i) => Math.min(i + 1, imageReviewTotal - 1))}
+          onPrev={() => setCurrentIndex((i) => Math.max(i - 1, 0))}
+          onBackToTable={() => setViewMode("table")}
+          onUpdate={updatePrediction}
+          isIteration={runData?.split_type === "ITERATION"}
+          segmentTags={datasetItemByImageId[currentImageGroup.imageId]?.segment_tags || []}
+          segmentOptions={Array.isArray(detection.segment_taxonomy) ? detection.segment_taxonomy : []}
+          onUpdateSegmentTags={(nextTags) => updateSegmentTagsForImage(currentImageGroup.imageId, nextTags)}
+          isFlagged={flaggedPredictionIds.has(currentImageGroup.preds[0]?.prediction_id || "")}
+          onFlag={() => currentImageGroup.preds[0] && setFlagModalPredictionId(currentImageGroup.preds[0].prediction_id)}
+          onResolve={() => {
+            const flag = flagsByPredictionId[currentImageGroup.preds[0]?.prediction_id || ""];
+            if (flag) setResolveModalFlagId(flag.flag_id);
+          }}
+          flagReason={flagsByPredictionId[currentImageGroup.preds[0]?.prediction_id || ""]?.reason}
+          gtCorrectionsByPredictionId={gtCorrectionsByPredictionId}
+        />
+      )}
+      {viewMode === "image" && !isMultiLabel && currentPrediction && (
         <ImageReviewMode
           prediction={currentPrediction}
           index={currentIndex}
@@ -874,6 +1043,42 @@ export function HilReview({ detection }: { detection: Detection }) {
           onSubmit={(action, note) => resolveFlag(resolveModalFlagId, action, note)}
           onCancel={() => setResolveModalFlagId(null)}
         />
+      )}
+
+      {showExportModal && selectedRunId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="app-card-strong p-6 w-full max-w-md space-y-4">
+            <h3 className="text-lg font-semibold text-gray-100">Export to Excel</h3>
+            <p className="text-sm text-gray-400">Export this run&rsquo;s log as an Excel (.xlsx) file.</p>
+            <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={includeThumbnails}
+                onChange={(e) => setIncludeThumbnails(e.target.checked)}
+                className="rounded border-gray-600"
+              />
+              Include image thumbnail column (first column)
+            </label>
+            <p className="text-[11px] text-[var(--app-text-subtle)]">
+              Thumbnails embed real images and take longer to export. The Image URL column is always included.
+            </p>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => { exportRunToExcel(includeThumbnails); setShowExportModal(false); }}
+                disabled={exporting}
+                className="app-btn app-btn-primary app-btn-md flex-1"
+              >
+                {exporting ? "Exporting..." : "Export"}
+              </button>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="app-btn app-btn-subtle app-btn-md"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>
@@ -944,7 +1149,14 @@ function PredictionRow({
           onClick={onImageReview}
         />
       </td>
-      <td className="font-mono text-xs">{p.image_id}</td>
+      <td className="font-mono text-xs">
+        {p.image_id}
+        {p.detection_label && (
+          <span className="mt-1 block w-fit rounded bg-sky-600/20 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-sky-200">
+            {p.detection_label}
+          </span>
+        )}
+      </td>
       <td className="app-table-col-label">
         <div className="app-table-left-slot">
           <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />
@@ -1406,6 +1618,14 @@ function ImageReviewMode({
         {/* Prediction Summary */}
         <div className="app-card p-4">
           <div className="text-xs text-gray-300 space-y-2">
+            {p.detection_label && (
+              <p>
+                Label:{" "}
+                <span className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[11px] font-semibold text-sky-200">
+                  {p.detection_label}
+                </span>
+              </p>
+            )}
             <p>Confidence: {p.confidence != null ? p.confidence.toFixed(3) : "N/A"} (uncalibrated)</p>
             <p>Evidence: {p.evidence || "—"}</p>
             <p>
@@ -1850,6 +2070,376 @@ function GroundtruthHistoryEntry({
         ) : (
           <span className="text-amber-300 font-medium">disagrees with new GT</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Multi-label table: one row per image with its predicted and ground-truth label sets. */
+function MultiLabelImageTable({
+  groups,
+  onReview,
+}: {
+  groups: { imageId: string; preds: Prediction[] }[];
+  onReview: (index: number) => void;
+}) {
+  const detectedLabels = (preds: Prediction[], which: "pred" | "gt") =>
+    preds
+      .filter((p) =>
+        which === "pred"
+          ? p.parse_ok && p.predicted_decision === "DETECTED"
+          : (p.corrected_label || p.ground_truth_label) === "DETECTED"
+      )
+      .map((p) => String(p.detection_label || ""))
+      .filter(Boolean);
+
+  return (
+    <div className="app-card-strong overflow-hidden">
+      <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+        <table className="app-table app-table-fixed text-sm">
+          <colgroup>
+            <col style={{ width: "5rem" }} />
+            <col style={{ width: "11rem" }} />
+            <col />
+            <col />
+            <col style={{ width: "5rem" }} />
+            <col style={{ width: "7rem" }} />
+          </colgroup>
+          <thead className="sticky top-0 z-10">
+            <tr>
+              <th className="app-table-col-label">Preview</th>
+              <th className="app-table-col-label">Image ID</th>
+              <th className="app-table-col-label">Predicted Labels</th>
+              <th className="app-table-col-label">Ground Truth Labels</th>
+              <th className="app-table-col-label">Match</th>
+              <th className="app-table-col-label">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g, i) => {
+              const predicted = detectedLabels(g.preds, "pred");
+              const gt = detectedLabels(g.preds, "gt");
+              const allMatch = g.preds.every(
+                (p) => p.parse_ok && p.predicted_decision === (p.corrected_label || p.ground_truth_label)
+              );
+              const uri = g.preds[0]?.image_uri || "";
+              return (
+                <tr key={g.imageId} className={allMatch ? "" : "app-table-row-alert"}>
+                  <td>
+                    <img
+                      src={uri}
+                      alt={g.imageId}
+                      className="w-10 h-10 object-cover rounded cursor-pointer hover:opacity-80"
+                      onClick={() => onReview(i)}
+                    />
+                  </td>
+                  <td className="font-mono text-xs">{g.imageId}</td>
+                  <td>
+                    <div className="flex flex-wrap gap-1 py-1">
+                      {predicted.length > 0 ? (
+                        predicted.map((l) => (
+                          <span key={l} className="rounded bg-sky-600/20 px-1.5 py-0.5 text-[10px] text-sky-200">{l}</span>
+                        ))
+                      ) : (
+                        <span className="text-gray-600 text-xs">— none —</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="flex flex-wrap gap-1 py-1">
+                      {gt.length > 0 ? (
+                        gt.map((l) => (
+                          <span key={l} className="rounded px-1.5 py-0.5 text-[10px]" style={{ color: "var(--app-purple)", backgroundColor: "var(--app-purple-soft)" }}>{l}</span>
+                        ))
+                      ) : (
+                        <span className="text-gray-600 text-xs">— none —</span>
+                      )}
+                    </div>
+                  </td>
+                  <td>
+                    <span className={`text-xs font-medium ${allMatch ? "text-green-400" : "text-red-400"}`}>
+                      {allMatch ? "Yes" : "No"}
+                    </span>
+                  </td>
+                  <td>
+                    <button onClick={() => onReview(i)} className="app-btn app-btn-subtle app-btn-sm text-xs">Review</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {groups.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-8 text-center text-gray-500">No images match the selected filter.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** Multi-label image review: a block per label with verdict, evidence, and editable GT. */
+function MultiLabelImageReview({
+  imageId,
+  imageUri,
+  preds,
+  index,
+  total,
+  onNext,
+  onPrev,
+  onBackToTable,
+  onUpdate,
+  isIteration,
+  segmentTags,
+  segmentOptions,
+  onUpdateSegmentTags,
+  isFlagged,
+  onFlag,
+  onResolve,
+  flagReason,
+  gtCorrectionsByPredictionId,
+}: {
+  imageId: string;
+  imageUri: string;
+  preds: Prediction[];
+  index: number;
+  total: number;
+  onNext: () => void;
+  onPrev: () => void;
+  onBackToTable: () => void;
+  onUpdate: (id: string, updates: any) => void;
+  isIteration: boolean;
+  segmentTags: string[];
+  segmentOptions: string[];
+  onUpdateSegmentTags: (nextTags: string[]) => void;
+  isFlagged: boolean;
+  onFlag: () => void;
+  onResolve: () => void;
+  flagReason?: string;
+  gtCorrectionsByPredictionId: Record<string, GroundtruthCorrection[]>;
+}) {
+  const first = preds[0];
+  const [note, setNote] = useState(first?.image_description || first?.reviewer_note || "");
+  useEffect(() => {
+    setNote(first?.image_description || first?.reviewer_note || "");
+  }, [first?.prediction_id, first?.image_description, first?.reviewer_note]);
+
+  const [imageZoom, setImageZoom] = useState(1);
+  const [imagePan, setImagePan] = useState({ x: 0, y: 0 });
+  const [draggingImage, setDraggingImage] = useState(false);
+  const [imageNatural, setImageNatural] = useState({ width: 0, height: 0 });
+  const imageViewportRef = useRef<HTMLDivElement | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
+
+  // Reset zoom/pan when the image changes.
+  useEffect(() => {
+    setImageZoom(1);
+    setImagePan({ x: 0, y: 0 });
+    setImageNatural({ width: 0, height: 0 });
+    setDraggingImage(false);
+    dragStartRef.current = null;
+  }, [imageId]);
+
+  // Arrow keys navigate images; +/- zoom. Window-level so no click-to-focus needed.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName?.toLowerCase();
+      if (t && (t.isContentEditable || tag === "input" || tag === "textarea" || tag === "select")) return;
+      if (e.key === "ArrowRight") { e.preventDefault(); onNext(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); onPrev(); }
+      else if (e.key === "+" || e.key === "=") setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))));
+      else if (e.key === "-" || e.key === "_") setImageZoom((z) => Math.max(1, Number((z - 0.25).toFixed(2))));
+      else if (e.key === "0") { setImageZoom(1); setImagePan({ x: 0, y: 0 }); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onNext, onPrev]);
+
+  const clampedImagePan = useMemo(() => {
+    const viewport = imageViewportRef.current;
+    if (!viewport || imageNatural.width <= 0 || imageNatural.height <= 0) return { x: 0, y: 0 };
+    const viewportW = viewport.clientWidth;
+    const viewportH = viewport.clientHeight;
+    if (viewportW <= 0 || viewportH <= 0) return { x: 0, y: 0 };
+    const imageRatio = imageNatural.width / imageNatural.height;
+    const viewportRatio = viewportW / viewportH;
+    let baseW = viewportW;
+    let baseH = viewportH;
+    if (imageRatio > viewportRatio) baseH = viewportW / imageRatio;
+    else baseW = viewportH * imageRatio;
+    const scaledW = baseW * imageZoom;
+    const scaledH = baseH * imageZoom;
+    const maxX = Math.max(0, (scaledW - viewportW) / 2);
+    const maxY = Math.max(0, (scaledH - viewportH) / 2);
+    return {
+      x: Math.max(-maxX, Math.min(maxX, imagePan.x)),
+      y: Math.max(-maxY, Math.min(maxY, imagePan.y)),
+    };
+  }, [imageNatural.height, imageNatural.width, imagePan.x, imagePan.y, imageZoom]);
+
+  const startImageDrag = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (imageZoom <= 1) return;
+    e.preventDefault();
+    dragStartRef.current = { x: e.clientX, y: e.clientY, panX: imagePan.x, panY: imagePan.y };
+    setDraggingImage(true);
+  };
+  const moveImageDrag = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || !draggingImage) return;
+    const dx = e.clientX - dragStartRef.current.x;
+    const dy = e.clientY - dragStartRef.current.y;
+    setImagePan({ x: dragStartRef.current.panX + dx, y: dragStartRef.current.panY + dy });
+  };
+  const endImageDrag = () => {
+    setDraggingImage(false);
+    dragStartRef.current = null;
+  };
+
+  return (
+    <div className="app-card-strong p-4 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button onClick={onBackToTable} className="app-btn app-btn-subtle app-btn-sm text-xs">← Table</button>
+          <span className="font-mono text-sm text-gray-200">{imageId}</span>
+          <span className="text-xs text-gray-500">Image {index + 1} / {total}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {isFlagged ? (
+            <button onClick={onResolve} className="app-btn app-btn-sm text-xs text-amber-400 border-amber-400/40 bg-amber-400/10 hover:bg-amber-400/20" title={flagReason || "Flagged"}>
+              Flagged — Resolve
+            </button>
+          ) : (
+            <button onClick={onFlag} className="app-btn app-btn-subtle app-btn-sm text-xs">Flag for Secondary Review</button>
+          )}
+          <button onClick={onPrev} disabled={index <= 0} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-40">← Prev</button>
+          <button onClick={onNext} disabled={index >= total - 1} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-40">Next →</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-gray-500">Zoom: {(imageZoom * 100).toFixed(0)}% · arrows navigate · +/- zoom · 0 resets</span>
+            <div className="flex gap-1">
+              <button onClick={() => setImageZoom((z) => Math.max(1, Number((z - 0.25).toFixed(2))))} disabled={imageZoom <= 1} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-30">Zoom -</button>
+              <button onClick={() => setImageZoom((z) => Math.min(4, Number((z + 0.25).toFixed(2))))} disabled={imageZoom >= 4} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-30">Zoom +</button>
+              <button onClick={() => { setImageZoom(1); setImagePan({ x: 0, y: 0 }); }} disabled={imageZoom === 1 && imagePan.x === 0 && imagePan.y === 0} className="app-btn app-btn-subtle app-btn-sm text-xs disabled:opacity-30">Reset</button>
+            </div>
+          </div>
+          <div
+            ref={imageViewportRef}
+            className="flex h-[480px] w-full items-center justify-center overflow-hidden rounded border border-gray-700 bg-black/30"
+            onMouseDown={startImageDrag}
+            onMouseMove={moveImageDrag}
+            onMouseUp={endImageDrag}
+            onMouseLeave={endImageDrag}
+            style={{ cursor: imageZoom > 1 ? (draggingImage ? "grabbing" : "grab") : "default" }}
+          >
+            <img
+              src={imageUri}
+              alt={imageId}
+              className="max-h-[480px] max-w-full select-none object-contain"
+              style={{
+                transform: `translate(${clampedImagePan.x}px, ${clampedImagePan.y}px) scale(${imageZoom})`,
+                transformOrigin: "center center",
+                willChange: "transform",
+              }}
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+              onLoad={(event) =>
+                setImageNatural({
+                  width: event.currentTarget.naturalWidth || 0,
+                  height: event.currentTarget.naturalHeight || 0,
+                })
+              }
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Attributes</label>
+            <SegmentTagsEditor value={normalizeSegmentTags(segmentTags)} options={segmentOptions} onChange={onUpdateSegmentTags} />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Reviewer Note</label>
+            <textarea
+              className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 h-20"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onBlur={() => { if (first) onUpdate(first.prediction_id, { reviewer_note: note.trim() || null }); }}
+              placeholder="Notes about this image (shared across all its labels)…"
+            />
+          </div>
+          <details className="app-card p-2">
+            <summary className="cursor-pointer text-[11px] text-gray-400 hover:text-gray-300">Model Response (raw)</summary>
+            <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] text-gray-300">{first?.raw_response || "—"}</pre>
+          </details>
+        </div>
+
+        <div className="space-y-2 max-h-[720px] overflow-y-auto pr-1">
+          {preds.map((p) => {
+            const predicted = p.predicted_decision;
+            const gt = p.corrected_label || p.ground_truth_label;
+            const match = p.parse_ok && predicted === gt;
+            const corrections = gtCorrectionsByPredictionId[p.prediction_id] || [];
+            return (
+              <div
+                key={p.prediction_id}
+                className={`rounded-lg border p-3 ${match ? "border-white/10 bg-black/20" : "border-red-500/30 bg-red-900/10"}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-sky-200">{p.detection_label}</span>
+                  <DecisionBadge decision={predicted || "PARSE_FAIL"} />
+                </div>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-gray-500">Ground truth:</span>
+                    <select
+                      className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                      value={p.ground_truth_label || ""}
+                      onChange={(e) =>
+                        onUpdate(p.prediction_id, {
+                          ground_truth_label: (e.target.value || null) as Decision | null,
+                          // Propagate the corrected label back to the dataset's
+                          // multi-label ground-truth set regardless of split type.
+                          update_ground_truth: true,
+                        })
+                      }
+                    >
+                      <option value="">UNSET</option>
+                      <option value="DETECTED">DETECTED</option>
+                      <option value="NOT_DETECTED">NOT_DETECTED</option>
+                    </select>
+                    <span className={`text-xs font-medium ${match ? "text-green-400" : "text-red-400"}`}>
+                      {match ? "match" : "mismatch"}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-gray-500">Error tag:</span>
+                    <select
+                      className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs"
+                      value={p.error_tag || ""}
+                      onChange={(e) => onUpdate(p.prediction_id, { error_tag: (e.target.value || null) as ErrorTag | null })}
+                    >
+                      <option value="">—</option>
+                      {ERROR_TAGS.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <span className="text-xs text-gray-500">Evidence{predicted === "NOT_DETECTED" ? " (why not detected)" : ""}:</span>
+                  <p className="mt-0.5 text-xs text-gray-300 whitespace-pre-wrap">{p.evidence || "—"}</p>
+                </div>
+                {corrections.length > 0 && (
+                  <div className="mt-2 text-[11px] text-amber-300/80">
+                    GT updated {corrections.length}× (last: {corrections[0]?.old_label || "—"} → {corrections[0]?.new_label || "—"})
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

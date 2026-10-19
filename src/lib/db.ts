@@ -4,21 +4,26 @@ import fs from "fs";
 
 const DB_PATH = path.join(process.cwd(), "data", "vlm-eval.db");
 
-let _db: Database.Database | null = null;
+// Persist the connection on globalThis so it survives Next.js dev HMR reloads.
+// Without this, each hot reload orphans the old Database and its prepared
+// Statements; when Node 24 later GCs them, better-sqlite3's native destructor
+// asserts in RemoveEnvironmentCleanupHook and aborts the whole process.
+const globalForDb = globalThis as unknown as { _vlmDb?: Database.Database };
 
 export function getDb(): Database.Database {
-  if (_db) return _db;
+  if (globalForDb._vlmDb) return globalForDb._vlmDb;
 
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  _db = new Database(DB_PATH);
-  _db.pragma("journal_mode = WAL");
-  _db.pragma("synchronous = NORMAL");
-  _db.pragma("foreign_keys = ON");
-  _db.pragma("busy_timeout = 5000");
-  _db.pragma("temp_store = MEMORY");
+  const db = new Database(DB_PATH);
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
+  db.pragma("temp_store = MEMORY");
 
-  initSchema(_db);
-  return _db;
+  initSchema(db);
+  globalForDb._vlmDb = db;
+  return db;
 }
 
 function initSchema(db: Database.Database) {
@@ -79,6 +84,7 @@ function initSchema(db: Database.Database) {
       ai_assigned_label TEXT,
       ai_confidence REAL,
       ground_truth_label TEXT CHECK(ground_truth_label IN ('DETECTED','NOT_DETECTED') OR ground_truth_label IS NULL),
+      ground_truth_labels TEXT NOT NULL DEFAULT '[]',
       FOREIGN KEY (dataset_id) REFERENCES datasets(dataset_id)
     );
 
@@ -122,6 +128,7 @@ function initSchema(db: Database.Database) {
       error_tag TEXT,
       reviewer_note TEXT,
       corrected_at TEXT,
+      detection_label TEXT,
       FOREIGN KEY (run_id) REFERENCES runs(run_id)
     );
 
@@ -274,6 +281,27 @@ function initSchema(db: Database.Database) {
   ensureDetectionProductionColumns(db);
   ensurePromptVersionModeColumns(db);
   ensurePredictionSiblingColumn(db);
+  ensureDatasetItemMultiLabelColumn(db);
+  ensurePredictionDetectionLabelColumn(db);
+}
+
+// Multi-label ground truth: the set of attribute labels truly present on an
+// image. Used by multi-label production-replication runs where each composition
+// label is scored independently (present in this set => DETECTED for that label).
+function ensureDatasetItemMultiLabelColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(dataset_items)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "ground_truth_labels")) {
+    db.exec("ALTER TABLE dataset_items ADD COLUMN ground_truth_labels TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
+// The specific composition label a multi-label prediction row scores. NULL for
+// legacy single-target rows (one prediction per image).
+function ensurePredictionDetectionLabelColumn(db: Database.Database) {
+  const columns = db.prepare("PRAGMA table_info(predictions)").all() as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === "detection_label")) {
+    db.exec("ALTER TABLE predictions ADD COLUMN detection_label TEXT");
+  }
 }
 
 // Production-mirror foundation (Slice S0). Immutable capture of a production

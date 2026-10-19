@@ -19,6 +19,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
   const [runs, setRuns] = useState<Run[]>([]);
   const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>([]);
   const [selectedDatasetId, setSelectedDatasetId] = useState("");
+  const [selectedLabel, setSelectedLabel] = useState<string>("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState("");
   const [results, setResults] = useState<Map<string, { run: any; predictions: Prediction[] }>>(new Map());
@@ -38,13 +39,10 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     const ps = await safeJsonArray<PromptVersion>(pRes, "prompts");
     const ds = await safeJsonArray<Dataset>(dRes, "datasets");
     const rs = await safeJsonArray<Run>(rRes, "runs");
-    const nextDatasets = ds.filter(
-      (d: Dataset) =>
-        d.split_type === "GOLDEN" ||
-        d.split_type === "ITERATION" ||
-        d.split_type === "HELD_OUT_EVAL" ||
-        d.split_type === "CUSTOM"
-    );
+    // Keep every dataset that has runs; the comparable-dataset intersection below
+    // gates on shared completed runs, so no need to pre-filter by split type
+    // (that previously hid shared MASTER datasets).
+    const nextDatasets = ds;
     const nextRuns = rs.filter((r: Run) => r.status === "completed");
     const nextKey = JSON.stringify({
       prompts: ps.map((p) => p.prompt_version_id),
@@ -167,28 +165,75 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     return map;
   }, [prompts]);
 
+  // Multi-label runs carry one prediction per (image, detection_label). Expose the
+  // label set so the comparison can be filtered to a single label.
+  const availableLabels = useMemo(() => {
+    const set = new Set<string>();
+    for (const [, { predictions }] of resultEntries) {
+      for (const p of predictions) if (p.detection_label) set.add(p.detection_label);
+    }
+    return Array.from(set).sort();
+  }, [resultEntries]);
+  const isMultiLabel = availableLabels.length > 0;
+
+  // Default/validate the label scope once results load.
+  useEffect(() => {
+    if (availableLabels.length > 0) {
+      if (!selectedLabel || !availableLabels.includes(selectedLabel)) setSelectedLabel(availableLabels[0]);
+    } else if (selectedLabel) {
+      setSelectedLabel("");
+    }
+  }, [availableLabels, selectedLabel]);
+
+  // Scope every result's predictions to the selected label so the per-image
+  // disagreement / outcome / preview logic stays single-label-simple.
+  const scopedResults = useMemo(() => {
+    if (!selectedLabel) return results;
+    const next = new Map<string, { run: any; predictions: Prediction[] }>();
+    for (const [promptId, entry] of results) {
+      next.set(promptId, {
+        run: entry.run,
+        predictions: entry.predictions.filter((p) => p.detection_label === selectedLabel),
+      });
+    }
+    return next;
+  }, [results, selectedLabel]);
+  const scopedEntries = Array.from(scopedResults.entries());
+
+  // Per-prompt metrics, scoped to the selected label when one is active.
+  const metricsForRun = useCallback(
+    (run: any): MetricsSummary | undefined => {
+      const ms = run?.metrics_summary as MetricsSummary | undefined;
+      if (!ms) return ms;
+      const lm = selectedLabel ? ms.label_metrics?.[selectedLabel] : undefined;
+      return lm ? ({ ...ms, ...lm } as MetricsSummary) : ms;
+    },
+    [selectedLabel]
+  );
+
   // Find disagreement cases
   const disagreements = useMemo(() => {
     const next = new Map<
       string,
       { decisions: Map<string, string | null>; sample: Prediction | null; groundTruth: string | null }
     >();
-    if (resultEntries.length < 2) return next;
+    const entries = Array.from(scopedResults.entries());
+    if (entries.length < 2) return next;
 
     const allImageIds = new Set<string>();
-    for (const [, { predictions }] of resultEntries) {
+    for (const [, { predictions }] of entries) {
       for (const p of predictions) allImageIds.add(p.image_id);
     }
     for (const imageId of allImageIds) {
       const decisions = new Map<string, string | null>();
-      for (const [promptId, { predictions }] of resultEntries) {
+      for (const [promptId, { predictions }] of entries) {
         const pred = predictions.find((p) => p.image_id === imageId);
         decisions.set(promptId, pred?.predicted_decision || null);
       }
       const values = Array.from(decisions.values());
       if (new Set(values).size > 1) {
         const sample =
-          resultEntries
+          entries
             .map(([, { predictions }]) => predictions.find((p) => p.image_id === imageId) || null)
             .find((p) => !!p) || null;
         next.set(imageId, {
@@ -199,15 +244,15 @@ export function PromptCompare({ detection }: { detection: Detection }) {
       }
     }
     return next;
-  }, [resultEntries]);
+  }, [scopedResults]);
 
   const getPredictionForImage = useCallback(
     (promptId: string, imageId: string): Prediction | null => {
-      const entry = results.get(promptId);
+      const entry = scopedResults.get(promptId);
       if (!entry) return null;
       return entry.predictions.find((p) => p.image_id === imageId) || null;
     },
-    [results]
+    [scopedResults]
   );
 
   const activePreviewImageIds = useMemo(() => {
@@ -217,9 +262,9 @@ export function PromptCompare({ detection }: { detection: Detection }) {
         .filter(([, disagreement]) => !!disagreement.sample?.image_uri)
         .map(([imageId]) => imageId);
     }
-    const entry = results.get(previewState.promptId);
+    const entry = scopedResults.get(previewState.promptId);
     return (entry?.predictions || []).filter((p) => !!p.image_uri).map((p) => p.image_id);
-  }, [previewState, disagreements, results]);
+  }, [previewState, disagreements, scopedResults]);
 
   const activePreviewIndex = useMemo(() => {
     if (!previewState) return -1;
@@ -231,21 +276,21 @@ export function PromptCompare({ detection }: { detection: Detection }) {
     const activeImageId = activePreviewImageIds[activePreviewIndex];
     const preferred = getPredictionForImage(previewState.promptId, activeImageId);
     if (preferred?.image_uri) return preferred;
-    for (const [promptId] of resultEntries) {
+    for (const [promptId] of scopedResults) {
       const candidate = getPredictionForImage(promptId, activeImageId);
       if (candidate?.image_uri) return candidate;
     }
     return null;
-  }, [previewState, activePreviewIndex, activePreviewImageIds, getPredictionForImage, resultEntries]);
+  }, [previewState, activePreviewIndex, activePreviewImageIds, getPredictionForImage, scopedResults]);
 
   const activePromptOutcomes = useMemo(() => {
     if (!previewState || activePreviewIndex < 0) return [];
     const activeImageId = activePreviewImageIds[activePreviewIndex];
-    return resultEntries.map(([promptId]) => {
+    return Array.from(scopedResults.keys()).map((promptId) => {
       const prediction = getPredictionForImage(promptId, activeImageId);
       return { promptId, prediction };
     });
-  }, [previewState, activePreviewIndex, activePreviewImageIds, resultEntries, getPredictionForImage]);
+  }, [previewState, activePreviewIndex, activePreviewImageIds, scopedResults, getPredictionForImage]);
 
   const activeGroundTruth = useMemo(() => {
     for (const row of activePromptOutcomes) {
@@ -407,6 +452,75 @@ export function PromptCompare({ detection }: { detection: Detection }) {
       {/* Results */}
       {resultEntries.length > 0 && (
         <div className="space-y-6">
+          {/* Multi-label: label filter + per-label F1 overview across all labels */}
+          {isMultiLabel && (
+            <div className="app-card-strong p-5 space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <h3 className="text-sm font-medium">Multi-label comparison</h3>
+                <label className="flex items-center gap-2 text-sm">
+                  <span className="app-label">Filter by label</span>
+                  <select
+                    className="app-select px-3 py-1.5 text-sm"
+                    value={selectedLabel}
+                    onChange={(e) => setSelectedLabel(e.target.value)}
+                  >
+                    {availableLabels.map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="text-xs text-[var(--app-text-muted)]">
+                  Metrics, disagreements, and outcomes below are scoped to this label.
+                </span>
+              </div>
+              <div className="app-table-wrap overflow-x-auto">
+                <table className="app-table app-table-fixed text-xs">
+                  <thead>
+                    <tr>
+                      <th className="app-table-col-label">Label (F1)</th>
+                      {resultEntries.map(([promptId]) => (
+                        <th key={promptId} className="app-table-col-label">
+                          {promptLabelById.get(promptId) || promptId.slice(0, 8)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {availableLabels.map((l) => {
+                      const baseLm = (resultEntries[0]?.[1].run.metrics_summary as MetricsSummary)?.label_metrics?.[l];
+                      return (
+                        <tr
+                          key={l}
+                          onClick={() => setSelectedLabel(l)}
+                          className={`cursor-pointer ${
+                            l === selectedLabel ? "bg-[rgba(18,42,68,0.62)]" : "hover:bg-[rgba(255,255,255,0.02)]"
+                          }`}
+                        >
+                          <td className="font-medium">{l}</td>
+                          {resultEntries.map(([promptId, { run }], i) => {
+                            const lm = (run.metrics_summary as MetricsSummary)?.label_metrics?.[l];
+                            return (
+                              <td key={promptId} className="app-table-col-label tabular-nums">
+                                {lm ? lm.f1.toFixed(2) : "—"}
+                                {i > 0 && lm && baseLm && (
+                                  <span className="ml-1">
+                                    <Delta value={lm.f1 - baseLm.f1} />
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Per-prompt metrics */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {resultEntries.map(([promptId, { run }]) => {
@@ -414,8 +528,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
               return (
                 <CompareResultSheet
                   key={promptId}
-                  metrics={run.metrics_summary}
-                  title={prompt?.version_label || promptId.slice(0, 8)}
+                  metrics={metricsForRun(run)}
+                  title={`${prompt?.version_label || promptId.slice(0, 8)}${selectedLabel ? ` · ${selectedLabel}` : ""}`}
                   subtitle={run?.model_used || prompt?.model || "unknown-model"}
                 />
               );
@@ -451,8 +565,8 @@ export function PromptCompare({ detection }: { detection: Detection }) {
                   <tbody>
                     {resultEntries.map(([promptId, { run }], i) => {
                       const prompt = prompts.find((p) => p.prompt_version_id === promptId);
-                      const m = run.metrics_summary as MetricsSummary;
-                      const base = (resultEntries[0][1].run.metrics_summary as MetricsSummary);
+                      const m = metricsForRun(run) as MetricsSummary;
+                      const base = metricsForRun(resultEntries[0][1].run) as MetricsSummary;
                       const isBase = i === 0;
 
                       return (
@@ -517,7 +631,7 @@ export function PromptCompare({ detection }: { detection: Detection }) {
           {disagreements.size > 0 && (
             <div className="app-card-strong p-5">
               <h3 className="text-sm font-medium mb-3">
-                Disagreement Cases ({disagreements.size} images)
+                Disagreement Cases ({disagreements.size} images){selectedLabel ? ` · ${selectedLabel}` : ""}
               </h3>
               <div className="app-table-wrap max-h-96 overflow-x-auto overflow-y-auto">
                 <table className="app-table app-table-fixed text-xs">
@@ -590,8 +704,10 @@ export function PromptCompare({ detection }: { detection: Detection }) {
 
           {/* Full outcomes table */}
           <div className="app-card-strong p-5">
-            <h3 className="text-sm font-medium mb-3">Full Outcomes</h3>
-            {resultEntries.map(([promptId, { predictions }]) => {
+            <h3 className="text-sm font-medium mb-3">
+              Full Outcomes{selectedLabel ? ` · ${selectedLabel}` : ""}
+            </h3>
+            {scopedEntries.map(([promptId, { predictions }]) => {
               const prompt = prompts.find((p) => p.prompt_version_id === promptId);
               return (
                 <details key={promptId} className="mb-3">
@@ -778,10 +894,21 @@ function CompareResultSheet({
   title,
   subtitle,
 }: {
-  metrics: MetricsSummary;
+  metrics?: MetricsSummary;
   title: string;
   subtitle: string;
 }) {
+  if (!metrics) {
+    return (
+      <div className="app-section space-y-4">
+        <div className="space-y-1">
+          <div className="text-sm font-medium">{title}</div>
+          <div className="text-xs text-[var(--app-text-subtle)]">{subtitle}</div>
+        </div>
+        <p className="text-xs text-[var(--app-text-muted)]">No metrics available for this label.</p>
+      </div>
+    );
+  }
   const attributeEntries = Object.entries(metrics.segment_metrics || {}).sort(([, a], [, b]) => b.total - a.total);
 
   return (

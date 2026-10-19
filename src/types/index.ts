@@ -126,6 +126,12 @@ export interface PromptComposition {
   target_source?: "baseline" | "structured";
   /** Shared instruction block before the numbered detections; defaults to the snapshot's frozen preamble. */
   preamble?: string;
+  /**
+   * Multi-label mode: score every enabled member independently against the
+   * dataset's multi-label ground truth instead of one binary target. No target
+   * is required; each label becomes its own DETECTED/NOT_DETECTED outcome.
+   */
+  multi_label?: boolean;
 }
 
 /** Immutable capture of a production context's compiled aggregate. */
@@ -204,6 +210,8 @@ export interface DatasetItem {
   ai_assigned_label?: Decision | "PARSE_FAIL" | null;
   ai_confidence?: number | null;
   ground_truth_label?: Decision | null;
+  /** Multi-label ground truth: the set of attribute labels present on the image. */
+  ground_truth_labels?: string[];
   item_status?: ItemStatus;
 }
 
@@ -260,6 +268,8 @@ export interface Prediction {
   corrected_at: string | null;
   /** Non-target labels emitted by an aggregate run; stored/exported, not scored. */
   sibling_detections?: SiblingDetection[];
+  /** For multi-label runs: the composition label this row scores (one row per image+label). */
+  detection_label?: string | null;
 }
 
 /** A non-target detection emitted alongside the target in an aggregate run. */
@@ -283,6 +293,23 @@ export interface MetricsSummary {
   parse_failure_rate: number;
   total: number;
   segment_metrics?: Record<
+    string,
+    {
+      tp: number;
+      fp: number;
+      fn: number;
+      tn: number;
+      precision: number;
+      recall: number;
+      f1: number;
+      accuracy: number;
+      prevalence: number;
+      parse_failure_rate: number;
+      total: number;
+    }
+  >;
+  /** Multi-label runs: per-detection-label metrics keyed by label. */
+  label_metrics?: Record<
     string,
     {
       tp: number;

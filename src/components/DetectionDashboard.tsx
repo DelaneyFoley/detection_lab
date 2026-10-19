@@ -157,39 +157,7 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
   ) => {
     const descByImageId = await fetchDatasetDescriptionByImageId(run.dataset_id);
     const metrics = (run.metrics_summary || {}) as MetricsSummary;
-    const headers = [
-      "run_id",
-      "detection_code",
-      "detection_name",
-      "prompt_version_id",
-      "model_used",
-      "dataset_id",
-      "split_type",
-      "run_created_at",
-      "metric_accuracy",
-      "metric_precision",
-      "metric_recall",
-      "metric_f1",
-      "metric_prevalence",
-      "metric_parse_failure_rate",
-      "image_id",
-      "image_uri",
-      "dataset_image_description",
-      "ground_truth_label",
-      "predicted_decision",
-      "confidence",
-      "ai_evidence",
-      "parse_ok",
-      "parse_error_reason",
-      "parse_fix_suggestion",
-      "inference_runtime_ms",
-      "parse_retry_count",
-      "error_tag",
-      "reviewer_note",
-      "corrected_label",
-      "corrected_at",
-    ];
-    const rows = predictions.map((p) => [
+    const runMeta = [
       run.run_id,
       detection.detection_code,
       detection.display_name,
@@ -204,23 +172,108 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
       metrics.f1 ?? "",
       metrics.prevalence ?? "",
       metrics.parse_failure_rate ?? "",
-      p.image_id ?? "",
-      p.image_uri ?? "",
-      descByImageId.get(String(p.image_id || "")) || "",
-      p.ground_truth_label ?? "",
-      p.predicted_decision ?? "PARSE_FAIL",
-      p.confidence ?? "",
-      p.evidence ?? "",
-      p.parse_ok ?? "",
-      p.parse_error_reason ?? "",
-      p.parse_fix_suggestion ?? "",
-      p.inference_runtime_ms ?? "",
-      p.parse_retry_count ?? "",
-      p.error_tag ?? "",
-      p.reviewer_note ?? "",
-      p.corrected_label ?? "",
-      p.corrected_at ?? "",
-    ]);
+    ];
+    const metaHeaders = [
+      "run_id",
+      "detection_code",
+      "detection_name",
+      "prompt_version_id",
+      "model_used",
+      "dataset_id",
+      "split_type",
+      "run_created_at",
+      "metric_accuracy",
+      "metric_precision",
+      "metric_recall",
+      "metric_f1",
+      "metric_prevalence",
+      "metric_parse_failure_rate",
+    ];
+
+    // Multi-label runs: collapse the per-(image,label) rows into one row per image
+    // with arrays of predicted and ground-truth labels.
+    const isMultiLabel = predictions.some((p) => !!p.detection_label);
+    let headers: string[];
+    let rows: (string | number)[][];
+
+    if (isMultiLabel) {
+      headers = [
+        ...metaHeaders,
+        "image_id",
+        "image_uri",
+        "dataset_image_description",
+        "predicted_labels",
+        "ground_truth_labels",
+        "correct",
+      ];
+      const byImage = new Map<string, any[]>();
+      for (const p of predictions) {
+        const key = String(p.image_id || "");
+        const arr = byImage.get(key) ?? [];
+        arr.push(p);
+        byImage.set(key, arr);
+      }
+      rows = Array.from(byImage.entries()).map(([imageId, group]) => {
+        const predicted = group
+          .filter((r) => r.parse_ok && r.predicted_decision === "DETECTED")
+          .map((r) => String(r.detection_label || ""))
+          .filter(Boolean);
+        const groundTruth = group
+          .filter((r) => (r.corrected_label || r.ground_truth_label) === "DETECTED")
+          .map((r) => String(r.detection_label || ""))
+          .filter(Boolean);
+        const correct =
+          JSON.stringify([...predicted].sort()) === JSON.stringify([...groundTruth].sort()) ? "Yes" : "No";
+        return [
+          ...runMeta,
+          imageId,
+          group[0]?.image_uri ?? "",
+          descByImageId.get(imageId) || "",
+          JSON.stringify(predicted),
+          JSON.stringify(groundTruth),
+          correct,
+        ];
+      });
+    } else {
+      headers = [
+        ...metaHeaders,
+        "image_id",
+        "image_uri",
+        "dataset_image_description",
+        "ground_truth_label",
+        "predicted_decision",
+        "confidence",
+        "ai_evidence",
+        "parse_ok",
+        "parse_error_reason",
+        "parse_fix_suggestion",
+        "inference_runtime_ms",
+        "parse_retry_count",
+        "error_tag",
+        "reviewer_note",
+        "corrected_label",
+        "corrected_at",
+      ];
+      rows = predictions.map((p) => [
+        ...runMeta,
+        p.image_id ?? "",
+        p.image_uri ?? "",
+        descByImageId.get(String(p.image_id || "")) || "",
+        p.ground_truth_label ?? "",
+        p.predicted_decision ?? "PARSE_FAIL",
+        p.confidence ?? "",
+        p.evidence ?? "",
+        p.parse_ok ?? "",
+        p.parse_error_reason ?? "",
+        p.parse_fix_suggestion ?? "",
+        p.inference_runtime_ms ?? "",
+        p.parse_retry_count ?? "",
+        p.error_tag ?? "",
+        p.reviewer_note ?? "",
+        p.corrected_label ?? "",
+        p.corrected_at ?? "",
+      ]);
+    }
 
     const csv = [headers, ...rows]
       .map((row) => row.map((cell) => csvEscape(cell)).join(","))
@@ -240,10 +293,42 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
     predictions: any[]
   ) => {
     const descByImageId = await fetchDatasetDescriptionByImageId(run.dataset_id);
-    const enriched = predictions.map((p) => ({
-      ...p,
-      dataset_image_description: descByImageId.get(String(p.image_id || "")) || "",
-    }));
+    // Multi-label runs: emit one entry per image with predicted/GT label arrays.
+    const isMultiLabel = predictions.some((p) => !!p.detection_label);
+    let enriched: any[];
+    if (isMultiLabel) {
+      const byImage = new Map<string, any[]>();
+      for (const p of predictions) {
+        const key = String(p.image_id || "");
+        const arr = byImage.get(key) ?? [];
+        arr.push(p);
+        byImage.set(key, arr);
+      }
+      enriched = Array.from(byImage.entries()).map(([imageId, group]) => {
+        const predicted_labels = group
+          .filter((r) => r.parse_ok && r.predicted_decision === "DETECTED")
+          .map((r) => String(r.detection_label || ""))
+          .filter(Boolean);
+        const ground_truth_labels = group
+          .filter((r) => (r.corrected_label || r.ground_truth_label) === "DETECTED")
+          .map((r) => String(r.detection_label || ""))
+          .filter(Boolean);
+        return {
+          image_id: imageId,
+          image_uri: group[0]?.image_uri ?? "",
+          dataset_image_description: descByImageId.get(imageId) || "",
+          predicted_labels,
+          ground_truth_labels,
+          correct:
+            JSON.stringify([...predicted_labels].sort()) === JSON.stringify([...ground_truth_labels].sort()),
+        };
+      });
+    } else {
+      enriched = predictions.map((p) => ({
+        ...p,
+        dataset_image_description: descByImageId.get(String(p.image_id || "")) || "",
+      }));
+    }
     const payload = {
       run: {
         run_id: run.run_id,
@@ -704,6 +789,49 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                             </div>
                                           </details>
                                         )}
+                                        {Object.keys((m.label_metrics || {}) as Record<string, any>).length > 0 && (
+                                          <details className="app-card p-2" open>
+                                            <summary className="cursor-pointer text-[11px] text-sky-300 hover:text-sky-200">
+                                              Per-Label Breakdown (multi-label)
+                                            </summary>
+                                            <div className="mt-2 app-table-wrap overflow-x-auto">
+                                              <table className="app-table app-table-fixed text-[11px]">
+                                                <colgroup>
+                                                  <col style={{ width: "10rem" }} />
+                                                  <col style={{ width: "5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                  <col style={{ width: "6.5rem" }} />
+                                                </colgroup>
+                                                <thead>
+                                                  <tr>
+                                                    <th className="app-table-col-label">Label</th>
+                                                    <th className="app-table-col-center">Total</th>
+                                                    <th className="app-table-col-center">Accuracy</th>
+                                                    <th className="app-table-col-center">Precision</th>
+                                                    <th className="app-table-col-center">Recall</th>
+                                                    <th className="app-table-col-center">F1</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {Object.entries((m.label_metrics || {}) as Record<string, any>)
+                                                    .sort(([, a], [, b]) => Number(b?.total || 0) - Number(a?.total || 0))
+                                                    .map(([label, metric]) => (
+                                                      <tr key={label}>
+                                                        <td className="text-gray-300">{label}</td>
+                                                        <td className="app-table-col-center text-gray-400">{metric.total ?? 0}</td>
+                                                        <td className="app-table-col-center text-gray-300">{((metric.accuracy || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="app-table-col-center text-white">{((metric.precision || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="app-table-col-center text-white">{((metric.recall || 0) * 100).toFixed(1)}%</td>
+                                                        <td className="app-table-col-center text-white">{((metric.f1 || 0) * 100).toFixed(1)}%</td>
+                                                      </tr>
+                                                    ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          </details>
+                                        )}
                                         <div className="app-table-wrap max-h-72 overflow-auto">
                                           <table className="app-table app-table-fixed text-xs">
                                             <colgroup>
@@ -765,7 +893,14 @@ export function DetectionDashboard({ detections: initialDetections }: { detectio
                                                       }}
                                                     />
                                                   </td>
-                                                  <td className="font-mono text-gray-300">{p.image_id}</td>
+                                                  <td className="font-mono text-gray-300">
+                                                    {p.image_id}
+                                                    {p.detection_label && (
+                                                      <span className="mt-1 block w-fit rounded bg-sky-600/20 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-sky-200">
+                                                        {p.detection_label}
+                                                      </span>
+                                                    )}
+                                                  </td>
                                                   <td className="app-table-col-center text-gray-300">
                                                     <div className="app-table-center-slot">
                                                       <DecisionBadge decision={p.predicted_decision || "PARSE_FAIL"} />

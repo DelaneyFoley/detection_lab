@@ -7,8 +7,9 @@ import { getRequestContext, logger } from "@/lib/logger";
 import { DatasetDeleteSchema, DatasetDuplicateSchema, DatasetAssignAnnotatorsSchema, DatasetFinalizeParentSchema } from "@/lib/schemas";
 import { isDatasetSplitType } from "@/lib/splitType";
 import { fileStore } from "@/lib/services";
-import { datasetRepository, qaRepository, notificationRepository, reviewRepository } from "@/lib/repositories";
+import { datasetRepository, qaRepository, notificationRepository, reviewRepository, detectionRepository } from "@/lib/repositories";
 import { computeMetricsWithSegments } from "@/lib/metrics";
+import { stratifyMultiLabel } from "@/lib/multiLabelStratify";
 import { seedBundledDatasets } from "@/lib/seed";
 
 export async function GET(req: NextRequest) {
@@ -111,6 +112,7 @@ export async function POST(req: NextRequest) {
         ai_assigned_label?: "DETECTED" | "NOT_DETECTED" | "PARSE_FAIL";
         ai_confidence?: number | null;
         ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
+        ground_truth_labels?: string[] | string | null;
       }>;
       const files = formData.getAll("files") as File[];
 
@@ -162,12 +164,108 @@ export async function POST(req: NextRequest) {
           ai_assigned_label: null,
           ai_confidence: null,
           ground_truth_label: gt,
+          ground_truth_labels: normalizeGroundTruthLabels(meta.ground_truth_labels),
         });
       }
 
       items = savedItems;
     } else {
       const body = await req.json();
+
+      // Preview a multi-label merge: dedupe source dataset items by frame URL and
+      // fold each source detection's production label into per-frame GT. Frames not
+      // reviewed for a given detection become coverage gaps the user must resolve.
+      if (body?.action === "merge_preview") {
+        const datasetIds: string[] = Array.isArray(body.dataset_ids) ? body.dataset_ids.map(String) : [];
+        if (datasetIds.length < 2) {
+          return NextResponse.json({ error: "Select at least two datasets to merge." }, { status: 400 });
+        }
+        const sources: Array<{ dataset_id: string; name: string; label: string }> = [];
+        const missing: Array<{ dataset_id: string; name: string; reason: string }> = [];
+        for (const did of datasetIds) {
+          const ds = datasetRepository.getDatasetById(did);
+          if (!ds) {
+            missing.push({ dataset_id: did, name: did, reason: "dataset not found" });
+            continue;
+          }
+          const det = ds.detection_id ? detectionRepository.getDetectionById(ds.detection_id) : null;
+          const label = det?.production_label ? String(det.production_label).trim() : "";
+          if (!label) {
+            missing.push({
+              dataset_id: did,
+              name: ds.name,
+              reason: det ? "linked detection has no Production Label" : "no linked detection",
+            });
+            continue;
+          }
+          sources.push({ dataset_id: did, name: ds.name, label });
+        }
+        if (missing.length > 0) {
+          return NextResponse.json(
+            { error: "Some datasets can't be merged until their detection has a Production Label.", missing_label_datasets: missing },
+            { status: 400 }
+          );
+        }
+
+        const labels = Array.from(new Set(sources.map((s) => s.label)));
+        type FrameState = {
+          image_uri: string;
+          present: Set<string>;
+          absent: Set<string>;
+          attributes: Set<string>;
+        };
+        const byFrame = new Map<string, FrameState>();
+        // Union of attribute options across all source datasets' taxonomies + any
+        // applied tags, so the merged dataset keeps the full attribute list.
+        const attributeVocab = new Set<string>();
+        for (const src of sources) {
+          const { dataset: ds, items: dsItems } = datasetRepository.getDatasetWithItems(src.dataset_id);
+          for (const t of normalizeSegmentTags(ds?.segment_taxonomy)) attributeVocab.add(t);
+          for (const it of dsItems) {
+            const url = String(it.image_uri || "").trim();
+            if (!url) continue;
+            let fs = byFrame.get(url);
+            if (!fs) {
+              fs = { image_uri: url, present: new Set(), absent: new Set(), attributes: new Set() };
+              byFrame.set(url, fs);
+            }
+            if (it.ground_truth_label === "DETECTED") fs.present.add(src.label);
+            else if (it.ground_truth_label === "NOT_DETECTED") fs.absent.add(src.label);
+            // null/unlabeled → neither present nor absent → becomes a coverage gap.
+            for (const t of normalizeSegmentTags(it.segment_tags)) {
+              fs.attributes.add(t);
+              attributeVocab.add(t);
+            }
+          }
+        }
+
+        const frames = Array.from(byFrame.values()).map((fs) => {
+          // A label is a gap when it was never reviewed OR annotators disagreed
+          // (present in one dataset, absent in another) — both need resolution.
+          const definitivePresent = labels.filter((l) => fs.present.has(l) && !fs.absent.has(l));
+          const definitiveAbsent = labels.filter((l) => fs.absent.has(l) && !fs.present.has(l));
+          const conflicts = labels.filter((l) => fs.present.has(l) && fs.absent.has(l));
+          const gaps = labels.filter((l) => !definitivePresent.includes(l) && !definitiveAbsent.includes(l));
+          return {
+            image_uri: fs.image_uri,
+            present: definitivePresent,
+            absent: definitiveAbsent,
+            gaps,
+            conflicts,
+            attributes: Array.from(fs.attributes),
+          };
+        });
+
+        return NextResponse.json({
+          labels,
+          sources,
+          frames,
+          attribute_vocabulary: Array.from(attributeVocab).sort((a, b) => a.localeCompare(b)),
+          total_frames: frames.length,
+          frames_with_gaps: frames.filter((f) => f.gaps.length > 0).length,
+          conflict_frames: frames.filter((f) => f.conflicts.length > 0).length,
+        });
+      }
 
       if (body?.action === "create_split_datasets") {
         const namePrefix = String(body.name_prefix || "").trim();
@@ -197,23 +295,24 @@ export async function POST(req: NextRequest) {
               label === "DETECTED" || label === "NOT_DETECTED"
                 ? (label as "DETECTED" | "NOT_DETECTED")
                 : null,
+            ground_truth_labels: normalizeGroundTruthLabels(item.ground_truth_labels),
           };
         });
 
         if (normalized.some((item) => !item.image_uri)) {
           return NextResponse.json({ error: "Each item needs image_uri for auto-splitting." }, { status: 400 });
         }
-        if (normalized.some((item) => !item.ground_truth_label)) {
+
+        // Multi-label datasets stratify over the label set via iterative
+        // stratification; binary datasets stratify over DETECTED/NOT_DETECTED.
+        const isMultiLabel = normalized.some((item) => item.ground_truth_labels.length > 0);
+        if (!isMultiLabel && normalized.some((item) => !item.ground_truth_label)) {
           return NextResponse.json(
             { error: "Each item needs ground_truth_label (DETECTED|NOT_DETECTED) for auto-splitting." },
             { status: 400 }
           );
         }
 
-        const shuffled = shuffle([...normalized]);
-
-        const detected = shuffled.filter((item) => item.ground_truth_label === "DETECTED");
-        const notDetected = shuffled.filter((item) => item.ground_truth_label === "NOT_DETECTED");
         const splits = {
           ITERATION: [] as typeof normalized,
           GOLDEN: [] as typeof normalized,
@@ -221,17 +320,36 @@ export async function POST(req: NextRequest) {
         };
         const order: Array<keyof typeof splits> = ["ITERATION", "GOLDEN", "HELD_OUT_EVAL"];
 
-        const allocateByRatios = (bucket: typeof normalized, ratios: [number, number, number] = [0.5, 0.2, 0.3]) => {
-          if (bucket.length === 0) return;
-          const counts = countsByRatios(bucket.length, ratios);
-          const assignments = assignWithSecondarySegmentBalancing(bucket, counts, order);
-          for (const splitKey of order) {
-            splits[splitKey].push(...assignments[splitKey]);
-          }
-        };
-
-        allocateByRatios(detected);
-        allocateByRatios(notDetected);
+        let detected = 0;
+        let notDetected = 0;
+        if (isMultiLabel) {
+          const stratified = stratifyMultiLabel(
+            shuffle([...normalized]),
+            (item) => item.ground_truth_labels,
+            [
+              { key: "ITERATION", ratio: 0.5 },
+              { key: "GOLDEN", ratio: 0.2 },
+              { key: "HELD_OUT_EVAL", ratio: 0.3 },
+            ]
+          );
+          for (const splitKey of order) splits[splitKey].push(...stratified[splitKey]);
+        } else {
+          const shuffled = shuffle([...normalized]);
+          const detectedItems = shuffled.filter((item) => item.ground_truth_label === "DETECTED");
+          const notDetectedItems = shuffled.filter((item) => item.ground_truth_label === "NOT_DETECTED");
+          detected = detectedItems.length;
+          notDetected = notDetectedItems.length;
+          const allocateByRatios = (bucket: typeof normalized, ratios: [number, number, number] = [0.5, 0.2, 0.3]) => {
+            if (bucket.length === 0) return;
+            const counts = countsByRatios(bucket.length, ratios);
+            const assignments = assignWithSecondarySegmentBalancing(bucket, counts, order);
+            for (const splitKey of order) {
+              splits[splitKey].push(...assignments[splitKey]);
+            }
+          };
+          allocateByRatios(detectedItems);
+          allocateByRatios(notDetectedItems);
+        }
 
         const now = new Date().toISOString();
         const createDatasetWithItems = async (
@@ -243,6 +361,7 @@ export async function POST(req: NextRequest) {
             splitItems.map((i) => ({
               image_id: i.image_id,
               label: i.ground_truth_label,
+              labels: i.ground_truth_labels || [],
               segment_tags: i.segment_tags || [],
             }))
           );
@@ -278,10 +397,12 @@ export async function POST(req: NextRequest) {
                   imageDescription: item.image_description || "",
                   segmentTagsJson: JSON.stringify(item.segment_tags || []),
                   groundTruthLabel: item.ground_truth_label,
+                  groundTruthLabelsJson: JSON.stringify(item.ground_truth_labels || []),
                 };
               })
             )
           );
+          datasetRepository.refreshItemsLabeledCount(datasetId);
           return { dataset_id: datasetId, split_type: splitType, size: splitItems.length, name: `${namePrefix} (${splitLabel})` };
         };
 
@@ -293,10 +414,11 @@ export async function POST(req: NextRequest) {
 
         return NextResponse.json({
           created,
+          multi_label: isMultiLabel,
           totals: {
             total: normalized.length,
-            detected: detected.length,
-            not_detected: notDetected.length,
+            detected,
+            not_detected: notDetected,
           },
         });
       }
@@ -359,8 +481,11 @@ export async function POST(req: NextRequest) {
         imageDescription: item.image_description || "",
         segmentTagsJson: JSON.stringify(normalizeSegmentTags(item.segment_tags)),
         groundTruthLabel: item.ground_truth_label ?? null,
+        groundTruthLabelsJson: JSON.stringify(normalizeGroundTruthLabels(item.ground_truth_labels)),
       }))
     );
+
+    datasetRepository.refreshItemsLabeledCount(id);
 
     return NextResponse.json({ dataset_id: id });
   } catch (error: unknown) {
@@ -423,6 +548,7 @@ export async function PUT(req: NextRequest) {
         image_description?: string;
         segment_tags?: string[] | string | null;
         ground_truth_label?: "DETECTED" | "NOT_DETECTED" | null;
+        ground_truth_labels?: string[] | string | null;
       }>;
       if (!Array.isArray(files) || files.length === 0) {
         return NextResponse.json({ error: "No files uploaded" }, { status: 400 });
@@ -464,6 +590,7 @@ export async function PUT(req: NextRequest) {
             meta.ground_truth_label === "DETECTED" || meta.ground_truth_label === "NOT_DETECTED"
               ? meta.ground_truth_label
               : null,
+          groundTruthLabelsJson: JSON.stringify(normalizeGroundTruthLabels(meta.ground_truth_labels)),
         });
       }
 
@@ -473,6 +600,65 @@ export async function PUT(req: NextRequest) {
   }
 
   const body = await req.json();
+
+  if (body.action === "append_items") {
+    const datasetId = String(body.dataset_id || "").trim();
+    if (!datasetId) {
+      return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
+    }
+    const dataset = datasetRepository.getDatasetById(datasetId);
+    if (!dataset) {
+      return NextResponse.json({ error: "Dataset not found" }, { status: 404 });
+    }
+
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (rawItems.length === 0) {
+      return NextResponse.json({ error: "items must be a non-empty array" }, { status: 400 });
+    }
+
+    const existingIds = new Set<string>(
+      datasetRepository.getDatasetImageIds(datasetId).map((v) => String(v || "").trim())
+    );
+    const seen = new Set<string>();
+    const prepared: Array<{
+      itemId: string;
+      datasetId: string;
+      imageId: string;
+      imageUri: string;
+      imageDescription: string;
+      segmentTagsJson: string;
+      groundTruthLabel: "DETECTED" | "NOT_DETECTED" | null;
+      groundTruthLabelsJson: string;
+    }> = [];
+
+    for (let i = 0; i < rawItems.length; i++) {
+      const item = rawItems[i] ?? {};
+      const imageId = normalizeImageId(item.image_id);
+      if (!imageId) return NextResponse.json({ error: `image_id cannot be blank (item ${i + 1})` }, { status: 400 });
+      const imageUri = String(item.image_uri ?? "").trim();
+      if (!imageUri) return NextResponse.json({ error: `image_uri cannot be blank (item ${i + 1})` }, { status: 400 });
+      if (seen.has(imageId) || existingIds.has(imageId)) {
+        return NextResponse.json({ error: `Duplicate image_id: ${imageId}` }, { status: 400 });
+      }
+      seen.add(imageId);
+      const label = item.ground_truth_label;
+      prepared.push({
+        itemId: uuid(),
+        datasetId,
+        imageId,
+        imageUri,
+        imageDescription: item.image_description || "",
+        segmentTagsJson: JSON.stringify(normalizeSegmentTags(item.segment_tags)),
+        groundTruthLabel: label === "DETECTED" || label === "NOT_DETECTED" ? label : null,
+        groundTruthLabelsJson: JSON.stringify(normalizeGroundTruthLabels(item.ground_truth_labels)),
+      });
+    }
+
+    datasetRepository.insertDatasetItems(prepared);
+    datasetRepository.refreshDatasetStats(datasetId, now);
+    datasetRepository.refreshItemsLabeledCount(datasetId);
+    return NextResponse.json({ ok: true, added: prepared.length });
+  }
 
   if (body.action === "bulk_update_items") {
     const datasetId = String(body.dataset_id || "").trim();
@@ -500,6 +686,7 @@ export async function PUT(req: NextRequest) {
       aiAssignedLabel: string | null;
       aiConfidence: number | null;
       groundTruthLabel: string | null;
+      groundTruthLabelsJson?: string;
     }> = [];
     const seenItemIds = new Set<string>();
 
@@ -540,6 +727,9 @@ export async function PUT(req: NextRequest) {
         groundTruthLabel: Object.prototype.hasOwnProperty.call(item, "ground_truth_label")
           ? item.ground_truth_label ?? null
           : existing.ground_truth_label ?? null,
+        groundTruthLabelsJson: Object.prototype.hasOwnProperty.call(item, "ground_truth_labels")
+          ? JSON.stringify(normalizeGroundTruthLabels(item.ground_truth_labels))
+          : existing.ground_truth_labels ?? "[]",
       });
     }
 
@@ -555,12 +745,17 @@ export async function PUT(req: NextRequest) {
     datasetRepository.refreshDatasetStats(datasetId, now);
     datasetRepository.refreshItemsLabeledCount(datasetId);
 
+    // Keep split <-> master in sync in whichever direction applies: editing a
+    // split carries up to its MASTER; editing a MASTER carries down to its splits.
+    const masterSync = datasetRepository.propagateLabelsToMaster(datasetId, now);
+    datasetRepository.propagateLabelsToSplits(datasetId, now);
+
     const currentStatus = dataset.qa_status || "draft";
     if (currentStatus === "assigned") {
       qaRepository.updateQaStatus(datasetId, "in_annotation");
     }
 
-    return NextResponse.json({ ok: true, updated: pendingUpdates.length });
+    return NextResponse.json({ ok: true, updated: pendingUpdates.length, master_synced: masterSync.updated });
   }
 
   if (body.action === "update_attributes") {
@@ -600,6 +795,56 @@ export async function PUT(req: NextRequest) {
       }
     }
     return NextResponse.json({ ok: true, affected_runs: affectedRunIds.length });
+  }
+
+  if (body.action === "delete_items") {
+    const itemIds = Array.isArray(body.item_ids)
+      ? Array.from(new Set(body.item_ids.map((id: unknown) => String(id || "")).filter(Boolean)))
+      : [];
+    if (itemIds.length === 0) {
+      return NextResponse.json({ error: "item_ids must be a non-empty array" }, { status: 400 });
+    }
+
+    const existingItems = itemIds
+      .map((id) => datasetRepository.getDatasetItemById(String(id)))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+    if (existingItems.length === 0) {
+      return NextResponse.json({ error: "No valid dataset items found" }, { status: 404 });
+    }
+
+    const datasetIds = new Set<string>();
+    const affectedRunToDataset = new Map<string, string>();
+    for (const existing of existingItems) {
+      const { affectedRunIds } = datasetRepository.deleteDatasetItem(existing.item_id);
+      await fileStore.removeLocalUri(existing.image_uri || "");
+      datasetIds.add(existing.dataset_id);
+      for (const runId of affectedRunIds) affectedRunToDataset.set(runId, existing.dataset_id);
+    }
+
+    for (const datasetId of datasetIds) {
+      datasetRepository.refreshDatasetStats(datasetId, now);
+    }
+
+    // Re-score every run that lost a prediction, using its own dataset's segment tags.
+    if (affectedRunToDataset.size > 0) {
+      const segmentTagsByDataset = new Map<string, ReturnType<typeof reviewRepository.getDatasetSegmentTagsByImageId>>();
+      for (const [runId, datasetId] of affectedRunToDataset) {
+        let segmentTags = segmentTagsByDataset.get(datasetId);
+        if (!segmentTags) {
+          segmentTags = reviewRepository.getDatasetSegmentTagsByImageId(datasetId);
+          segmentTagsByDataset.set(datasetId, segmentTags);
+        }
+        const predictions = reviewRepository.getRunPredictions(runId);
+        const metrics = computeMetricsWithSegments(predictions, segmentTags);
+        reviewRepository.updateRunMetrics(runId, JSON.stringify(metrics));
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      removed: existingItems.length,
+      affected_runs: affectedRunToDataset.size,
+    });
   }
 
   if (body.item_id) {
@@ -644,6 +889,10 @@ export async function PUT(req: NextRequest) {
 
     datasetRepository.refreshDatasetStats(existing.dataset_id, now);
     datasetRepository.refreshItemsLabeledCount(existing.dataset_id);
+
+    // Keep split <-> master in sync (no-op unless this dataset is a split or a master).
+    datasetRepository.propagateLabelsToMaster(existing.dataset_id, now);
+    datasetRepository.propagateLabelsToSplits(existing.dataset_id, now);
 
     const itemDataset = datasetRepository.getDatasetById(existing.dataset_id);
     const itemCurrentStatus = itemDataset?.qa_status || "draft";
@@ -847,6 +1096,43 @@ export async function PUT(req: NextRequest) {
 
 function normalizeImageId(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+/**
+ * Normalize a multi-label ground-truth value into a deduped array of label
+ * strings. Accepts an array, a JSON-array string (mirrors the attributes format,
+ * e.g. ["dog","pool"]), or a delimited string (comma, pipe, semicolon, newline).
+ * Returns [] when empty. Used by multi-label production-replication datasets where
+ * the GT column lists the attribute labels present on an image.
+ */
+function normalizeGroundTruthLabels(value: unknown): string[] {
+  let parts: string[] = [];
+  if (Array.isArray(value)) {
+    parts = value.map((v) => String(v ?? ""));
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        parts = Array.isArray(parsed) ? parsed.map((v) => String(v ?? "")) : [];
+      } catch {
+        parts = trimmed.split(/[,|;\n]/);
+      }
+    } else {
+      parts = trimmed.split(/[,|;\n]/);
+    }
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of parts) {
+    const label = raw.trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+  }
+  return out;
 }
 
 function validateAndNormalizeItemMetas(

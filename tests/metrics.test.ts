@@ -93,4 +93,24 @@ describe("computeMetrics", () => {
     expect(metrics.segment_metrics?.Day?.total).toBe(1);
     expect(metrics.segment_metrics?.Day?.tp).toBe(1);
   });
+
+  it("computes per-label metrics for multi-label runs via detection_label", () => {
+    const predictions: Prediction[] = [
+      // image 1: dog present+detected (tp), cat absent+not detected (tn)
+      basePrediction({ prediction_id: "1a", image_id: "img1", detection_label: "dog", ground_truth_label: "DETECTED", predicted_decision: "DETECTED" }),
+      basePrediction({ prediction_id: "1b", image_id: "img1", detection_label: "cat", ground_truth_label: "NOT_DETECTED", predicted_decision: "NOT_DETECTED" }),
+      // image 2: dog present but missed (fn), cat predicted but absent (fp)
+      basePrediction({ prediction_id: "2a", image_id: "img2", detection_label: "dog", ground_truth_label: "DETECTED", predicted_decision: "NOT_DETECTED" }),
+      basePrediction({ prediction_id: "2b", image_id: "img2", detection_label: "cat", ground_truth_label: "NOT_DETECTED", predicted_decision: "DETECTED" }),
+    ];
+
+    const metrics = computeMetricsWithSegments(predictions, new Map());
+    expect(metrics.label_metrics?.dog?.tp).toBe(1);
+    expect(metrics.label_metrics?.dog?.fn).toBe(1);
+    expect(metrics.label_metrics?.cat?.tn).toBe(1);
+    expect(metrics.label_metrics?.cat?.fp).toBe(1);
+    expect(metrics.label_metrics?.dog?.total).toBe(2);
+    // Overall still aggregates all four rows.
+    expect(metrics.total).toBe(4);
+  });
 });

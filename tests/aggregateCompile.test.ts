@@ -3,6 +3,7 @@ import {
   compileAggregatePrompt,
   extractPreamble,
   deriveAggregateOutcome,
+  validateAggregatePayload,
 } from "../src/lib/inference/aggregate";
 
 describe("aggregate prompt compiler", () => {
@@ -61,5 +62,46 @@ describe("aggregate outcome (presence semantics)", () => {
     const out = deriveAggregateOutcome(list, null);
     expect(out.decision).toBe("NOT_DETECTED");
     expect(out.siblings).toHaveLength(2);
+  });
+});
+
+describe("validateAggregatePayload (strict schema enforcement)", () => {
+  const labels = ["knob", "major corrosion"];
+
+  it("accepts a well-formed payload with in-enum labels", () => {
+    const payload = { detections: [{ detection: "knob", reasoning: "shiny" }] };
+    expect(validateAggregatePayload(payload, labels)).toBeNull();
+  });
+
+  it("accepts an empty detections array", () => {
+    expect(validateAggregatePayload({ detections: [] }, labels)).toBeNull();
+  });
+
+  it("rejects a non-object payload", () => {
+    expect(validateAggregatePayload("nope", labels)).toMatch(/JSON object/);
+  });
+
+  it("rejects a missing detections array", () => {
+    expect(validateAggregatePayload({}, labels)).toMatch(/detections/);
+  });
+
+  it("rejects an out-of-enum label", () => {
+    const payload = { detections: [{ detection: "unicorn", reasoning: "x" }] };
+    expect(validateAggregatePayload(payload, labels)).toMatch(/out-of-schema/);
+  });
+
+  it("matches labels case-insensitively", () => {
+    const payload = { detections: [{ detection: "KNOB", reasoning: "x" }] };
+    expect(validateAggregatePayload(payload, labels)).toBeNull();
+  });
+
+  it("rejects a non-string detection or reasoning", () => {
+    expect(validateAggregatePayload({ detections: [{ detection: 1, reasoning: "x" }] }, labels)).toMatch(/detection/);
+    expect(validateAggregatePayload({ detections: [{ detection: "knob", reasoning: 2 }] }, labels)).toMatch(/reasoning/);
+  });
+
+  it("allows any string label when the enum is empty", () => {
+    const payload = { detections: [{ detection: "anything", reasoning: "x" }] };
+    expect(validateAggregatePayload(payload, [])).toBeNull();
   });
 });

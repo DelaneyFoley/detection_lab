@@ -48,6 +48,19 @@ function parseSegmentTags(raw: unknown): string[] {
   return [];
 }
 
+function parseMultiLabels(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map((v) => String(v || "").trim()).filter(Boolean);
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map((v) => String(v || "").trim()).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 function sanitizeFileName(name: string): string {
   return name.replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "") || "dataset";
 }
@@ -73,6 +86,7 @@ export async function GET(req: NextRequest) {
     { header: "Image ID", key: "image_id", width: 24 },
     { header: "Image URL", key: "image_url", width: 40 },
     { header: "Ground Truth Label", key: "ground_truth_label", width: 20 },
+    { header: "Ground Truth Labels (multi)", key: "ground_truth_labels", width: 32 },
     { header: "Attributes", key: "attributes", width: 30 },
     { header: "Image Description", key: "image_description", width: 50 },
   ];
@@ -91,6 +105,8 @@ export async function GET(req: NextRequest) {
       image_id: item.image_id || "",
       image_url: item.image_uri || "",
       ground_truth_label: item.ground_truth_label || "",
+      // Emit the same JSON-array format the multi-label CSV import expects, so an export round-trips.
+      ground_truth_labels: `[${parseMultiLabels(item.ground_truth_labels).map((l) => JSON.stringify(l)).join(", ")}]`,
       attributes: tags.join(", "),
       image_description: item.image_description || "",
     });

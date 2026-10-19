@@ -49,6 +49,36 @@ export class ReviewRepository {
     );
   }
 
+  /**
+   * Multi-label datasets: persist a single label's presence into the image's
+   * ground_truth_labels SET. `present` adds the label (DETECTED); otherwise it is
+   * removed (NOT_DETECTED). The binary ground_truth_label column is left alone.
+   */
+  updateDatasetItemMultiLabel(datasetId: string, imageId: string, label: string, present: boolean) {
+    const clean = String(label || "").trim();
+    if (!clean) return;
+    const row = dataStore.get<{ ground_truth_labels: string | null }>(
+      "SELECT ground_truth_labels FROM dataset_items WHERE dataset_id = ? AND image_id = ?",
+      datasetId,
+      imageId
+    );
+    let labels: string[] = [];
+    try {
+      const parsed = JSON.parse(row?.ground_truth_labels || "[]");
+      if (Array.isArray(parsed)) labels = parsed.map((v) => String(v || "").trim()).filter(Boolean);
+    } catch {
+      labels = [];
+    }
+    const without = labels.filter((l) => l.toLowerCase() !== clean.toLowerCase());
+    const next = present ? [...without, clean] : without;
+    dataStore.run(
+      "UPDATE dataset_items SET ground_truth_labels = ? WHERE dataset_id = ? AND image_id = ?",
+      JSON.stringify(next),
+      datasetId,
+      imageId
+    );
+  }
+
   updateDatasetItemDescription(datasetId: string, imageId: string, description: string | null) {
     dataStore.run(
       "UPDATE dataset_items SET image_description = ? WHERE dataset_id = ? AND image_id = ?",
@@ -133,23 +163,36 @@ export class ReviewRepository {
 
   /**
    * Re-sync a run's prediction ground truth from the dataset's canonical labels,
-   * matched by image_id, so re-scoring uses today's ground truth.
+   * matched by image_id, so re-scoring uses today's ground truth. Multi-label
+   * rows (those with a detection_label) derive DETECTED/NOT_DETECTED from the
+   * image's ground_truth_labels SET; single-target rows use the binary column.
    */
   syncRunGroundTruthFromDataset(runId: string, datasetId: string) {
     dataStore.run(
       `UPDATE predictions
-       SET ground_truth_label = (
-         SELECT di.ground_truth_label
-         FROM dataset_items di
-         WHERE di.dataset_id = ?
-           AND di.image_id = predictions.image_id
-       )
+       SET ground_truth_label = CASE
+         WHEN detection_label IS NOT NULL THEN (
+           SELECT CASE WHEN EXISTS (
+             SELECT 1 FROM dataset_items di, json_each(di.ground_truth_labels) je
+             WHERE di.dataset_id = ?
+               AND di.image_id = predictions.image_id
+               AND lower(je.value) = lower(predictions.detection_label)
+           ) THEN 'DETECTED' ELSE 'NOT_DETECTED' END
+         )
+         ELSE (
+           SELECT di.ground_truth_label
+           FROM dataset_items di
+           WHERE di.dataset_id = ?
+             AND di.image_id = predictions.image_id
+         )
+       END
        WHERE run_id = ?
          AND EXISTS (
            SELECT 1 FROM dataset_items di
            WHERE di.dataset_id = ?
              AND di.image_id = predictions.image_id
          )`,
+      datasetId,
       datasetId,
       runId,
       datasetId

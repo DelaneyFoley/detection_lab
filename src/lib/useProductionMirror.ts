@@ -35,6 +35,9 @@ export function useProductionMirror({
   );
   const [targetLabel, setTargetLabel] = useState<string>(initialData?.production_label || productionLabel || "");
   const [targetMatched, setTargetMatched] = useState(false);
+  const [multiLabel, setMultiLabelState] = useState<boolean>(
+    ((initialData?.composition as PromptComposition | undefined)?.multi_label) === true
+  );
   const [ctxLoading, setCtxLoading] = useState(false);
   const [ctxError, setCtxError] = useState("");
 
@@ -96,7 +99,10 @@ export function useProductionMirror({
       setTargetMatched(matched);
       const src: "baseline" | "structured" = matched ? "baseline" : "structured";
       setTargetSource(src);
-      setComposition(buildCompositionFromSnapshot(snap, { targetLabel, targetDescription, targetSource: src }));
+      setComposition({
+        ...buildCompositionFromSnapshot(snap, { targetLabel, targetDescription, targetSource: src }),
+        multi_label: multiLabel,
+      });
     } catch (e) {
       setCtxError(e instanceof Error ? e.message : "Failed to import context snapshot");
     } finally {
@@ -111,7 +117,10 @@ export function useProductionMirror({
     setTargetMatched(matched);
     const src: "baseline" | "structured" = matched ? "baseline" : "structured";
     setTargetSource(src);
-    setComposition(buildCompositionFromSnapshot(snapshot, { targetLabel: label, targetDescription, targetSource: src }));
+    setComposition({
+      ...buildCompositionFromSnapshot(snapshot, { targetLabel: label, targetDescription, targetSource: src }),
+      multi_label: multiLabel,
+    });
   };
 
   const toggleMember = (index: number) => {
@@ -194,6 +203,19 @@ export function useProductionMirror({
         )
       : "";
 
+  const toggleMultiLabel = (value: boolean) => {
+    setMultiLabelState(value);
+    setComposition((prev) => (prev ? { ...prev, multi_label: value } : prev));
+  };
+
+  const setModel = (value: string) => {
+    setComposition((prev) => (prev ? { ...prev, google_model: value } : prev));
+  };
+
+  const setThinkingLevel = (value: string) => {
+    setComposition((prev) => (prev ? { ...prev, thinking_level: value } : prev));
+  };
+
   const reset = () => {
     setSelectedContext("");
     setSnapshot(null);
@@ -201,6 +223,7 @@ export function useProductionMirror({
     setTargetSource("baseline");
     setTargetLabel(productionLabel || "");
     setTargetMatched(false);
+    setMultiLabelState(false);
     setCtxLoading(false);
     setCtxError("");
   };
@@ -231,6 +254,10 @@ export function useProductionMirror({
     addMember,
     removeMember,
     compiledPreview,
+    multiLabel,
+    toggleMultiLabel,
+    setModel,
+    setThinkingLevel,
     reset,
   };
 }

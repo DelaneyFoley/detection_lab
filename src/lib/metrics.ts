@@ -34,9 +34,27 @@ export function computeMetricsWithSegments(
     segment_metrics[segment] = computeMetricsInternal(segmentPredictions);
   }
 
+  // Multi-label runs carry a per-row detection_label; break metrics out per label.
+  const byLabel = new Map<string, Prediction[]>();
+  for (const prediction of predictions) {
+    const label = String(prediction.detection_label || "").trim();
+    if (!label) continue;
+    const bucket = byLabel.get(label) || [];
+    bucket.push(prediction);
+    byLabel.set(label, bucket);
+  }
+  let label_metrics: NonNullable<MetricsSummary["label_metrics"]> | undefined;
+  if (byLabel.size > 0) {
+    label_metrics = {};
+    for (const [label, labelPredictions] of byLabel.entries()) {
+      label_metrics[label] = computeMetricsInternal(labelPredictions);
+    }
+  }
+
   return {
     ...overall,
     segment_metrics,
+    ...(label_metrics ? { label_metrics } : {}),
   };
 }
 

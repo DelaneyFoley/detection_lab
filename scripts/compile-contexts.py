@@ -90,10 +90,6 @@ def main() -> int:
     contexts = []
     for ctx in CONTEXTS:
         all_detections = ctx.all_detections
-        if not all_detections:
-            # Non-VLM / service-only contexts have no aggregate prompt.
-            continue
-
         detection_count = len(ctx.detections)
         has_ic = ctx.incorrect_capture is not None
         members = [
@@ -106,11 +102,31 @@ def main() -> int:
             for idx, det in enumerate(all_detections)
         ]
 
-        built_prompt = ctx.build_prompt()
-        response_schema = ctx.response_format.model_json_schema()
-        google_model = ctx.google_model.value
-        thinking_level = ctx.thinking_level.value
-        has_vlm = any(step.name == "VLM" for step in ctx.processing_steps)
+        # Contexts with no detections and no incorrect-capture member have no
+        # production aggregate prompt. We still emit them (with empty prompt /
+        # schema) so brand-new detections can be authored against them in the
+        # lab and tested as an aggregate, rather than skipping them entirely.
+        if all_detections:
+            built_prompt = ctx.build_prompt()
+            response_schema = ctx.response_format.model_json_schema()
+        else:
+            built_prompt = ""
+            response_schema = {}
+
+        # Metadata is guarded so a service-only context missing any of these
+        # attributes cannot abort the whole compile now that we include them.
+        try:
+            google_model = ctx.google_model.value
+        except Exception:  # noqa: BLE001
+            google_model = ""
+        try:
+            thinking_level = ctx.thinking_level.value
+        except Exception:  # noqa: BLE001
+            thinking_level = ""
+        try:
+            has_vlm = any(step.name == "VLM" for step in ctx.processing_steps)
+        except Exception:  # noqa: BLE001
+            has_vlm = False
 
         checksum = hashlib.sha256(
             json.dumps(

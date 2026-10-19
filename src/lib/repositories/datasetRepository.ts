@@ -6,6 +6,46 @@ import { deriveImageCorrection, type AnnotatorCorrection, type QaSampleInput, ty
 
 export type { AnnotatorCorrection, StageCorrection } from "@/lib/annotatorCorrections";
 
+/** Canonical (order-insensitive) form of a segment_tags JSON string. */
+function canonicalTags(raw: string | null): string {
+  try {
+    const arr = JSON.parse(raw || "[]");
+    if (Array.isArray(arr)) return JSON.stringify(arr.map((x) => String(x)).sort());
+  } catch {
+    /* fall through to empty */
+  }
+  return "[]";
+}
+
+/**
+ * How a target row should change to match a source row's label/tags. `skipEmpty`
+ * leaves the target untouched where the source is unlabeled / has no tags (used
+ * by the backfill so it never wipes data); live edits pass it false so clears
+ * propagate too.
+ */
+function diffRow(
+  source: { label: string | null; tags: string | null },
+  target: { label: string | null; tags: string | null },
+  skipEmpty: boolean
+): { changed: boolean; label: string | null; tags: string } {
+  let nextLabel = target.label ?? null;
+  let nextTags = target.tags ?? "[]";
+  let changed = false;
+
+  const srcLabel = source.label ?? null;
+  if (!(skipEmpty && srcLabel === null) && (target.label ?? null) !== srcLabel) {
+    nextLabel = srcLabel;
+    changed = true;
+  }
+  const srcTagsRaw = source.tags ?? "[]";
+  const srcCanon = canonicalTags(srcTagsRaw);
+  if (!(skipEmpty && srcCanon === "[]") && canonicalTags(target.tags) !== srcCanon) {
+    nextTags = srcTagsRaw;
+    changed = true;
+  }
+  return { changed, label: nextLabel, tags: nextTags };
+}
+
 export class DatasetRepository {
   getDatasetById(datasetId: string): any | undefined {
     return dataStore.get<any>("SELECT * FROM datasets WHERE dataset_id = ?", datasetId);
@@ -110,11 +150,12 @@ export class DatasetRepository {
     imageDescription: string;
     segmentTagsJson: string;
     groundTruthLabel: string | null;
+    groundTruthLabelsJson?: string;
   }) {
     dataStore.run(
       `INSERT INTO dataset_items (
-        item_id, dataset_id, image_id, image_uri, image_description, segment_tags, ai_assigned_label, ai_confidence, ground_truth_label
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        item_id, dataset_id, image_id, image_uri, image_description, segment_tags, ai_assigned_label, ai_confidence, ground_truth_label, ground_truth_labels
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       input.itemId,
       input.datasetId,
       input.imageId,
@@ -123,7 +164,8 @@ export class DatasetRepository {
       input.segmentTagsJson,
       null,
       null,
-      input.groundTruthLabel
+      input.groundTruthLabel,
+      input.groundTruthLabelsJson ?? "[]"
     );
   }
 
@@ -135,13 +177,14 @@ export class DatasetRepository {
     imageDescription: string;
     segmentTagsJson: string;
     groundTruthLabel: string | null;
+    groundTruthLabelsJson?: string;
   }>) {
     const tx = dataStore.transaction((store, payload: typeof items) => {
       for (const item of payload) {
         store.run(
           `INSERT INTO dataset_items (
-            item_id, dataset_id, image_id, image_uri, image_description, segment_tags, ai_assigned_label, ai_confidence, ground_truth_label
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            item_id, dataset_id, image_id, image_uri, image_description, segment_tags, ai_assigned_label, ai_confidence, ground_truth_label, ground_truth_labels
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           item.itemId,
           item.datasetId,
           item.imageId,
@@ -150,7 +193,8 @@ export class DatasetRepository {
           item.segmentTagsJson,
           null,
           null,
-          item.groundTruthLabel
+          item.groundTruthLabel,
+          item.groundTruthLabelsJson ?? "[]"
         );
       }
     });
@@ -239,13 +283,14 @@ export class DatasetRepository {
       aiAssignedLabel: string | null;
       aiConfidence: number | null;
       groundTruthLabel: string | null;
+      groundTruthLabelsJson?: string;
     }>
   ) {
     const tx = dataStore.transaction((store, payload: typeof items) => {
       for (const item of payload) {
         store.run(
           `UPDATE dataset_items
-           SET image_id = ?, image_uri = ?, image_description = ?, segment_tags = ?, ai_assigned_label = ?, ai_confidence = ?, ground_truth_label = ?
+           SET image_id = ?, image_uri = ?, image_description = ?, segment_tags = ?, ai_assigned_label = ?, ai_confidence = ?, ground_truth_label = ?, ground_truth_labels = ?
            WHERE item_id = ?`,
           item.imageId,
           item.imageUri,
@@ -254,6 +299,7 @@ export class DatasetRepository {
           item.aiAssignedLabel,
           item.aiConfidence,
           item.groundTruthLabel,
+          item.groundTruthLabelsJson ?? "[]",
           item.itemId
         );
       }
@@ -336,6 +382,9 @@ export class DatasetRepository {
     const tx = dataStore.transaction((store, targetDatasetId: string) => {
       const runIds = store.all<{ run_id: string }>("SELECT run_id FROM runs WHERE dataset_id = ?", targetDatasetId);
       for (const r of runIds) {
+        // Clear FK dependents of the run's predictions before removing them.
+        store.run("DELETE FROM groundtruth_corrections WHERE run_id = ?", r.run_id);
+        store.run("DELETE FROM review_flags WHERE prediction_id IN (SELECT prediction_id FROM predictions WHERE run_id = ?)", r.run_id);
         store.run("DELETE FROM predictions WHERE run_id = ?", r.run_id);
       }
       store.run("DELETE FROM runs WHERE dataset_id = ?", targetDatasetId);
@@ -400,7 +449,9 @@ export class DatasetRepository {
         SUM(CASE
           WHEN d.split_type = 'DISCOVERY'
             THEN (CASE WHEN di.segment_tags IS NOT NULL AND di.segment_tags <> '[]' AND di.segment_tags <> '' THEN 1 ELSE 0 END)
-          ELSE (CASE WHEN di.ground_truth_label IS NOT NULL THEN 1 ELSE 0 END)
+          ELSE (CASE WHEN di.ground_truth_label IS NOT NULL
+              OR (di.ground_truth_labels IS NOT NULL AND di.ground_truth_labels <> '[]' AND di.ground_truth_labels <> '')
+            THEN 1 ELSE 0 END)
         END) as labeled
       FROM dataset_items di JOIN datasets d ON d.dataset_id = di.dataset_id
       WHERE di.dataset_id = ?`,
@@ -416,11 +467,163 @@ export class DatasetRepository {
         WHERE di.dataset_id = datasets.dataset_id
           AND (
             (datasets.split_type = 'DISCOVERY' AND di.segment_tags IS NOT NULL AND di.segment_tags <> '[]' AND di.segment_tags <> '')
-            OR (datasets.split_type <> 'DISCOVERY' AND di.ground_truth_label IS NOT NULL)
+            OR (datasets.split_type <> 'DISCOVERY' AND (
+              di.ground_truth_label IS NOT NULL
+              OR (di.ground_truth_labels IS NOT NULL AND di.ground_truth_labels <> '[]' AND di.ground_truth_labels <> '')
+            ))
           )
       ) WHERE dataset_id = ?`,
       datasetId
     );
+  }
+
+  /** All TRAIN/TEST/EVAL split datasets (those with a MASTER parent pointer). */
+  getSplitDatasetIds(): string[] {
+    return dataStore
+      .all<{ dataset_id: string }>(
+        "SELECT dataset_id FROM datasets WHERE split_parent_id IS NOT NULL"
+      )
+      .map((r) => r.dataset_id);
+  }
+
+  /** All MASTER datasets that have at least one TRAIN/TEST/EVAL split child. */
+  getMasterDatasetIdsWithSplits(): string[] {
+    return dataStore
+      .all<{ split_parent_id: string }>(
+        "SELECT DISTINCT split_parent_id FROM datasets WHERE split_parent_id IS NOT NULL"
+      )
+      .map((r) => r.split_parent_id);
+  }
+
+  /**
+   * Push a split dataset's ground-truth labels AND attribute (segment) tags
+   * back onto its linked MASTER, matched by image_id. Only rows whose label or
+   * tags actually differ are touched. `skipEmpty` leaves master values
+   * untouched where the split is unlabeled / has no tags (used by the one-time
+   * backfill to avoid wiping master data); live edits pass it false so clearing
+   * a split label/tags also clears them on the master.
+   */
+  propagateLabelsToMaster(
+    splitDatasetId: string,
+    now: string,
+    opts: { skipEmpty?: boolean; dryRun?: boolean } = {}
+  ): { masterId: string | null; updated: number } {
+    const split = dataStore.get<{ split_parent_id: string | null }>(
+      "SELECT split_parent_id FROM datasets WHERE dataset_id = ?",
+      splitDatasetId
+    );
+    const masterId = split?.split_parent_id || null;
+    if (!masterId) return { masterId: null, updated: 0 };
+
+    const masterByImage = new Map<string, { label: string | null; tags: string | null }>(
+      dataStore
+        .all<{ image_id: string; ground_truth_label: string | null; segment_tags: string | null }>(
+          "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ?",
+          masterId
+        )
+        .map((m) => [String(m.image_id || ""), { label: m.ground_truth_label ?? null, tags: m.segment_tags ?? "[]" }])
+    );
+
+    const splitItems = dataStore.all<{ image_id: string; ground_truth_label: string | null; segment_tags: string | null }>(
+      "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ?",
+      splitDatasetId
+    );
+
+    const changes: Array<{ imageId: string; label: string | null; tags: string }> = [];
+    for (const it of splitItems) {
+      const imageId = String(it.image_id || "");
+      const master = masterByImage.get(imageId);
+      if (!master) continue; // image not in master; nothing to sync
+      const diff = diffRow(
+        { label: it.ground_truth_label ?? null, tags: it.segment_tags ?? "[]" },
+        master,
+        opts.skipEmpty === true
+      );
+      if (diff.changed) changes.push({ imageId, label: diff.label, tags: diff.tags });
+    }
+    if (changes.length === 0) return { masterId, updated: 0 };
+    if (opts.dryRun) return { masterId, updated: changes.length };
+
+    const tx = dataStore.transaction((store, payload: typeof changes) => {
+      for (const c of payload) {
+        store.run(
+          "UPDATE dataset_items SET ground_truth_label = ?, segment_tags = ? WHERE dataset_id = ? AND image_id = ?",
+          c.label,
+          c.tags,
+          masterId,
+          c.imageId
+        );
+      }
+    });
+    tx(changes);
+
+    this.refreshDatasetStats(masterId, now);
+    this.refreshItemsLabeledCount(masterId);
+    return { masterId, updated: changes.length };
+  }
+
+  /**
+   * Push a MASTER dataset's labels AND attribute tags down onto its linked
+   * TRAIN/TEST/EVAL splits, matched by image_id (each image lives in exactly one
+   * split, so this is unambiguous). Mirror of propagateLabelsToMaster.
+   */
+  propagateLabelsToSplits(
+    masterDatasetId: string,
+    now: string,
+    opts: { skipEmpty?: boolean; dryRun?: boolean } = {}
+  ): { splitIds: string[]; updated: number } {
+    const childIds = dataStore
+      .all<{ dataset_id: string }>("SELECT dataset_id FROM datasets WHERE split_parent_id = ?", masterDatasetId)
+      .map((r) => r.dataset_id);
+    if (childIds.length === 0) return { splitIds: [], updated: 0 };
+
+    const masterByImage = new Map<string, { label: string | null; tags: string | null }>(
+      dataStore
+        .all<{ image_id: string; ground_truth_label: string | null; segment_tags: string | null }>(
+          "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ?",
+          masterDatasetId
+        )
+        .map((m) => [String(m.image_id || ""), { label: m.ground_truth_label ?? null, tags: m.segment_tags ?? "[]" }])
+    );
+
+    const touchedSplits: string[] = [];
+    let updated = 0;
+
+    for (const childId of childIds) {
+      const childItems = dataStore.all<{ image_id: string; ground_truth_label: string | null; segment_tags: string | null }>(
+        "SELECT image_id, ground_truth_label, segment_tags FROM dataset_items WHERE dataset_id = ?",
+        childId
+      );
+      const changes: Array<{ imageId: string; label: string | null; tags: string }> = [];
+      for (const it of childItems) {
+        const imageId = String(it.image_id || "");
+        const master = masterByImage.get(imageId);
+        if (!master) continue; // image not in master; nothing to sync
+        const diff = diffRow(master, { label: it.ground_truth_label ?? null, tags: it.segment_tags ?? "[]" }, opts.skipEmpty === true);
+        if (diff.changed) changes.push({ imageId, label: diff.label, tags: diff.tags });
+      }
+      if (changes.length === 0) continue;
+      updated += changes.length;
+      touchedSplits.push(childId);
+      if (opts.dryRun) continue;
+
+      const tx = dataStore.transaction((store, payload: typeof changes) => {
+        for (const c of payload) {
+          store.run(
+            "UPDATE dataset_items SET ground_truth_label = ?, segment_tags = ? WHERE dataset_id = ? AND image_id = ?",
+            c.label,
+            c.tags,
+            childId,
+            c.imageId
+          );
+        }
+      });
+      tx(changes);
+      this.refreshDatasetStats(childId, now);
+      this.refreshItemsLabeledCount(childId);
+    }
+
+    return { splitIds: touchedSplits, updated };
   }
 
   updateItemStatus(itemId: string, status: string) {
