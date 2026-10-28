@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Dataset, DatasetItem, Detection, SplitType, ReviewFlag } from "@/types";
 import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
@@ -2051,11 +2051,13 @@ function AppendImagesForm({
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
 
+  const fileRowsRef = useRef(fileRows);
+  fileRowsRef.current = fileRows;
   useEffect(() => {
     return () => {
-      fileRows.forEach((r) => URL.revokeObjectURL(r.preview));
+      fileRowsRef.current.forEach((r) => URL.revokeObjectURL(r.preview));
     };
-  }, [fileRows]);
+  }, []);
 
   const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files || []);
@@ -2451,6 +2453,7 @@ function GlobalDatasetUploadForm({
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const selectedDetection = detections.find((d) => d.detection_id === detectionId) || null;
   const segmentOptions = Array.isArray(selectedDetection?.segment_taxonomy) ? selectedDetection.segment_taxonomy : [];
 
@@ -2490,15 +2493,20 @@ function GlobalDatasetUploadForm({
     setAttributeDraft((prev) => prev.filter((item) => item !== value));
   };
 
+  const fileRowsRef = useRef(fileRows);
+  fileRowsRef.current = fileRows;
   useEffect(() => {
     return () => {
-      fileRows.forEach((r) => URL.revokeObjectURL(r.preview));
+      fileRowsRef.current.forEach((r) => URL.revokeObjectURL(r.preview));
     };
-  }, [fileRows]);
+  }, []);
 
-  const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(event.target.files || []);
+  const addFiles = (incoming: File[]) => {
+    const picked = incoming.filter(
+      (f) => f.type.startsWith("image/") || /\.(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|avif)$/i.test(f.name)
+    );
     if (picked.length === 0) return;
+    const stamp = Date.now();
     const nextRows: Array<{
       id: string;
       file: File;
@@ -2509,7 +2517,7 @@ function GlobalDatasetUploadForm({
     }> = picked.map((file, i) => {
       const base = file.name.replace(/\.[^.]+$/, "");
       return {
-        id: `${Date.now()}_${i}_${base}`,
+        id: `${stamp}_${i}_${base}`,
         file,
         preview: URL.createObjectURL(file),
         imageId: sanitizeImageId(base || `image_${i + 1}`),
@@ -2518,7 +2526,17 @@ function GlobalDatasetUploadForm({
       };
     });
     setFileRows((prev) => [...prev, ...nextRows]);
+  };
+
+  const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    addFiles(Array.from(event.target.files || []));
     event.currentTarget.value = "";
+  };
+
+  const onDropFiles = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    addFiles(Array.from(event.dataTransfer.files || []));
   };
 
   const removeFileRow = (id: string) => {
@@ -2802,15 +2820,32 @@ function GlobalDatasetUploadForm({
             onChange={onPickFiles}
             className="hidden"
           />
-          <label
-            htmlFor="saved-datasets-files-input"
-            className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!isDragging) setIsDragging(true);
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              setIsDragging(false);
+            }}
+            onDrop={onDropFiles}
+            className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 py-8 text-center transition-colors ${
+              isDragging ? "border-sky-500 bg-sky-500/10" : "border-gray-700 bg-gray-900/40"
+            }`}
           >
-            Choose Files
-          </label>
-          {fileRows.length > 0 && (
-            <span className="ml-3 text-xs text-gray-400">{fileRows.length} file{fileRows.length !== 1 ? "s" : ""} selected</span>
-          )}
+            <p className="text-xs text-gray-300">Drag &amp; drop images here</p>
+            <p className="text-[11px] text-gray-500">or</p>
+            <label
+              htmlFor="saved-datasets-files-input"
+              className="inline-block px-3 py-2 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 cursor-pointer hover:bg-gray-800"
+            >
+              Choose Files
+            </label>
+            {fileRows.length > 0 && (
+              <span className="text-xs text-gray-400">{fileRows.length} file{fileRows.length !== 1 ? "s" : ""} selected</span>
+            )}
+          </div>
           {fileRows.length > 0 && (
             <div className="app-table-wrap max-h-72 overflow-y-auto">
               <table className="app-table app-table-fixed text-xs">

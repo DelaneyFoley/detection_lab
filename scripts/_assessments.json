@@ -1,0 +1,482 @@
+{
+  "310": {
+    "verdict": "Agree",
+    "rationale": "Only light rust staining on the braided supply-line sheath; no corroded eligible valve/ferrule in view."
+  },
+  "311": {
+    "verdict": "Agree",
+    "rationale": "Copper patina, brass drain valve, and galvanized nipple bases with only a minor green spot; no substantial verdigris crust or flaking rust."
+  },
+  "315": {
+    "verdict": "Disagree",
+    "rationale": "I don't see clear major corrosion: the cluster shows clean braided flex, a brass ball valve and unions with light tarnish, copper patina, and dull galvanized nipples. The model's NOT_DETECTED looks defensible, so HIL's DETECTED may be an over-correction - worth a recheck."
+  },
+  "317": {
+    "verdict": "Agree",
+    "rationale": "Copper patina, brass gas valve/fittings with light tarnish, and a galvanized flex; no qualifying corrosion product."
+  },
+  "318": {
+    "verdict": "Agree",
+    "rationale": "Galvanized flex, copper patina, and brass fittings with light tarnish; no qualifying corrosion product."
+  },
+  "320": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve body/compression nut below the handle (eligible component), more than a faint trace, so the model's DETECTED was defensible - worth a recheck."
+  },
+  "322": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/body (eligible component, distinct from the clean handle/escutcheon); more than a faint trace, so the model's DETECTED was defensible - worth a recheck."
+  },
+  "331": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris with white crust sits on the metal valve body/stem and pipe stub (eligible components) - a qualifying corrosion product - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "336": {
+    "verdict": "Disagree",
+    "rationale": "Distinct green verdigris with white crust sits on the brass angle-stop valve body/stem (eligible component) - a qualifying corrosion product - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "338": {
+    "verdict": "Disagree",
+    "rationale": "I don't see clear major corrosion: the cluster shows copper patina, brass fittings with light tarnish, braided flex, and dull galvanized nipples. The model's NOT_DETECTED looks defensible, so HIL's DETECTED may be an over-correction - worth a recheck."
+  },
+  "340": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "343": {
+    "verdict": "Agree",
+    "rationale": "Only light tarnish/grime on the valves; no corrosion product."
+  },
+  "351": {
+    "verdict": "Agree",
+    "rationale": "Foam-insulated/painted pipes with light surface rust at a couple of galvanized unions (not heavily flaking) and brass valves; below the severity bar."
+  },
+  "355": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the valve body/compression nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "371": {
+    "verdict": "Agree",
+    "rationale": "Small single-spot green trace at the valve connection with the body otherwise clean; below the severity bar."
+  },
+  "384": {
+    "verdict": "Agree",
+    "rationale": "Mostly clean chrome fittings; the bright green is painter's tape, with only a minor localized verdigris spot - below the severity bar."
+  },
+  "396": {
+    "verdict": "Agree",
+    "rationale": "Foam-insulated pipes with a copper stub showing only a minor green spot; no substantial verdigris crust or flaking rust."
+  },
+  "400": {
+    "verdict": "Agree",
+    "rationale": "Brass fittings only lightly tarnished; no qualifying corrosion product."
+  },
+  "401": {
+    "verdict": "Agree",
+    "rationale": "Only grime/tarnish on the fittings; the green near the base is an object, not corrosion on metal."
+  },
+  "402": {
+    "verdict": "Agree",
+    "rationale": "Clean connections with only light tarnish; no corrosion product on an eligible component."
+  },
+  "403": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "404": {
+    "verdict": "Agree",
+    "rationale": "Painted pipe with a brass union showing light tarnish; no verdigris crust or flaking rust."
+  },
+  "406": {
+    "verdict": "Agree",
+    "rationale": "Mostly PVC/wiring and copper patina; no qualifying corrosion on an eligible component."
+  },
+  "407": {
+    "verdict": "Disagree",
+    "rationale": "A green-blue verdigris patch sits on the brass valve body/stem at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "408": {
+    "verdict": "Agree",
+    "rationale": "Copper patina and a brass gate valve/unions with light tarnish; no verdigris crust or flaking rust."
+  },
+  "409": {
+    "verdict": "Agree",
+    "rationale": "Copper patina and colored hose markers only; no corrosion product on metal."
+  },
+  "410": {
+    "verdict": "Disagree",
+    "rationale": "The metal sink strainer/drain body at the top shows heavy crusted, flaking orange rust eating into the metal - an eligible component that plainly meets the sink severity bar. HIL's NOT_DETECTED is a clear miss."
+  },
+  "411": {
+    "verdict": "Agree",
+    "rationale": "Pipe is foam-insulated with no visible corroded metal; the small green at the penetration is ambiguous (likely sealant) and the flex is electrical conduit - no qualifying corrosion."
+  },
+  "413": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "427": {
+    "verdict": "Disagree",
+    "rationale": "The metal tailpiece and drain T-fitting show crusted orange rust at the joints - more than a thin ring, on eligible metal drain components - so the model's DETECTED was defensible. Borderline but worth a recheck."
+  },
+  "444": {
+    "verdict": "Disagree",
+    "rationale": "The angle-stop valve body shows crusty rust corrosion at the connection (eligible component), with an adjacent water-damaged subfloor suggesting an active leak - so the model's DETECTED was defensible. Borderline, worth a recheck."
+  },
+  "445": {
+    "verdict": "Agree",
+    "rationale": "Brass T&P valve, nipples, and unions with light tarnish and copper patina; only a faint green tint at one union - no substantial verdigris crust or flaking rust."
+  },
+  "449": {
+    "verdict": "Disagree",
+    "rationale": "The rigid metal supply riser and the angle-stop valve body are covered in green verdigris - a substantial corrosion product on eligible components - so the model's DETECTED was clearly defensible and HIL's removal looks like a miss."
+  },
+  "453": {
+    "verdict": "Agree",
+    "rationale": "Dark-tarnished brass T&P valve, CPVC plastic connections, and a dusty tank top; the rusty corner fitting and tiny green spot in debris are ambiguous/minor - no clear qualifying corrosion."
+  },
+  "454": {
+    "verdict": "Agree",
+    "rationale": "White deposits are mineral/efflorescence in the excluded box; valve bodies show no corrosion product."
+  },
+  "456": {
+    "verdict": "Disagree",
+    "rationale": "Heavy green verdigris crust covers the brass angle-stop valve body and compression nut - a substantial corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "466": {
+    "verdict": "Agree",
+    "rationale": "Green verdigris at the brass valve body and copper solder joint supports HIL's DETECTED under the lower water-heater bar - a reasonable catch of what the model missed (the green handle itself is excluded, but the metal shows verdigris)."
+  },
+  "467": {
+    "verdict": "Agree",
+    "rationale": "Copper patina with white solder-flux residue at joints and only minor localized green; no substantial verdigris crust or flaking rust."
+  },
+  "468": {
+    "verdict": "Agree",
+    "rationale": "Copper patina with solder flux and a clean brass compression fitting; no qualifying corrosion."
+  },
+  "469": {
+    "verdict": "Agree",
+    "rationale": "Strainer shows an excluded surface rust ring only; the rest is PVC - no qualifying corrosion."
+  },
+  "472": {
+    "verdict": "Agree",
+    "rationale": "Clean chrome valve body with only a light tan/mineral deposit at the nut; no qualifying corrosion."
+  },
+  "477": {
+    "verdict": "Agree",
+    "rationale": "Brass valves with light tarnish, clean braided stainless flex, and PEX supply; no qualifying corrosion."
+  },
+  "481": {
+    "verdict": "Agree",
+    "rationale": "Connections are clean/newer with no corrosion present."
+  },
+  "488": {
+    "verdict": "Agree",
+    "rationale": "Rust is on the excluded escutcheon/base ring and the nut crust is mineral; the valve body is not clearly corroded."
+  },
+  "491": {
+    "verdict": "Agree",
+    "rationale": "Old/dull valve bodies with light tarnish; no flaking rust or verdigris."
+  },
+  "493": {
+    "verdict": "Agree",
+    "rationale": "Copper patina and brass fittings with light tarnish; no verdigris crust or flaking rust."
+  },
+  "497": {
+    "verdict": "Agree",
+    "rationale": "Valve bodies show only normal brass tarnish and grime; no corrosion product."
+  },
+  "499": {
+    "verdict": "Agree",
+    "rationale": "Copper patina, a galvanized flex duct, and a brass valve with light tarnish; no verdigris crust or flaking rust on an eligible component."
+  },
+  "501": {
+    "verdict": "Disagree",
+    "rationale": "Clear green verdigris is present on the metal angle-stop valve body and hose-end ferrule - a qualifying corrosion product on eligible components - so HIL's removal looks like a miss."
+  },
+  "503": {
+    "verdict": "Agree",
+    "rationale": "HIL correctly caught corrosion the model missed: green verdigris on the valve body/stem. (Note: HIL flagged valve verdigris here but removed similar verdigris in several FP cases - an inconsistency worth reviewing.)"
+  },
+  "516": {
+    "verdict": "Agree",
+    "rationale": "Brass union fittings and valves with tarnish and minor deposits; no clear verdigris crust or heavy flaking rust."
+  },
+  "534": {
+    "verdict": "Agree",
+    "rationale": "Brass nipple/union with light tarnish, braided flex, and copper; no verdigris crust or flaking rust."
+  },
+  "558": {
+    "verdict": "Agree",
+    "rationale": "Copper patina, brass union with light tarnish, CPVC and foam-insulated nipples; no verdigris crust or flaking rust."
+  },
+  "564": {
+    "verdict": "Agree",
+    "rationale": "Copper patina, brass T&P valve with light tarnish, clean braided flex; no qualifying corrosion product."
+  },
+  "568": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "573": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass angle-stop valve stem/body (eligible component, beyond just the handle); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "574": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem and base (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "578": {
+    "verdict": "Agree",
+    "rationale": "Galvanized gas union/flex with white crusty deposits (likely mineral) and light tarnish; no clear verdigris crust or heavy flaking rust."
+  },
+  "587": {
+    "verdict": "Agree",
+    "rationale": "The white crusty deposits read as hard-water mineral/efflorescence (excluded), with copper-flex patina and a dull galvanized nipple; no clear verdigris crust or flaking rust."
+  },
+  "591": {
+    "verdict": "Agree",
+    "rationale": "Copper patina plus dust/grime only; no heavy flaking rust or verdigris on the fittings."
+  },
+  "592": {
+    "verdict": "Disagree",
+    "rationale": "The visible plumbing is mostly CPVC plastic with a green fitting (likely a plastic part/teflon) and a lightly tarnished brass drain valve; no clearly visible major corrosion supports HIL's DETECTED - borderline, worth a recheck."
+  },
+  "604": {
+    "verdict": "Agree",
+    "rationale": "Dark cluster with black-iron surface oxidation, copper patina, and brass tarnish; no heavy flaking rust or verdigris crust."
+  },
+  "607": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris covers the rigid metal supply riser and the angle-stop valve body - a substantial corrosion product on eligible components - so the model's DETECTED was clearly defensible and HIL's removal looks like a miss."
+  },
+  "611": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass angle-stop valve body/stem (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "614": {
+    "verdict": "Agree",
+    "rationale": "Only grime/tarnish on the braided lines; no corrosion product."
+  },
+  "616": {
+    "verdict": "Disagree",
+    "rationale": "The tank top head, nipples, and connection fittings are covered in heavy flaking/crusty rust - unambiguous major corrosion on eligible components - so HIL's NOT_DETECTED is a clear, significant miss."
+  },
+  "618": {
+    "verdict": "Agree",
+    "rationale": "The whitish buildup is wall plaster dust from the opened wall, and the brass bodies are merely tarnished - no qualifying corrosion."
+  },
+  "624": {
+    "verdict": "Disagree",
+    "rationale": "A green verdigris band sits on the brass valve stem/nut (an eligible component); the rusty escutcheon below is excluded, but the stem verdigris is a qualifying product - borderline, worth a recheck."
+  },
+  "626": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/nut at the supply connection (eligible component), more than a faint trace; borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "628": {
+    "verdict": "Agree",
+    "rationale": "A single small localized green spot at the valve connection - reasonably treated as a single-spot trace below the severity bar."
+  },
+  "629": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass angle-stop valve body at the floor connection (eligible component), more than a faint trace; borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "633": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the valve stem/nut at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "649": {
+    "verdict": "Agree",
+    "rationale": "Brass unions with tarnish and red pipe-marker bands plus copper patina; no clear verdigris crust or heavy flaking rust."
+  },
+  "651": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the valve stem/body at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "661": {
+    "verdict": "Agree",
+    "rationale": "Surface rust on the iron gas-valve union (not heavily flaking) plus brass tarnish; below the severity bar."
+  },
+  "662": {
+    "verdict": "Agree",
+    "rationale": "Mostly plastic CPVC/PEX pipes; the metal tank connections show only light tarnish - no qualifying corrosion."
+  },
+  "672": {
+    "verdict": "Agree",
+    "rationale": "Overexposed; CPVC plus galvanized nipples with tarnish and a minor localized green spot - no substantial qualifying corrosion."
+  },
+  "673": {
+    "verdict": "Agree",
+    "rationale": "CPVC plus galvanized nipple connections with tarnish and dark sediment; no verdigris crust or heavy flaking rust."
+  },
+  "683": {
+    "verdict": "Agree",
+    "rationale": "Valve is clean/dull galvanized with only a tiny single-spot green trace; below the severity bar."
+  },
+  "684": {
+    "verdict": "Agree",
+    "rationale": "Moderate but defensible: crusty buildup at the supply-valve ferrule and light trap corrosion support HIL's DETECTED."
+  },
+  "701": {
+    "verdict": "Disagree",
+    "rationale": "The valve stem shows green verdigris and the valve base carries heavy rust crust extending beyond a mere escutcheon ring - a qualifying corrosion product on the eligible valve - so the model's DETECTED was defensible. Borderline, worth a recheck."
+  },
+  "708": {
+    "verdict": "Agree",
+    "rationale": "HIL correctly caught corrosion the model missed: green verdigris on the metal tailpiece and rust crusting at the floor joint clearly meet the bar."
+  },
+  "718": {
+    "verdict": "Disagree",
+    "rationale": "Heavy green verdigris covers the brass angle-stop valve body and stem (not just the handle) - a clear qualifying corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "719": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass angle-stop valve stem/body at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "722": {
+    "verdict": "Disagree",
+    "rationale": "Distinct green verdigris is present on the brass valve stem/compression nut at the connection (eligible component), with light rust on the lower ferrule - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "723": {
+    "verdict": "Disagree",
+    "rationale": "Heavy green verdigris crust covers the brass angle-stop valve body and compression nut - a substantial corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "727": {
+    "verdict": "Disagree",
+    "rationale": "Heavy green verdigris covers the brass angle-stop valve body and stem - a clear qualifying corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "741": {
+    "verdict": "Agree",
+    "rationale": "Copper patina plus brass tarnish on the cluster; no verdigris crust or orange flaking rust."
+  },
+  "743": {
+    "verdict": "Agree",
+    "rationale": "Copper patina with white solder-flux residue at the joints; no qualifying corrosion product."
+  },
+  "744": {
+    "verdict": "Disagree",
+    "rationale": "Heavy green verdigris crust covers the brass angle-stop valve body and connections - a clear qualifying corrosion product on an eligible component, more than a trace - so HIL's removal looks like a miss."
+  },
+  "755": {
+    "verdict": "Agree",
+    "rationale": "The flange rust reads as an excluded rust ring and the supply lines are normal copper patina; borderline green at the tailpiece but not a clear qualifying patch."
+  },
+  "756": {
+    "verdict": "Agree",
+    "rationale": "Moderate white/green crust at the brass nipple/union joints supports HIL's DETECTED under the lower water-heater bar - a reasonable catch of what the model missed."
+  },
+  "770": {
+    "verdict": "Agree",
+    "rationale": "Good handle-vs-body distinction: the eye-catching rust is on the excluded handle, while the eligible valve body shows only moderate oxidation below the severity bar."
+  },
+  "771": {
+    "verdict": "Agree",
+    "rationale": "Brass valve bodies and copper show normal patina only; no verdigris or flaking rust on any eligible fitting."
+  },
+  "773": {
+    "verdict": "Disagree",
+    "rationale": "The floor angle-stop valve body shows green verdigris with white crusty buildup - a substantial corrosion product on an eligible component - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "774": {
+    "verdict": "Disagree",
+    "rationale": "The brass angle-stop valve body carries a green verdigris patch (eligible component) that reads as more than a faint trace, so the model's DETECTED was defensible. Borderline, worth a recheck."
+  },
+  "775": {
+    "verdict": "Agree",
+    "rationale": "Plastic/rubber drain components and clean supply lines; no eligible metal corrosion."
+  },
+  "777": {
+    "verdict": "Agree",
+    "rationale": "Dark image; the buildup appears to be mineral efflorescence plus grime/tarnish rather than a clear corrosion product - borderline, worth a recheck."
+  },
+  "779": {
+    "verdict": "Disagree",
+    "rationale": "Heavy green verdigris covers the entire brass angle-stop valve body and stem (not just the handle), with white crust at the base - a substantial corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "789": {
+    "verdict": "Disagree",
+    "rationale": "Distinct green verdigris is present on the metal angle-stop valve body and at the braided hose-end ferrule - a qualifying corrosion product on eligible components - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "791": {
+    "verdict": "Disagree",
+    "rationale": "There is distinct green verdigris on the brass valve stem/body directly behind the handle on the upper valve - exactly the finding the laundry prompt flags as commonly missed. It is more than a trace, so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "792": {
+    "verdict": "Disagree",
+    "rationale": "Green verdigris sits on the brass valve stem/nut at the supply connection (eligible component), more than a faint trace; borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "794": {
+    "verdict": "Agree",
+    "rationale": "HIL correctly caught corrosion the model missed: green verdigris on the valve body and the tank-inlet fitting."
+  },
+  "800": {
+    "verdict": "Agree",
+    "rationale": "Copper patina and insulated pipes; the small green at the far connection is ambiguous and minor - below the bar."
+  },
+  "812": {
+    "verdict": "Agree",
+    "rationale": "The visible rust is on the valve handles and the box/wall (all excluded), and the valve bodies show only light tarnish, not a qualifying corrosion product."
+  },
+  "813": {
+    "verdict": "Agree",
+    "rationale": "Clean chrome valve and line; no qualifying corrosion."
+  },
+  "831": {
+    "verdict": "Agree",
+    "rationale": "Corrosion-colored staining is on the floor/wall, not the metal supply line; no qualifying corrosion."
+  },
+  "832": {
+    "verdict": "Disagree",
+    "rationale": "A green verdigris crust sits on the metal supply pipe at the wall penetration (an eligible component), larger than a single trace spot, so the model's DETECTED was defensible. Borderline on severity, worth a recheck."
+  },
+  "835": {
+    "verdict": "Agree",
+    "rationale": "Copper patina plus brass tarnish; no verdigris crust or orange flaking rust at the cluster."
+  },
+  "842": {
+    "verdict": "Agree",
+    "rationale": "Dull/tarnished fittings with sediment only; no verdigris crust or orange flaking rust at the cluster."
+  },
+  "843": {
+    "verdict": "Agree",
+    "rationale": "Good call: the green is on the excluded valve handle, not the valve body."
+  },
+  "845": {
+    "verdict": "Disagree",
+    "rationale": "The brass angle-stop valve body at the supply connection appears to carry heavy green verdigris. Borderline at this resolution, but it looks like a qualifying corrosion product on an eligible component and warrants a recheck of HIL's removal."
+  },
+  "846": {
+    "verdict": "Agree",
+    "rationale": "Outdoor brass valves/fittings show tarnish and darkening only; no verdigris crust or orange flaking rust."
+  },
+  "855": {
+    "verdict": "Agree",
+    "rationale": "Clean chrome valve and braided line; escutcheon excluded - no qualifying corrosion."
+  },
+  "863": {
+    "verdict": "Agree",
+    "rationale": "The nipple/union connections are darkened galvanized metal plus copper patina with no verdigris crust or orange flaking rust; below even the lower water-heater bar."
+  },
+  "867": {
+    "verdict": "Agree",
+    "rationale": "The orange-yellow crust at the top fitting most likely is hardened pipe-joint compound, not a corrosion product, and the rest of the cluster shows only patina - borderline but within HIL's call."
+  },
+  "868": {
+    "verdict": "Disagree",
+    "rationale": "Distinct green verdigris crust sits at several copper elbow/solder joints (eligible components); under the lower water-heater bar this looks like a qualifying corrosion product the model caught - borderline, worth a recheck."
+  },
+  "869": {
+    "verdict": "Agree",
+    "rationale": "Copper patina, clean brass valve, and galvanized nipples with light tarnish; no distinct verdigris crust or flaking rust."
+  },
+  "881": {
+    "verdict": "Agree",
+    "rationale": "Copper patina plus brass tarnish at the connection cluster; no qualifying corrosion product."
+  },
+  "894": {
+    "verdict": "Agree",
+    "rationale": "No visible qualifying corrosion on the supply line/valve in this dark frame."
+  }
+}

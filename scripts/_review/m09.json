@@ -1,0 +1,32 @@
+{
+  "683": {
+    "rationale": "The angle-stop valve is clean, dull galvanized metal with only a tiny single-spot green trace at the connection, which the toilet prompt excludes as a trace amount at a single spot, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Valve is clean/dull galvanized with only a tiny single-spot green trace; below the severity bar."
+  },
+  "626": {
+    "rationale": "HIL may have read the green on the valve stem as a spotty single-location trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem/nut at the supply connection (eligible component), more than a faint trace; borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "624": {
+    "rationale": "HIL may have read the rust as confined to the escutcheon (excluded) and the green on the stem as light discoloration, keeping it below the bar and supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "A green verdigris band sits on the brass valve stem/nut (an eligible component); the rusty escutcheon below is excluded, but the stem verdigris is a qualifying product - borderline, worth a recheck."
+  },
+  "651": {
+    "rationale": "HIL may have read the green at the valve connection as a localized single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the valve stem/body at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "573": {
+    "rationale": "HIL may have read the valve green as confined to the handle or as single-spot discoloration below the bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass angle-stop valve stem/body (eligible component, beyond just the handle); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "574": {
+    "rationale": "HIL may have read the green at the valve base as escutcheon staining (excluded) and the stem green as light discoloration below the bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem and base (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  }
+}

@@ -316,11 +316,13 @@ export function DetectionSetup({
     });
   }, [selectedPromptId, prompts]);
 
+  const quickTestFilesRef = useRef(quickTestFiles);
+  quickTestFilesRef.current = quickTestFiles;
   useEffect(() => {
     return () => {
-      quickTestFiles.forEach((f) => URL.revokeObjectURL(f.preview));
+      quickTestFilesRef.current.forEach((f) => URL.revokeObjectURL(f.preview));
     };
-  }, [quickTestFiles]);
+  }, []);
 
   useEffect(() => {
     if (quickTestPreviewIndex == null) return;

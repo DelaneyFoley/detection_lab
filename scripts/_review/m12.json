@@ -1,0 +1,32 @@
+{
+  "472": {
+    "rationale": "The chrome valve body is clean with only a light tan/mineral deposit at the compression nut, which is below the severity bar, so NOT_DETECTED follows.",
+    "verdict": "Agree",
+    "assessment": "Clean chrome valve body with only a light tan/mineral deposit at the nut; no qualifying corrosion."
+  },
+  "336": {
+    "rationale": "HIL may have read the green/white at the valve as a single-spot deposit or mineral crust below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Distinct green verdigris with white crust sits on the brass angle-stop valve body/stem (eligible component) - a qualifying corrosion product - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "384": {
+    "rationale": "The chrome drain and supply fittings are largely clean; the prominent green is painter's tape and only a minor localized verdigris spot appears at one valve, which the prompt treats as a single-spot trace, so NOT_DETECTED follows.",
+    "verdict": "Agree",
+    "assessment": "Mostly clean chrome fittings; the bright green is painter's tape, with only a minor localized verdigris spot - below the severity bar."
+  },
+  "331": {
+    "rationale": "HIL may have read the green/white at the valve as mineral crust plus light discoloration rather than a corrosion product, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris with white crust sits on the metal valve body/stem and pipe stub (eligible components) - a qualifying corrosion product - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "413": {
+    "rationale": "HIL may have read the green on the valve stem as a single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "456": {
+    "rationale": "HIL may have read the valve green as handle-area or single-spot discoloration below the bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Heavy green verdigris crust covers the brass angle-stop valve body and compression nut - a substantial corrosion product on an eligible component - so HIL's removal looks like a miss."
+  }
+}

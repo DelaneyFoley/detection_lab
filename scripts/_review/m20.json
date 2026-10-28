@@ -1,0 +1,32 @@
+{
+  "466": {
+    "rationale": "The brass shut-off/drain valve body and copper solder joint show green verdigris (distinct from the green painted handle) - an eligible connection-cluster component with a corrosion product - which under the lower water-heater bar supports the change to DETECTED.",
+    "verdict": "Agree",
+    "assessment": "Green verdigris at the brass valve body and copper solder joint supports HIL's DETECTED under the lower water-heater bar - a reasonable catch of what the model missed (the green handle itself is excluded, but the metal shows verdigris)."
+  },
+  "311": {
+    "rationale": "The top connections are bright copper with smooth patina plus a brass drain valve and galvanized nipple bases with only a minor green spot, not a substantial verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina, brass drain valve, and galvanized nipple bases with only a minor green spot; no substantial verdigris crust or flaking rust."
+  },
+  "453": {
+    "rationale": "The supply connections are CPVC plastic, the brass T&P valve is dark-tarnished (not a verdigris crust), and the rusty bit at the tank corner and tiny green spot in the floor debris are ambiguous/minor, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Dark-tarnished brass T&P valve, CPVC plastic connections, and a dusty tank top; the rusty corner fitting and tiny green spot in debris are ambiguous/minor - no clear qualifying corrosion."
+  },
+  "317": {
+    "rationale": "The connection cluster shows copper with smooth patina, a brass gas valve/fittings with light tarnish, and a galvanized flex connector, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina, brass gas valve/fittings with light tarnish, and a galvanized flex; no qualifying corrosion product."
+  },
+  "408": {
+    "rationale": "The connection cluster shows copper with smooth patina, foam-insulated pipes, and a brass gate valve/unions with light tarnish, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina and a brass gate valve/unions with light tarnish; no verdigris crust or flaking rust."
+  },
+  "318": {
+    "rationale": "The connections show a galvanized flex connector, copper with smooth patina, and brass fittings with light tarnish, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Galvanized flex, copper patina, and brass fittings with light tarnish; no qualifying corrosion product."
+  }
+}

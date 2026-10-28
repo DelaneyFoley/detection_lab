@@ -1,0 +1,32 @@
+{
+  "402": {
+    "rationale": "The chrome/brass valve bodies and braided connectors are clean with only light tarnish; no flaking rust or verdigris crust on any eligible component, so NOT_DETECTED follows the severity bar.",
+    "verdict": "Agree",
+    "assessment": "Clean connections with only light tarnish; no corrosion product on an eligible component."
+  },
+  "401": {
+    "rationale": "The valve bodies and fittings show only grime and light tarnish, and the green object at the base is debris/packaging rather than verdigris on metal, so no eligible component meets the severity bar.",
+    "verdict": "Agree",
+    "assessment": "Only grime/tarnish on the fittings; the green near the base is an object, not corrosion on metal."
+  },
+  "400": {
+    "rationale": "The shut-off valve and brass fittings show light tarnish and dust only, with no flaking rust or green verdigris crust on the valve body or stem, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Brass fittings only lightly tarnished; no qualifying corrosion product."
+  },
+  "497": {
+    "rationale": "The laundry box is excluded; the brass valve bodies and braided connectors show normal brass tarnish and grime with no verdigris crust or flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Valve bodies show only normal brass tarnish and grime; no corrosion product."
+  },
+  "491": {
+    "rationale": "The valve handles are excluded and the valve bodies are dull/old chrome with light tarnish only - no flaking rust eating into the metal and no verdigris crust - so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Old/dull valve bodies with light tarnish; no flaking rust or verdigris."
+  },
+  "454": {
+    "rationale": "The recessed box shows white mineral/efflorescence staining, which the prompt excludes as hard-water/mineral scale, and the box itself is excluded; the brass valve bodies show no verdigris crust or flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "White deposits are mineral/efflorescence in the excluded box; valve bodies show no corrosion product."
+  }
+}

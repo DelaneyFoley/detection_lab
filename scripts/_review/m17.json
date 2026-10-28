@@ -1,0 +1,32 @@
+{
+  "558": {
+    "rationale": "The connection cluster shows a copper riser with smooth patina, a brass union with light tarnish, and CPVC/foam-insulated nipples, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina, brass union with light tarnish, CPVC and foam-insulated nipples; no verdigris crust or flaking rust."
+  },
+  "467": {
+    "rationale": "The copper pipes show smooth brown patina with white solder-flux residue at the joints and only minor localized green; with no substantial verdigris crust and no orange flaking rust, NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina with white solder-flux residue at joints and only minor localized green; no substantial verdigris crust or flaking rust."
+  },
+  "468": {
+    "rationale": "The copper pipes carry smooth patina with white solder-flux residue and the cold-inlet brass compression fitting is clean, with no verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina with solder flux and a clean brass compression fitting; no qualifying corrosion."
+  },
+  "616": {
+    "rationale": "To support NOT_DETECTED, the heavy rust would have to be read as confined to the tank jacket's top edge/shell (which the prompt excludes as surface rust on the jacket) rather than the fittings.",
+    "verdict": "Disagree",
+    "assessment": "The tank top head, nipples, and connection fittings are covered in heavy flaking/crusty rust - unambiguous major corrosion on eligible components - so HIL's NOT_DETECTED is a clear, significant miss."
+  },
+  "564": {
+    "rationale": "The connection cluster shows copper elbows with patina and solder flux, a brass T&P valve with light tarnish, and clean braided flex connectors, with no verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina, brass T&P valve with light tarnish, clean braided flex; no qualifying corrosion product."
+  },
+  "592": {
+    "rationale": "The nipple/connection area behind the tank is in shadow and could hide verdigris on a metal fitting, which would support reading an eligible component as corroded and changing to DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "The visible plumbing is mostly CPVC plastic with a green fitting (likely a plastic part/teflon) and a lightly tarnished brass drain valve; no clearly visible major corrosion supports HIL's DETECTED - borderline, worth a recheck."
+  }
+}

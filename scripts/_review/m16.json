@@ -1,0 +1,32 @@
+{
+  "672": {
+    "rationale": "In an overexposed frame the connections are CPVC plastic plus galvanized nipples with light tarnish and only a minor localized green spot, which the prompt treats as below the bar; no substantial verdigris crust or orange flaking rust, so NOT_DETECTED follows.",
+    "verdict": "Agree",
+    "assessment": "Overexposed; CPVC plus galvanized nipples with tarnish and a minor localized green spot - no substantial qualifying corrosion."
+  },
+  "673": {
+    "rationale": "The connections are CPVC plastic plus galvanized nipples with light tarnish and some dark sediment at the element cover, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "CPVC plus galvanized nipple connections with tarnish and dark sediment; no verdigris crust or heavy flaking rust."
+  },
+  "604": {
+    "rationale": "In a dark frame the cluster shows black-iron gas pipe with surface oxidation, copper patina, and brass tarnish, with no rust heavily flaking/eating at a fitting and no verdigris crust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Dark cluster with black-iron surface oxidation, copper patina, and brass tarnish; no heavy flaking rust or verdigris crust."
+  },
+  "649": {
+    "rationale": "The connection cluster shows brass unions/couplings with tarnish and red pipe-marker bands plus copper patina; no clear green/white verdigris crust and no heavy flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Brass unions with tarnish and red pipe-marker bands plus copper patina; no clear verdigris crust or heavy flaking rust."
+  },
+  "516": {
+    "rationale": "The CPVC-to-tank connections use brass unions and valves with tarnish and only minor deposits, with no clear localized verdigris crust and no heavy flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Brass union fittings and valves with tarnish and minor deposits; no clear verdigris crust or heavy flaking rust."
+  },
+  "662": {
+    "rationale": "The visible plumbing is mostly CPVC/PEX plastic and the metal tank connections show only light tarnish, with no verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Mostly plastic CPVC/PEX pipes; the metal tank connections show only light tarnish - no qualifying corrosion."
+  }
+}

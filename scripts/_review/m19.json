@@ -1,0 +1,32 @@
+{
+  "534": {
+    "rationale": "The connection shows a braided stainless flex line and a brass nipple/union with light tarnish plus copper, with no localized verdigris crust and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Brass nipple/union with light tarnish, braided flex, and copper; no verdigris crust or flaking rust."
+  },
+  "396": {
+    "rationale": "The top piping is foam-insulated with a copper stub that shows only a minor green spot at the anode-cover area, not a substantial verdigris crust, and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Foam-insulated pipes with a copper stub showing only a minor green spot; no substantial verdigris crust or flaking rust."
+  },
+  "315": {
+    "rationale": "Some corrosion at the nipple/union connections would support treating an eligible connection-cluster component as corroded and changing to DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "I don't see clear major corrosion: the cluster shows clean braided flex, a brass ball valve and unions with light tarnish, copper patina, and dull galvanized nipples. The model's NOT_DETECTED looks defensible, so HIL's DETECTED may be an over-correction - worth a recheck."
+  },
+  "338": {
+    "rationale": "Corrosion at the brass/nipple connections would support treating an eligible connection-cluster component as corroded and changing to DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "I don't see clear major corrosion: the cluster shows copper patina, brass fittings with light tarnish, braided flex, and dull galvanized nipples. The model's NOT_DETECTED looks defensible, so HIL's DETECTED may be an over-correction - worth a recheck."
+  },
+  "351": {
+    "rationale": "The outdoor cluster is mostly foam-insulated/painted pipe with only light surface rust at a couple of galvanized unions (not heavily flaking) and brass valves with tarnish, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Foam-insulated/painted pipes with light surface rust at a couple of galvanized unions (not heavily flaking) and brass valves; below the severity bar."
+  },
+  "493": {
+    "rationale": "The top connections are copper with smooth patina and brass fittings with light tarnish, with no localized verdigris crust and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina and brass fittings with light tarnish; no verdigris crust or flaking rust."
+  }
+}

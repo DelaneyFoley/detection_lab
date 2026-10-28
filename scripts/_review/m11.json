@@ -1,0 +1,32 @@
+{
+  "403": {
+    "rationale": "HIL may have read the green at the valve nut as a single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "607": {
+    "rationale": "HIL may have read the green on the rigid riser as paint/light oxidation and the rust as confined to the floor escutcheon (excluded), keeping it below the bar and supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris covers the rigid metal supply riser and the angle-stop valve body - a substantial corrosion product on eligible components - so the model's DETECTED was clearly defensible and HIL's removal looks like a miss."
+  },
+  "444": {
+    "rationale": "In shadow near a water-damaged subfloor, HIL may have read the valve deposit as dirt/staining rather than a corrosion product, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "The angle-stop valve body shows crusty rust corrosion at the connection (eligible component), with an adjacent water-damaged subfloor suggesting an active leak - so the model's DETECTED was defensible. Borderline, worth a recheck."
+  },
+  "310": {
+    "rationale": "The only visible corrosion-like feature is light rust staining on the braided hose sheath; no eligible valve body or ferrule shows flaking rust or a verdigris crust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Only light rust staining on the braided supply-line sheath; no corroded eligible valve/ferrule in view."
+  },
+  "355": {
+    "rationale": "HIL may have read the green/white at the valve nut as a single-spot trace or mineral deposit below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the valve body/compression nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "340": {
+    "rationale": "HIL may have read the green on the valve stem as a single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem/nut at the connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "843": {
+    "rationale": "The green verdigris is confined to the valve HANDLE/lever, which the toilet prompt excludes, while the valve body is clean/coated; no eligible component meets the severity bar, so NOT_DETECTED follows.",
+    "verdict": "Agree",
+    "assessment": "Good call: the green is on the excluded valve handle, not the valve body."
+  },
+  "779": {
+    "rationale": "HIL may have read the valve green as confined to the handle or as a single-spot deposit; under that reading it stays below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Heavy green verdigris covers the entire brass angle-stop valve body and stem (not just the handle), with white crust at the base - a substantial corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "792": {
+    "rationale": "HIL may have read the green at the valve connection as a spotty, single-location trace, which the prompt excludes from the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem/nut at the supply connection (eligible component), more than a faint trace; borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "727": {
+    "rationale": "HIL may have read the valve green as handle-only or single-spot discoloration below the bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Heavy green verdigris covers the brass angle-stop valve body and stem - a clear qualifying corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "794": {
+    "rationale": "The brass angle-stop valve body and the tank-inlet connection fitting show green verdigris - an eligible component carrying a qualifying corrosion product - which supports the change to DETECTED.",
+    "verdict": "Agree",
+    "assessment": "HIL correctly caught corrosion the model missed: green verdigris on the valve body and the tank-inlet fitting."
+  },
+  "722": {
+    "rationale": "HIL may have read the green at the valve nut as a single-spot trace and the ferrule rust as light surface staining, below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Distinct green verdigris is present on the brass valve stem/compression nut at the connection (eligible component), with light rust on the lower ferrule - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "723": {
+    "rationale": "HIL may have read the valve green/white as a handle-area deposit or hard-water crust rather than a corrosion product on the body, keeping it below the bar and supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Heavy green verdigris crust covers the brass angle-stop valve body and compression nut - a substantial corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "628": {
+    "rationale": "The valve shows only a single small green spot at the connection, which the toilet prompt treats as a trace amount at a single spot (excluded); the rest of the metal is clean, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "A single small localized green spot at the valve connection - reasonably treated as a single-spot trace below the severity bar."
+  },
+  "629": {
+    "rationale": "HIL may have read the green at the valve/floor connection as a localized single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass angle-stop valve body at the floor connection (eligible component), more than a faint trace; borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "701": {
+    "rationale": "HIL may have read the rust as confined to the floor escutcheon/flange (excluded by the prompt) and the valve as only lightly discolored, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "The valve stem shows green verdigris and the valve base carries heavy rust crust extending beyond a mere escutcheon ring - a qualifying corrosion product on the eligible valve - so the model's DETECTED was defensible. Borderline, worth a recheck."
+  },
+  "718": {
+    "rationale": "HIL may have read the valve green as confined to the handle or as single-spot discoloration below the bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Heavy green verdigris covers the brass angle-stop valve body and stem (not just the handle) - a clear qualifying corrosion product on an eligible component - so HIL's removal looks like a miss."
+  },
+  "719": {
+    "rationale": "HIL may have read the green on the valve as a spotty single-location trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass angle-stop valve stem/body at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  }
+}

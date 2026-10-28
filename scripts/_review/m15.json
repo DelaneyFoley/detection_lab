@@ -1,0 +1,32 @@
+{
+  "743": {
+    "rationale": "The copper pipe and elbows at the tank base show smooth brown patina with white solder-flux residue at the joints, not a corrosion product; no green/white verdigris crust and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina with white solder-flux residue at the joints; no qualifying corrosion product."
+  },
+  "868": {
+    "rationale": "HIL may have read the green at the copper joints as ordinary patina rather than verdigris; under that reading the smooth brown copper is an explicit false trigger, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Distinct green verdigris crust sits at several copper elbow/solder joints (eligible components); under the lower water-heater bar this looks like a qualifying corrosion product the model caught - borderline, worth a recheck."
+  },
+  "869": {
+    "rationale": "The connection cluster is copper with smooth patina, a clean brass T&P valve, and galvanized nipples with light tarnish, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina, clean brass valve, and galvanized nipples with light tarnish; no distinct verdigris crust or flaking rust."
+  },
+  "756": {
+    "rationale": "The brass nipple/union joints at the tank top show whitish-green crusty buildup - an eligible connection-cluster component with a corrosion product - which under the lower water-heater bar supports the change to DETECTED.",
+    "verdict": "Agree",
+    "assessment": "Moderate white/green crust at the brass nipple/union joints supports HIL's DETECTED under the lower water-heater bar - a reasonable catch of what the model missed."
+  },
+  "661": {
+    "rationale": "The painted gas/water lines show only surface rust on the iron gas-valve union and light brass tarnish, not rust heavily flaking or eating into the metal at a fitting, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Surface rust on the iron gas-valve union (not heavily flaking) plus brass tarnish; below the severity bar."
+  },
+  "800": {
+    "rationale": "The visible plumbing is copper with smooth patina plus foam-insulated pipes; the small green at the far tank connection is ambiguous and minor rather than a clear verdigris crust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina and insulated pipes; the small green at the far connection is ambiguous and minor - below the bar."
+  }
+}

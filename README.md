@@ -81,3 +81,17 @@ npm run start
   `node scripts/export-seed-datasets.mjs`.
 - All API keys are optional to start: the app runs and loads datasets without
   them, and keys can be pasted in the UI instead of using `.env.local`.
+
+## Production Planning with AWS AI-DLC
+
+AWS AI-DLC v1.0.1 is installed for **documentation-only production planning** in
+GitHub Copilot. It uses this prototype as read-only evidence to develop production
+requirements, user stories, acceptance criteria, gaps, and a delivery handoff.
+It does not implement changes or enter the Construction/Operations phases.
+
+Select **AI-DLC Production Planner** in Copilot Chat and run
+`/aidlc-production-plan`. Use `/aidlc-production-resume` in later sessions.
+Planning artifacts are created under `aidlc-docs/` when the workflow starts.
+
+See the [AI-DLC usage guide](AI-DLC-GUIDE.md) for exact steps, expected outputs,
+approval gates, safety boundaries, and handoff readiness.

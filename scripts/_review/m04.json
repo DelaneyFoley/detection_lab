@@ -1,0 +1,32 @@
+{
+  "755": {
+    "rationale": "The metal strainer flange shows a rust ring, which the sink prompt explicitly excludes, and the supply lines are copper with normal patina; the limited green at the tailpiece is not a clear continuous verdigris patch, so NOT_DETECTED is defensible.",
+    "verdict": "Agree",
+    "assessment": "The flange rust reads as an excluded rust ring and the supply lines are normal copper patina; borderline green at the tailpiece but not a clear qualifying patch."
+  },
+  "777": {
+    "rationale": "The whitish buildup at the valve connections reads as hard-water mineral/efflorescence from a leak (excluded), and the braided lines and valve bodies show dark grime and tarnish rather than flaking rust or a verdigris crust, so in this dark frame it stays below the severity bar.",
+    "verdict": "Agree",
+    "assessment": "Dark image; the buildup appears to be mineral efflorescence plus grime/tarnish rather than a clear corrosion product - borderline, worth a recheck."
+  },
+  "789": {
+    "rationale": "HIL may have read the green at the valve as light staining and treated the ferrule as a non-eligible crimp; under that reading the discoloration stays below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Distinct green verdigris is present on the metal angle-stop valve body and at the braided hose-end ferrule - a qualifying corrosion product on eligible components - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "708": {
+    "rationale": "The galvanized metal drain tailpiece and its escutcheons show green verdigris and the floor-flange joint shows orange rust crusting - an eligible metal component carrying a qualifying corrosion product - which supports the change to DETECTED.",
+    "verdict": "Agree",
+    "assessment": "HIL correctly caught corrosion the model missed: green verdigris on the metal tailpiece and rust crusting at the floor joint clearly meet the bar."
+  },
+  "684": {
+    "rationale": "The angle-stop supply valve shows crusty corrosive buildup at the ferrule/compression nut and the metal trap shows surface rust, supporting treating an eligible fitting as corroded and changing to DETECTED.",
+    "verdict": "Agree",
+    "assessment": "Moderate but defensible: crusty buildup at the supply-valve ferrule and light trap corrosion support HIL's DETECTED."
+  },
+  "469": {
+    "rationale": "The metal sink strainer shows only a surface rust ring/stain, which the prompt explicitly excludes, and the remaining drain is PVC; no eligible metal shows flaking/pitting rust or verdigris, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Strainer shows an excluded surface rust ring only; the rest is PVC - no qualifying corrosion."
+  }
+}

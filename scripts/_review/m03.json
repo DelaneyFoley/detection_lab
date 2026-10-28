@@ -1,0 +1,32 @@
+{
+  "343": {
+    "rationale": "The valve bodies and braided connectors show only light tarnish and grime and the box is excluded; no flaking rust or verdigris crust on an eligible component, so NOT_DETECTED follows the severity bar.",
+    "verdict": "Agree",
+    "assessment": "Only light tarnish/grime on the valves; no corrosion product."
+  },
+  "409": {
+    "rationale": "The copper stub-outs and valve connections show normal patina and colored hose markers rather than rust; no flaking rust or verdigris crust on an eligible component, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina and colored hose markers only; no corrosion product on metal."
+  },
+  "775": {
+    "rationale": "The drain uses PVC/rubber couplings and the braided supply lines are clean; no metal drain body, trap, or valve shows flaking rust or verdigris, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Plastic/rubber drain components and clean supply lines; no eligible metal corrosion."
+  },
+  "410": {
+    "rationale": "Reading the top fitting as the plastic tailpiece and the orange as surface stain rather than metal loss would leave no eligible metal body clearly corroded, which would support NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "The metal sink strainer/drain body at the top shows heavy crusted, flaking orange rust eating into the metal - an eligible component that plainly meets the sink severity bar. HIL's NOT_DETECTED is a clear miss."
+  },
+  "845": {
+    "rationale": "HIL likely read the green on the angle-stop valve as a coated/painted finish or a light deposit rather than verdigris, and the drain is PVC; under that reading no eligible metal shows a qualifying corrosion product.",
+    "verdict": "Disagree",
+    "assessment": "The brass angle-stop valve body at the supply connection appears to carry heavy green verdigris. Borderline at this resolution, but it looks like a qualifying corrosion product on an eligible component and warrants a recheck of HIL's removal."
+  },
+  "770": {
+    "rationale": "The prominent orange rust is on the shut-off valve HANDLE/wheel, which the sink prompt excludes; the valve body and galvanized union show only moderate oxidation and light surface spotting rather than heavy flaking rust or a verdigris crust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Good handle-vs-body distinction: the eye-catching rust is on the excluded handle, while the eligible valve body shows only moderate oxidation below the severity bar."
+  }
+}

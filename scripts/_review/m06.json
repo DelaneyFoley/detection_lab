@@ -1,0 +1,32 @@
+{
+  "832": {
+    "rationale": "HIL may have read the green at the wall penetration as a trace amount at a single spot - which the toilet prompt excludes - with the chrome valve body itself clean, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "A green verdigris crust sits on the metal supply pipe at the wall penetration (an eligible component), larger than a single trace spot, so the model's DETECTED was defensible. Borderline on severity, worth a recheck."
+  },
+  "831": {
+    "rationale": "The staining and mold are on the floor and wall behind the toilet, not on an eligible metal component; the supply line shows no flaking rust or verdigris crust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Corrosion-colored staining is on the floor/wall, not the metal supply line; no qualifying corrosion."
+  },
+  "774": {
+    "rationale": "HIL may have treated the green on the valve as a spotty, single-location trace, which the toilet prompt excludes from the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "The brass angle-stop valve body carries a green verdigris patch (eligible component) that reads as more than a faint trace, so the model's DETECTED was defensible. Borderline, worth a recheck."
+  },
+  "813": {
+    "rationale": "The braided supply line and chrome angle-stop valve are clean with only light tarnish and the escutcheon is excluded, so no eligible component meets the severity bar and NOT_DETECTED follows.",
+    "verdict": "Agree",
+    "assessment": "Clean chrome valve and line; no qualifying corrosion."
+  },
+  "744": {
+    "rationale": "HIL may have read the valve green as spotty, single-spot discoloration below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Heavy green verdigris crust covers the brass angle-stop valve body and connections - a clear qualifying corrosion product on an eligible component, more than a trace - so HIL's removal looks like a miss."
+  },
+  "773": {
+    "rationale": "HIL may have read the valve deposit as hard-water scale plus light staining rather than a corrosion product, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "The floor angle-stop valve body shows green verdigris with white crusty buildup - a substantial corrosion product on an eligible component - so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  }
+}

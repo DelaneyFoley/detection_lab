@@ -1,0 +1,32 @@
+{
+  "587": {
+    "rationale": "The copper flex connectors carry smooth patina and the galvanized nipple is dull; the white crusty deposits at the union and across the tank top read as hard-water mineral/efflorescence, which the prompt excludes as mineral scale on its own, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "The white crusty deposits read as hard-water mineral/efflorescence (excluded), with copper-flex patina and a dull galvanized nipple; no clear verdigris crust or flaking rust."
+  },
+  "499": {
+    "rationale": "The visible plumbing is copper with smooth patina plus a galvanized flex duct (not an eligible plumbing fitting) and a brass gas valve with light tarnish, with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina, a galvanized flex duct, and a brass valve with light tarnish; no verdigris crust or flaking rust on an eligible component."
+  },
+  "578": {
+    "rationale": "The gas connection shows a dull galvanized union/flex with white crusty deposits that read as hard-water mineral and light tarnish, not a corrosion product, with no verdigris crust or heavy flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Galvanized gas union/flex with white crusty deposits (likely mineral) and light tarnish; no clear verdigris crust or heavy flaking rust."
+  },
+  "477": {
+    "rationale": "The connections use clean braided stainless flex lines, brass shut-off/drain valves with light tarnish, and PEX supply pipes, with no verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Brass valves with light tarnish, clean braided stainless flex, and PEX supply; no qualifying corrosion."
+  },
+  "404": {
+    "rationale": "The supply line is a painted pipe with a brass union showing only light tarnish, with no localized verdigris crust and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Painted pipe with a brass union showing light tarnish; no verdigris crust or flaking rust."
+  },
+  "445": {
+    "rationale": "The top connections are a brass T&P valve, nipples, and unions with light tarnish plus copper patina; a faint green tint appears at one union but there is no substantial verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Brass T&P valve, nipples, and unions with light tarnish and copper patina; only a faint green tint at one union - no substantial verdigris crust or flaking rust."
+  }
+}

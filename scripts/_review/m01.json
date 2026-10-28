@@ -1,0 +1,32 @@
+{
+  "812": {
+    "rationale": "The recessed laundry box and the valve handles are excluded by the prompt; the brass valve bodies and hose-bib connections show only light surface tarnish and grime with no flaking rust eating into the metal and no green verdigris crust, so NOT_DETECTED follows the severity bar.",
+    "verdict": "Agree",
+    "assessment": "The visible rust is on the valve handles and the box/wall (all excluded), and the valve bodies show only light tarnish, not a qualifying corrosion product."
+  },
+  "771": {
+    "rationale": "The brass shut-off valve bodies are largely clean and the copper supply lines carry only normal patina; the braided stainless connectors and end fittings show no flaking rust or verdigris crust, so no eligible component meets the severity bar.",
+    "verdict": "Agree",
+    "assessment": "Brass valve bodies and copper show normal patina only; no verdigris or flaking rust on any eligible fitting."
+  },
+  "791": {
+    "rationale": "HIL appears to have read the green at the valve as a light/trace amount and the handles as excluded; under that reading the stem discoloration sits below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "There is distinct green verdigris on the brass valve stem/body directly behind the handle on the upper valve - exactly the finding the laundry prompt flags as commonly missed. It is more than a trace, so the model's DETECTED was defensible and HIL's removal looks like a miss."
+  },
+  "618": {
+    "rationale": "The valves sit in a torn-open wall; the white/gray material coating the area is drywall/plaster dust, not a corrosion product. The brass valve bodies and stems show only light tarnish with no verdigris crust or flaking rust, so NOT_DETECTED is correct.",
+    "verdict": "Agree",
+    "assessment": "The whitish buildup is wall plaster dust from the opened wall, and the brass bodies are merely tarnished - no qualifying corrosion."
+  },
+  "591": {
+    "rationale": "The copper stub-outs show bright metal with only light patina, and the lower brass fittings carry grime/dust rather than a corrosion product; no flaking rust or verdigris crust on an eligible component, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina plus dust/grime only; no heavy flaking rust or verdigris on the fittings."
+  },
+  "481": {
+    "rationale": "The supply box, braided hoses, and valves are clean and newer, with no visible corrosion product on any metal component, so NOT_DETECTED is clearly correct.",
+    "verdict": "Agree",
+    "assessment": "Connections are clean/newer with no corrosion present."
+  }
+}

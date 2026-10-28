@@ -1,0 +1,32 @@
+{
+  "411": {
+    "rationale": "The supply pipe is foam-insulated with no exposed corroded metal, the metal flex is electrical conduit (not an eligible plumbing component), and the small green at the wall penetration reads as sealant/foam rather than a verdigris crust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Pipe is foam-insulated with no visible corroded metal; the small green at the penetration is ambiguous (likely sealant) and the flex is electrical conduit - no qualifying corrosion."
+  },
+  "842": {
+    "rationale": "The connection-cluster fittings are dull/tarnished galvanized with some sediment/debris at the tank top; no localized green/white verdigris crust and no orange flaking rust, so NOT_DETECTED follows the lower water-heater bar.",
+    "verdict": "Agree",
+    "assessment": "Dull/tarnished fittings with sediment only; no verdigris crust or orange flaking rust at the cluster."
+  },
+  "881": {
+    "rationale": "The top connections are copper with smooth brown patina and a lightly tarnished brass fitting, with no localized green/white verdigris crust and no orange flaking rust - all explicit false triggers - so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina plus brass tarnish at the connection cluster; no qualifying corrosion product."
+  },
+  "835": {
+    "rationale": "The connection cluster shows copper patina and lightly tarnished brass valve/fittings with no localized verdigris crust or orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina plus brass tarnish; no verdigris crust or orange flaking rust at the cluster."
+  },
+  "846": {
+    "rationale": "The outdoor gas/water valves and fittings are brass with tarnish and darkening but show no localized green/white verdigris crust and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Outdoor brass valves/fittings show tarnish and darkening only; no verdigris crust or orange flaking rust."
+  },
+  "741": {
+    "rationale": "The connection cluster is copper with smooth patina and brass valve/union fittings with light tarnish, with no localized verdigris crust and no orange flaking rust, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Copper patina plus brass tarnish on the cluster; no verdigris crust or orange flaking rust."
+  }
+}

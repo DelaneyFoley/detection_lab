@@ -48,6 +48,8 @@ data/*.db-wal
 /data/
 /public/dataset-manifest-example.csv
 /Non-Compliant hood dataset/
+/Major Corrosion_HIL Corrections_Aug 26_2026.xlsx
+/Major Corrosion_HIL Corrections_Sep2026-3.xlsx
 # Stray/scratch files
 /cannot
 /open

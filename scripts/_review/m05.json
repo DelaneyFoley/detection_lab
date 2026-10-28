@@ -1,0 +1,32 @@
+{
+  "406": {
+    "rationale": "The under-sink run is PVC with wiring and black hoses; the copper stub shows only normal patina and no eligible metal fitting shows flaking rust or verdigris, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Mostly PVC/wiring and copper patina; no qualifying corrosion on an eligible component."
+  },
+  "614": {
+    "rationale": "The braided supply lines and gray flex drain show only grime and tarnish with no flaking rust or verdigris crust on an eligible metal component, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Only grime/tarnish on the braided lines; no corrosion product."
+  },
+  "427": {
+    "rationale": "HIL may have read the rust at the strainer and slip joints as thin rust rings/surface stain, which the sink prompt excludes, leaving no eligible metal with flaking or pitting loss.",
+    "verdict": "Disagree",
+    "assessment": "The metal tailpiece and drain T-fitting show crusted orange rust at the joints - more than a thin ring, on eligible metal drain components - so the model's DETECTED was defensible. Borderline but worth a recheck."
+  },
+  "501": {
+    "rationale": "HIL may have read the green at the valve as light staining and treated the ferrule as a non-eligible crimp; under that reading it stays below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Clear green verdigris is present on the metal angle-stop valve body and hose-end ferrule - a qualifying corrosion product on eligible components - so HIL's removal looks like a miss."
+  },
+  "855": {
+    "rationale": "The braided supply line and chrome angle-stop valve are clean and the round escutcheon is excluded; no eligible metal shows flaking rust or verdigris, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Clean chrome valve and braided line; escutcheon excluded - no qualifying corrosion."
+  },
+  "894": {
+    "rationale": "In a dark frame the toilet supply connection shows no visible corrosion product on any eligible metal component, so NOT_DETECTED is defensible.",
+    "verdict": "Agree",
+    "assessment": "No visible qualifying corrosion on the supply line/valve in this dark frame."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "371": {
+    "rationale": "The angle-stop valve is mostly clean with only a small single-spot green trace at the connection, which the toilet prompt excludes as a trace amount at a single spot, so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "Small single-spot green trace at the valve connection with the body otherwise clean; below the severity bar."
+  },
+  "320": {
+    "rationale": "HIL may have read the green at the valve as confined to the handle area or as a single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve body/compression nut below the handle (eligible component), more than a faint trace, so the model's DETECTED was defensible - worth a recheck."
+  },
+  "322": {
+    "rationale": "HIL may have read the green on the valve stem as a single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "Green verdigris sits on the brass valve stem/body (eligible component, distinct from the clean handle/escutcheon); more than a faint trace, so the model's DETECTED was defensible - worth a recheck."
+  },
+  "407": {
+    "rationale": "HIL may have read the green at the valve connection as a localized single-spot trace below the severity bar, supporting NOT_DETECTED.",
+    "verdict": "Disagree",
+    "assessment": "A green-blue verdigris patch sits on the brass valve body/stem at the supply connection (eligible component); borderline on severity but the model's DETECTED was defensible - worth a recheck."
+  },
+  "863": {
+    "rationale": "The connection-cluster nipples are darkened/dull galvanized metal and the copper risers carry only smooth brown patina, with no localized green/white verdigris crust and no orange flaking rust at any fitting - all explicit false triggers - so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "The nipple/union connections are darkened galvanized metal plus copper patina with no verdigris crust or orange flaking rust; below even the lower water-heater bar."
+  },
+  "867": {
+    "rationale": "The copper pipes show smooth patina and the connection cluster has no green/white verdigris crust or orange flaking rust; the orange deposit at the top fitting reads as hardened pipe-joint compound (a common confuser), so NOT_DETECTED follows the bar.",
+    "verdict": "Agree",
+    "assessment": "The orange-yellow crust at the top fitting most likely is hardened pipe-joint compound, not a corrosion product, and the rest of the cluster shows only patina - borderline but within HIL's call."
+  }
+}

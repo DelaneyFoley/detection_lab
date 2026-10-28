@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAppStore } from "@/lib/store";
 import type { Detection, Dataset, DatasetItem, SplitType } from "@/types";
 import { splitTypeBadgeClass, splitTypeLabel } from "@/lib/splitType";
@@ -487,11 +487,13 @@ function DatasetUploadForm({
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
 
+  const fileRowsRef = useRef(fileRows);
+  fileRowsRef.current = fileRows;
   useEffect(() => {
     return () => {
-      fileRows.forEach((r) => URL.revokeObjectURL(r.preview));
+      fileRowsRef.current.forEach((r) => URL.revokeObjectURL(r.preview));
     };
-  }, [fileRows]);
+  }, []);
 
   const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files || []);

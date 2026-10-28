@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
+import { promises as fs } from "fs";
 import { runRepository } from "@/lib/repositories";
+import { fileStore } from "@/lib/services";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -12,9 +14,20 @@ function getImageExtension(uri: string): "png" | "jpeg" | "gif" {
   return "jpeg";
 }
 
-async function fetchImageBuffer(url: string): Promise<Buffer | null> {
+async function fetchImageBuffer(uri: string): Promise<Buffer | null> {
+  if (!uri) return null;
+  // Local uploads live under public/ and are referenced by a root-relative URI
+  // that server-side fetch cannot resolve; read them straight from disk.
+  const localPath = fileStore.localUriToAbsPath(uri);
+  if (localPath) {
+    try {
+      return (await fs.readFile(localPath)) as unknown as Buffer;
+    } catch {
+      return null;
+    }
+  }
   try {
-    const res = await fetch(url, { headers: { "User-Agent": "detection-lab-export" } });
+    const res = await fetch(uri, { headers: { "User-Agent": "detection-lab-export" } });
     if (!res.ok) return null;
     const arrayBuffer = await res.arrayBuffer();
     return Buffer.from(arrayBuffer) as unknown as Buffer;
@@ -67,6 +80,7 @@ export async function GET(req: NextRequest) {
       { header: "Predicted Labels", key: "predicted_labels", width: 40 },
       { header: "Ground Truth Labels", key: "ground_truth_labels", width: 40 },
       { header: "Correct", key: "correct", width: 10 },
+      { header: "Evidence", key: "evidence", width: 60 },
       { header: "Attributes", key: "attributes", width: 30 },
       { header: "Notes", key: "notes", width: 40 },
     ];
@@ -98,6 +112,16 @@ export async function GET(req: NextRequest) {
         JSON.stringify([...predicted].sort()) === JSON.stringify([...groundTruth].sort()) ? "Yes" : "No";
       const first = rows[0];
       const tags = parseTags((first as { segment_tags?: unknown }).segment_tags);
+      // One evidence line per label so every label's rationale is visible.
+      const evidence = rows
+        .map((r) => {
+          const label = String(r.detection_label || "").trim();
+          const ev = String(r.evidence || "").trim();
+          if (!ev) return null;
+          return label ? `${label}: ${ev}` : ev;
+        })
+        .filter(Boolean)
+        .join("\n");
 
       sheet.addRow({
         image: "",
@@ -106,6 +130,7 @@ export async function GET(req: NextRequest) {
         predicted_labels: JSON.stringify(predicted),
         ground_truth_labels: JSON.stringify(groundTruth),
         correct,
+        evidence,
         attributes: tags.join(", "),
         notes: first.image_description || first.reviewer_note || "",
       });
