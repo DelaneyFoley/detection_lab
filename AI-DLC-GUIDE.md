@@ -143,6 +143,14 @@ Proposed acceptance tests are specifications, not claims that tests have run.
 
 ## Resume or revise
 
+For ongoing prototype development, use the separate
+[Prototype Change Partner workflow](prototype-docs/README.md). It maintains
+whole-prototype intent, source evidence, decisions and diagnostics without
+rewriting this production package. When refreshing production planning, ask the
+planner to read that baseline plus current code; unconfirmed observations and
+even confirmed prototype requirements are not automatically approved production
+requirements.
+
 Open a new chat, choose **AI-DLC Production Planner**, and run:
 
 ```text

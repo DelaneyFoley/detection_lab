@@ -95,3 +95,17 @@ Planning artifacts are created under `aidlc-docs/` when the workflow starts.
 
 See the [AI-DLC usage guide](AI-DLC-GUIDE.md) for exact steps, expected outputs,
 approval gates, safety boundaries, and handoff readiness.
+
+## Living Prototype Requirements and Development
+
+Use **Prototype Change Partner** for whole-prototype coherence, intent
+clarification, and implementation of approved changes. Its baseline and
+requirements register are separate from production planning.
+
+Start with `/prototype-resume` to review the initial diagnostic and unanswered
+intent questions. `/prototype-diagnostic` refreshes the diagnostic without
+changing app behavior. `/prototype-change` prepares a bounded change contract;
+implementation starts only after explicit approval.
+
+See the [prototype workspace guide](prototype-docs/README.md) for the full
+baseline, requirement statuses, diagnostics, and ongoing change process.

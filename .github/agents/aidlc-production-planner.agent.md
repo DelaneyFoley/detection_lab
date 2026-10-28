@@ -92,6 +92,12 @@ If the chat provides a structured question tool, it may supplement question file
   **Proposed option**, and **Open question/assumption** distinct.
 - Do not turn every existing feature, bug, shortcut, model, or dependency into
   a production requirement. Confirm intended behavior with the product owner.
+- When available, read the [living prototype baseline](../../prototype-docs/README.md)
+  and relevant confirmed prototype decisions as additional evidence alongside
+  the code. UNCONFIRMED prototype rows are observations, not approved intent.
+  Even confirmed prototype intent needs separate production acceptance. Report
+  stale evidence/conflicts; do not edit the prototype docs or inherit their
+  approval status into production planning.
 - Assign stable IDs such as `FR-001`, `NFR-001`, `EPIC-001`, `US-001`, `GAP-001`,
   and `DEC-001`. Preserve IDs across revisions and record superseded items.
 - Every requirement needs its rationale/source, owner, priority, verification
