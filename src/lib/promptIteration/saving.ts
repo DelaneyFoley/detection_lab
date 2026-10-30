@@ -17,6 +17,21 @@ export interface PromptVersionSaveInput {
   createdBy: string;
   createdAt: string;
   sourcePromptVersionId: string | null;
+  mode?: string;
+  contextName?: string | null;
+  productionLabel?: string | null;
+  productionSnapshotId?: string | null;
+  composition?: string | null;
+}
+
+function parseComposition(value: unknown): Record<string, any> | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as Record<string, any>;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
 }
 
 function parseStructure(value: unknown): Record<string, unknown> {
@@ -74,6 +89,54 @@ export function buildPromptVersionInput(params: {
   sourcePromptVersionId: string;
 }): PromptVersionSaveInput {
   const structure = parseStructure(params.sourcePrompt?.prompt_structure);
+
+  // Composition-backed source (PC-001 Single Detection): persist a composition-
+  // backed version whose target member description is the tuned Detection Prompt,
+  // so the saved version runs via the aggregate single-member path.
+  const sourceComposition = parseComposition(params.sourcePrompt?.composition);
+  if (sourceComposition && params.sourcePrompt?.production_snapshot_id) {
+    const target = (sourceComposition.members as Array<Record<string, any>>).find((m) => m.is_target);
+    const tunedDescription =
+      params.candidate.detection_prompt != null
+        ? params.candidate.detection_prompt
+        : params.candidate.user_prompt_addendum != null
+          ? params.candidate.user_prompt_addendum
+          : (target?.description as string) || "";
+    const members = (sourceComposition.members as Array<Record<string, any>>).map((m) =>
+      m.is_target ? { ...m, description: tunedDescription } : m
+    );
+    const nextComposition = { ...sourceComposition, members };
+    const newStructure = {
+      ...structure,
+      user_prompt_addendum: tunedDescription,
+    };
+    return {
+      promptVersionId: params.promptVersionId,
+      detectionId: params.detectionId,
+      versionLabel: params.newVersionLabel,
+      systemPrompt: "",
+      userPromptTemplate: "",
+      promptStructure: JSON.stringify(newStructure),
+      model:
+        String((nextComposition as any).google_model || "") ||
+        params.sourcePrompt.model ||
+        "gemini-2.5-flash",
+      temperature: Number(params.sourcePrompt.temperature ?? 0),
+      topP: Number(params.sourcePrompt.top_p ?? 1),
+      maxOutputTokens: Number(params.sourcePrompt.max_output_tokens ?? 1024),
+      changeNotes: params.changeNotes,
+      versionNotes: params.versionNotes,
+      createdBy: "system",
+      createdAt: params.createdAt,
+      sourcePromptVersionId: params.sourcePromptVersionId,
+      mode: params.sourcePrompt.mode || "DEVELOPMENT_MODE",
+      contextName: params.sourcePrompt.context_name ?? null,
+      productionLabel: params.sourcePrompt.production_label ?? target?.label ?? null,
+      productionSnapshotId: params.sourcePrompt.production_snapshot_id,
+      composition: JSON.stringify(nextComposition),
+    };
+  }
+
   const userPromptTemplate = applyCandidateUserTemplate(
     params.sourcePrompt.user_prompt_template || "",
     params.candidate

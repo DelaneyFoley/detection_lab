@@ -78,6 +78,14 @@ export interface PromptCandidate {
    * rebuilt from the fixed base + this addendum; when null, it inherits.
    */
   user_prompt_addendum?: string | null;
+  /**
+   * PC-001 single-detection lever: the complete Detection Prompt (the target
+   * member description) for a composition-backed Single Detection source. When
+   * present, this is the only tuned text — it replaces the member description and
+   * runs via the aggregate single-member path. label_policy/decision_rubric are
+   * unused for single-detection sources.
+   */
+  detection_prompt?: string | null;
 }
 
 /** Result of evaluating a candidate on the holdout slice. */

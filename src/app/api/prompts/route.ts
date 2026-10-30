@@ -48,37 +48,45 @@ export async function POST(req: NextRequest) {
     }
 
     const category = normalizeDetectionCategory(detection.detection_category);
-    const keys = CATEGORY_PROMPT_SETTING_KEYS[category];
-    const rows = settingsRepository.getByKeys([keys.system, keys.user]);
-    const byKey = new Map(rows.map((row) => [row.key, row.value]));
-    const defaults = DEFAULT_CATEGORY_PROMPT_TEMPLATES[category];
-    const systemPrompt = byKey.get(keys.system) || defaults.system_prompt;
-    // Honor the addendum authored for THIS version; fall back to the detection default.
     const submittedStructure = (body.prompt_structure || {}) as Record<string, unknown>;
-    const versionAddendum =
-      typeof submittedStructure.user_prompt_addendum === "string"
-        ? submittedStructure.user_prompt_addendum
-        : detection.user_prompt_addendum;
-    const userPromptTemplate = buildUserPromptTemplate(
-      byKey.get(keys.user) || defaults.user_prompt_template,
-      versionAddendum
-    );
-    const promptStructure = {
-      ...submittedStructure,
-      user_prompt_addendum: String(versionAddendum || ""),
-    };
-
     const mode = body.mode === "PRODUCTION_MODE" ? "PRODUCTION_MODE" : "DEVELOPMENT_MODE";
     const composition = body.composition ?? null;
-    // In PRODUCTION_MODE the model is pinned to the context's production model.
-    const compositionModel =
-      composition && typeof composition === "object"
-        ? String((composition as Record<string, unknown>).google_model || "")
-        : "";
-    const resolvedModel =
-      mode === "PRODUCTION_MODE" && compositionModel
-        ? compositionModel
-        : body.model || "gemini-2.5-flash";
+    const hasComposition = !!composition && typeof composition === "object";
+
+    // Composition-backed versions (Single Detection and Production Replication)
+    // run via the aggregate path: no system prompt, and the compiled user prompt
+    // lives entirely in the composition (preamble + member blocks). Legacy
+    // single-object versions still bake the category templates below.
+    let systemPrompt = "";
+    let userPromptTemplate = "";
+    let promptStructure: Record<string, unknown> = { ...submittedStructure };
+
+    if (!hasComposition) {
+      const keys = CATEGORY_PROMPT_SETTING_KEYS[category];
+      const rows = settingsRepository.getByKeys([keys.system, keys.user]);
+      const byKey = new Map(rows.map((row) => [row.key, row.value]));
+      const defaults = DEFAULT_CATEGORY_PROMPT_TEMPLATES[category];
+      systemPrompt = byKey.get(keys.system) || defaults.system_prompt;
+      // Honor the addendum authored for THIS version; fall back to the detection default.
+      const versionAddendum =
+        typeof submittedStructure.user_prompt_addendum === "string"
+          ? submittedStructure.user_prompt_addendum
+          : detection.user_prompt_addendum;
+      userPromptTemplate = buildUserPromptTemplate(
+        byKey.get(keys.user) || defaults.user_prompt_template,
+        versionAddendum
+      );
+      promptStructure = {
+        ...submittedStructure,
+        user_prompt_addendum: String(versionAddendum || ""),
+      };
+    }
+
+    // In composition-backed versions the model is pinned to the composition.
+    const compositionModel = hasComposition
+      ? String((composition as Record<string, unknown>).google_model || "")
+      : "";
+    const resolvedModel = compositionModel || body.model || "gemini-2.5-flash";
 
     promptRepository.createPromptVersion({
       promptVersionId: id,
@@ -97,11 +105,12 @@ export async function POST(req: NextRequest) {
       createdAt: now,
       sourcePromptVersionId: body.source_prompt_version_id ?? null,
       mode,
-      contextName: mode === "PRODUCTION_MODE" ? body.context_name ?? null : null,
-      productionLabel: mode === "PRODUCTION_MODE" ? body.production_label ?? null : null,
-      productionSnapshotId: mode === "PRODUCTION_MODE" ? body.production_snapshot_id ?? null : null,
+      contextName: hasComposition ? body.context_name ?? null : null,
+      productionLabel: hasComposition ? body.production_label ?? null : null,
+      productionSnapshotId: hasComposition ? body.production_snapshot_id ?? null : null,
+      // Provenance only applies to full Production Replication (multi-member).
       provenanceKind: mode === "PRODUCTION_MODE" ? body.provenance_kind ?? null : null,
-      composition: mode === "PRODUCTION_MODE" && composition ? JSON.stringify(composition) : null,
+      composition: hasComposition ? JSON.stringify(composition) : null,
     });
 
     // The manually-entered change note is the first Version Notes entry.

@@ -3,7 +3,17 @@ import { confusionFromPairs, metricsFromConfusion, candidateComplexity } from "@
 import { applyCandidateUserTemplate } from "@/lib/promptIteration/saving";
 import { splitUserPromptTemplate } from "@/lib/detectionPrompts";
 import type { CandidateResult, PromptCandidate, ReviewedRow } from "@/lib/promptIteration/types";
-import type { Decision } from "@/types";
+import type { Decision, PromptComposition } from "@/types";
+
+function parseComposition(value: unknown): PromptComposition | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as PromptComposition;
+  try {
+    return JSON.parse(String(value)) as PromptComposition;
+  } catch {
+    return null;
+  }
+}
 
 export interface EvalPrediction {
   image_id: string;
@@ -30,6 +40,34 @@ export function buildCandidatePromptVersion(sourcePrompt: any, candidate: Prompt
       return {};
     }
   })();
+
+  // Composition-backed source (PC-001 Single Detection): the single tunable
+  // lever is the Detection Prompt (the target member description). Clone the
+  // source composition, swap the target member description for the candidate's
+  // Detection Prompt, and keep the frozen snapshot so the candidate runs through
+  // the aggregate single-member path.
+  const sourceComposition = parseComposition(sourcePrompt?.composition);
+  if (sourceComposition && sourcePrompt?.production_snapshot_id) {
+    const tunedDescription =
+      candidate.detection_prompt != null
+        ? candidate.detection_prompt
+        : candidate.user_prompt_addendum != null
+          ? candidate.user_prompt_addendum
+          : sourceComposition.members.find((m) => m.is_target)?.description || "";
+    const members = sourceComposition.members.map((m) =>
+      m.is_target ? { ...m, description: tunedDescription } : m
+    );
+    const nextComposition = { ...sourceComposition, members };
+    return {
+      ...sourcePrompt,
+      composition: nextComposition,
+      prompt_structure: {
+        ...baseStructure,
+        user_prompt_addendum: tunedDescription,
+      },
+    };
+  }
+
   return {
     ...sourcePrompt,
     system_prompt: candidate.system_prompt || sourcePrompt.system_prompt,
@@ -61,9 +99,13 @@ export async function evaluateCandidate(params: {
   const { candidate, sourcePrompt, detectionCode, rows, apiKey, baselineByImageId } = params;
   const maxConcurrency = Math.max(1, Math.min(8, params.maxConcurrency ?? 4));
   const promptVersion = buildCandidatePromptVersion(sourcePrompt, candidate);
-  // Effective addendum reflects an inherited OR newly-written addendum, so
-  // leanness pressure covers the entire tunable prompt.
-  const effectiveAddendum = splitUserPromptTemplate(promptVersion.user_prompt_template || "").addendum;
+  // Effective tunable text for leanness/complexity pressure. For a composition-
+  // backed Single Detection source it is the Detection Prompt (target member
+  // description); otherwise the user-prompt addendum.
+  const candidateComposition = parseComposition(promptVersion.composition);
+  const effectiveAddendum = candidateComposition
+    ? candidateComposition.members.find((m) => m.is_target)?.description || ""
+    : splitUserPromptTemplate(promptVersion.user_prompt_template || "").addendum;
 
   const predictions: EvalPrediction[] = new Array(rows.length);
   let evalError: string | null = null;

@@ -16,6 +16,15 @@ export interface CandidateGenInput {
   baseUserAddendum: string;
   /** Fixed, non-editable guidelines (e.g. severity scale + general spec) always applied. */
   baseFixedGuidance: string;
+  /**
+   * PC-001: when true, the source is a composition-backed Single Detection. The
+   * ONLY tunable lever is the Detection Prompt (the target member description),
+   * which runs inside the context's shared instructions. The model must return a
+   * single `detection_prompt` field and must NOT use label_policy/decision_rubric.
+   */
+  singleDetection?: boolean;
+  /** The current Detection Prompt (target member description) to refine. */
+  baseDetectionPrompt?: string;
   failureModes: FailureMode[];
   tuningSummary: {
     total: number;
@@ -153,6 +162,52 @@ async function loadFailureImageParts(images: FailureImage[]): Promise<LoadedFail
  * never reference specific images, ids, colors, or layouts.
  */
 export function fallbackCandidates(input: CandidateGenInput): PromptCandidate[] {
+  // PC-001 single-detection source: the only lever is the Detection Prompt.
+  // Without an AI we can only offer a lean refactor of the current prompt and a
+  // conservative variant that appends a compact default rule.
+  if (input.singleDetection) {
+    const base = input.baseDetectionPrompt || input.baseUserAddendum || "";
+    const lean = leanText(base);
+    const sdCandidates: PromptCandidate[] = [
+      {
+        id: uuid(),
+        kind: "lean",
+        label: "Lean refactor",
+        target_failure_mode: "prompt bloat / redundancy",
+        rationale: "Removes redundant and duplicated guidance while preserving every generalizable rule.",
+        label_policy: "",
+        decision_rubric: "",
+        user_prompt_addendum: lean,
+        detection_prompt: lean,
+      },
+      {
+        id: uuid(),
+        kind: "conservative",
+        label: "Precision guard",
+        target_failure_mode: "false positives",
+        rationale: "Appends a compact conservative-default rule to curb over-detection.",
+        label_policy: "",
+        decision_rubric: "",
+        user_prompt_addendum: [lean, CONSERVATIVE_RULE].filter(Boolean).join("\n"),
+        detection_prompt: [lean, CONSERVATIVE_RULE].filter(Boolean).join("\n"),
+      },
+    ];
+    if (input.tuningSummary.fn >= input.tuningSummary.fp && input.tuningSummary.fn > 0) {
+      sdCandidates.push({
+        id: uuid(),
+        kind: "recall",
+        label: "Recall boost",
+        target_failure_mode: "false negatives",
+        rationale: "Broadens acceptance of partial-but-consistent morphology without hardcoding examples.",
+        label_policy: "",
+        decision_rubric: "",
+        user_prompt_addendum: [lean, RECALL_RULE].filter(Boolean).join("\n"),
+        detection_prompt: [lean, RECALL_RULE].filter(Boolean).join("\n"),
+      });
+    }
+    return sdCandidates.slice(0, Math.max(1, input.maxCandidates));
+  }
+
   const leanPolicy = leanText(input.baseLabelPolicy);
   const leanRubric = leanText(input.baseDecisionRubric);
   const candidates: PromptCandidate[] = [
@@ -262,7 +317,79 @@ function buildSynthesisPrompt(input: CandidateGenInput): string {
     .join("\n");
 }
 
+function buildSingleDetectionPrompt(input: CandidateGenInput): string {
+  const fmLines = input.failureModes.length
+    ? input.failureModes
+        .map(
+          (m) =>
+            `- ${m.name} (${m.count} case(s)). Reviewer notes / evidence: ${
+              m.example_evidence.slice(0, 3).map((e) => `"${e.slice(0, 160)}"`).join("; ") || "n/a"
+            }`
+        )
+        .join("\n")
+    : "- No dominant failure mode.";
+
+  const historyLines = (input.testedCandidates || [])
+    .map(
+      (c) =>
+        `- R${c.round} ${c.kind} "${c.label}": F1 ${(c.f1 * 100).toFixed(1)}% · P ${(c.precision * 100).toFixed(1)}% · R ${(c.recall * 100).toFixed(1)}% · parse_err ${c.parse_errors}`
+    )
+    .join("\n");
+
+  return [
+    "You are refining a SINGLE DETECTION PROMPT for a vision-language detection.",
+    input.round && input.round > 1
+      ? `This is iteration round ${input.round}. Build on the best Detection Prompt so far; do not repeat changes already rejected.`
+      : "",
+    "",
+    `Detection code: ${input.detectionCode}`,
+    `Tuning slice: ${input.tuningSummary.total} images (${input.tuningSummary.positives} positive, ${input.tuningSummary.negatives} negative), with ${input.tuningSummary.fp} false positives and ${input.tuningSummary.fn} false negatives.`,
+    input.goalF1 != null ? `Target F1 to reach: ${(input.goalF1 * 100).toFixed(1)}%.` : "",
+    "",
+    "How this detection runs (do NOT change these facts):",
+    "- The Detection Prompt is ONE detection block placed inside a production context's shared instructions, exactly like a production aggregate but over a single detection.",
+    "- It describes what the model must look for. DETECTED means the detection's production label is returned.",
+    "- The DETECTED/NOT_DETECTED decision and the JSON output schema are FIXED by the system. Do NOT restate them, and do NOT write a decision policy, a decision rubric, or a system prompt.",
+    "",
+    "Current Detection Prompt — refine THIS:",
+    input.baseDetectionPrompt || input.baseUserAddendum || "(empty)",
+    "",
+    "Observed failure modes:",
+    fmLines,
+    historyLines ? "\nHistory of tested Detection Prompts (build on the best, avoid repeats):\n" + historyLines : "",
+    "",
+    (input.failureImages && input.failureImages.length)
+      ? [
+          "ATTACHED IMAGES: the actual misclassified images are attached, captioned FALSE NEGATIVE or FALSE POSITIVE with ground truth.",
+          "Study them: for false negatives identify the real morphology missed; for false positives identify the confuser. Turn RECURRING patterns into GENERAL, morphology-based rules (never hardcode a single image).",
+          "",
+        ].join("\n")
+      : "",
+    "Rules for your Detection Prompt:",
+    "- Return ONE field: detection_prompt — the COMPLETE, self-contained detection block. It fully replaces the current Detection Prompt.",
+    "- MAXIMIZE F1 with the LEANEST possible prompt. Keep a sentence ONLY if it changes a decision; cut anything redundant or low-impact.",
+    "- Concentrate the decision logic directly in the detection_prompt: eligibility, key morphology, the sharpest look-alike/confuser distinctions, and a deterministic conservative default for ambiguous/insufficient evidence.",
+    "- Only generalizable rules based on visual morphology, component eligibility, known confusers, and image-quality constraints. NEVER reference specific image ids, exact examples, hex/RGB values, layouts, or dataset-specific quirks.",
+    "- Do NOT include label_policy, decision_rubric, a JSON schema, confidence rules, or a system prompt — they are not used for a single detection.",
+    (input.baselineParseErrors ?? 0) > 0
+      ? `- The current prompt produced ${input.baselineParseErrors} parse error(s); eliminating ALL of them is a required objective.`
+      : "",
+    "",
+    input.maxCandidates <= 1
+      ? "Write ONE improved, COMPLETE detection_prompt as the next step in a single evolving chain. It MUST be MATERIALLY DIFFERENT from the current one and target the dominant failure mode. Return EXACTLY ONE object in the candidates array."
+      : `Generate ${input.maxCandidates} DISTINCT detection_prompt candidates, each targeting a different failure mode (at least one lean/refactored, one precision-protecting, and — when false negatives dominate — one recall-oriented).`,
+    "",
+    "Return STRICT JSON only, no markdown, matching:",
+    '{"candidates":[{"kind":"lean|conservative|recall|balanced","label":"short name","target_failure_mode":"...","rationale":"...","detection_prompt":"..."}]}',
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function buildAIPrompt(input: CandidateGenInput): string {
+  if (input.singleDetection) {
+    return buildSingleDetectionPrompt(input);
+  }
   if (input.synthesis && input.roundStrategies && input.roundStrategies.length >= 2) {
     return buildSynthesisPrompt(input);
   }
@@ -442,8 +569,30 @@ function coerceCandidates(parsed: any, input: CandidateGenInput): PromptCandidat
     const labelPolicy = typeof raw.label_policy === "string" ? raw.label_policy.trim() : "";
     const decisionRubric = typeof raw.decision_rubric === "string" ? raw.decision_rubric.trim() : "";
     const detectionGuidance = typeof raw.detection_guidance === "string" ? raw.detection_guidance.trim() : "";
-    if (!labelPolicy && !decisionRubric && !detectionGuidance) continue;
+    const detectionPrompt =
+      typeof raw.detection_prompt === "string" ? raw.detection_prompt.trim() : "";
     const kind = ["lean", "conservative", "recall", "balanced"].includes(raw.kind) ? raw.kind : "balanced";
+
+    // PC-001 single-detection source: the only tuned text is the Detection Prompt.
+    if (input.singleDetection) {
+      const tuned = detectionPrompt || detectionGuidance;
+      if (!tuned) continue;
+      out.push({
+        id: uuid(),
+        kind,
+        label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim().slice(0, 60) : `${kind} candidate`,
+        target_failure_mode: typeof raw.target_failure_mode === "string" ? raw.target_failure_mode.trim() : "",
+        rationale: typeof raw.rationale === "string" ? raw.rationale.trim() : "",
+        label_policy: "",
+        decision_rubric: "",
+        system_prompt: null,
+        user_prompt_addendum: tuned,
+        detection_prompt: tuned,
+      });
+      continue;
+    }
+
+    if (!labelPolicy && !decisionRubric && !detectionGuidance) continue;
     out.push({
       id: uuid(),
       kind,

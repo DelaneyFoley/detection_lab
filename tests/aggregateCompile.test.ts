@@ -3,6 +3,7 @@ import {
   compileAggregatePrompt,
   extractPreamble,
   deriveAggregateOutcome,
+  deriveNegativeEvidence,
   validateAggregatePayload,
 } from "../src/lib/inference/aggregate";
 
@@ -62,6 +63,42 @@ describe("aggregate outcome (presence semantics)", () => {
     const out = deriveAggregateOutcome(list, null);
     expect(out.decision).toBe("NOT_DETECTED");
     expect(out.siblings).toHaveLength(2);
+  });
+});
+
+describe("deriveNegativeEvidence (NOT_DETECTED evidence fallback)", () => {
+  const siblings = [
+    { label: "knob", reasoning: "shiny knob on the panel" },
+    { label: "mold", reasoning: "black speckling in the corner" },
+  ];
+
+  it("surfaces every detection's reasoning when no support member is configured", () => {
+    const evidence = deriveNegativeEvidence(siblings, [
+      { label: "knob", enabled: true },
+      { label: "mold", enabled: true },
+    ]);
+    expect(evidence).toBe("knob: shiny knob on the panel\nmold: black speckling in the corner");
+  });
+
+  it("prefers a designated support member's reasoning", () => {
+    const evidence = deriveNegativeEvidence(siblings, [
+      { label: "knob", enabled: true },
+      { label: "mold", enabled: true, is_support: true },
+    ]);
+    expect(evidence).toBe("mold: black speckling in the corner");
+  });
+
+  it("ignores a support member that is disabled or absent from the response", () => {
+    const evidence = deriveNegativeEvidence(siblings, [
+      { label: "mold", enabled: false, is_support: true },
+      { label: "absent", enabled: true, is_support: true },
+    ]);
+    expect(evidence).toBe("knob: shiny knob on the panel\nmold: black speckling in the corner");
+  });
+
+  it("skips detections with blank reasoning and returns null when none remain", () => {
+    expect(deriveNegativeEvidence([{ label: "x", reasoning: "   " }], [])).toBeNull();
+    expect(deriveNegativeEvidence([], [])).toBeNull();
   });
 });
 

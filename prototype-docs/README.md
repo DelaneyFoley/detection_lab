@@ -40,6 +40,7 @@ Do not implement fixes until I approve a named change contract.
 | [diagnostics.md](diagnostics.md) | Prioritized PD findings, classification, evidence and proposed disposition |
 | [questions.md](questions.md) | PQ intent questions in small batches, options, blank/recorded answers |
 | [decisions.md](decisions.md) | Prototype-specific decisions and change history, not copied production commitments |
+| [followups.md](followups.md) | Outstanding implementation work (FUP/INV/OPEN) required to make code match confirmed intent |
 | [state.md](state.md) | Baseline revision, mode, verification, pending approvals and next action |
 | `changes/PC-###.md` (created per change) | Approved scope, acceptance, implementation and verification record |
 

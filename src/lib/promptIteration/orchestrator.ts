@@ -53,6 +53,17 @@ function parseStructure(value: unknown): Record<string, unknown> {
   }
 }
 
+/** Parse a composition that may be a JSON string or an object (or null). */
+function parseCompositionLoose(value: unknown): { members: Array<Record<string, any>> } | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as { members: Array<Record<string, any>> };
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
+}
+
 /** Content identity of a candidate prompt, used to skip re-evaluating dupes. */
 function candidateContentKey(c: { system_prompt?: string | null; label_policy: string; decision_rubric: string; user_prompt_addendum?: string | null }): string {
   return `${c.system_prompt || ""}\u0000${c.label_policy || ""}\u0000${c.decision_rubric || ""}\u0000${c.user_prompt_addendum ?? ""}`;
@@ -192,6 +203,15 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       sourcePrompt.system_prompt,
       splitUserPromptTemplate(sourcePrompt.user_prompt_template || "").addendum
     );
+
+    // PC-001: a composition-backed source is a Single Detection — the only
+    // tunable lever is its Detection Prompt (the target member description).
+    const sourceComposition = parseCompositionLoose(sourcePrompt.composition);
+    const isSingleDetection = !!(sourceComposition && sourcePrompt.production_snapshot_id);
+    const baseDetectionPrompt = isSingleDetection
+      ? sourceComposition!.members.find((m: any) => m.is_target)?.description ||
+        String(structure.user_prompt_addendum || "")
+      : "";
 
     const predictions = runRepository.getRunPredictions(run.run_id);
     const rows = toReviewedRows(predictions);
@@ -430,6 +450,9 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
       const roundLabelPolicy = String(roundStructure.label_policy || baseLabelPolicy);
       const roundDecisionRubric = String(roundStructure.decision_rubric || baseDecisionRubric);
       const roundUserAddendum = splitUserPromptTemplate(currentPrompt.user_prompt_template || "").addendum;
+      const roundComposition = parseCompositionLoose(currentPrompt.composition);
+      const roundDetectionPrompt =
+        roundComposition?.members.find((m: any) => m.is_target)?.description || baseDetectionPrompt;
 
       // For the synthesis pass, compile every distinct strategy tried (best-first).
       let synthesisStrategies:
@@ -487,6 +510,8 @@ export async function runPromptIterationJob(jobId: string, requestApiKey?: strin
           baseSystemPrompt: currentPrompt.system_prompt || "",
           baseUserAddendum: roundUserAddendum,
           baseFixedGuidance: typeof roundStructure.fixed_guidance === "string" ? roundStructure.fixed_guidance : "",
+          singleDetection: isSingleDetection,
+          baseDetectionPrompt: roundDetectionPrompt,
           synthesis: isSynthesis,
           roundStrategies: synthesisStrategies,
           failureModes,

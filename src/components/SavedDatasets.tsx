@@ -3109,13 +3109,24 @@ async function parseCsvManifest(file: File): Promise<Array<{
   return normalizeManifestRows(rows, "CSV");
 }
 
+/**
+ * Replace typographic "smart" quotes (commonly inserted by Excel/Word/Numbers
+ * autocorrect) with their straight ASCII equivalents so JSON array cells such as
+ * `[“Granite"]` parse correctly instead of being rejected.
+ */
+function normalizeSmartQuotes(value: string): string {
+  return value
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'");
+}
+
 /** Split a multi-label ground-truth cell into a deduped list of label names. */
 function parseMultiLabelCell(value: unknown): string[] {
   let parts: string[] = [];
   if (Array.isArray(value)) {
     parts = value.map((v) => String(v ?? ""));
   } else {
-    const raw = String(value ?? "").trim();
+    const raw = normalizeSmartQuotes(String(value ?? "").trim());
     if (!raw) return [];
     if (raw.startsWith("[")) {
       try {
@@ -3246,7 +3257,8 @@ function normalizeManifestRows(
       }
       label = rawLabel as "DETECTED" | "NOT_DETECTED";
     }
-    const rawSegStr = typeof segmentTags === "string" ? segmentTags.trim() : "";
+    const normalizedSegmentTags = typeof segmentTags === "string" ? normalizeSmartQuotes(segmentTags) : segmentTags;
+    const rawSegStr = typeof normalizedSegmentTags === "string" ? normalizedSegmentTags.trim() : "";
     if (rawSegStr && rawSegStr.startsWith("[")) {
       try {
         const parsed = JSON.parse(rawSegStr);
@@ -3268,7 +3280,7 @@ function normalizeManifestRows(
       image_url: imageUrl,
       ground_truth_label: label,
       ground_truth_labels: multiLabels.length > 0 ? multiLabels : undefined,
-      segment_tags: segmentTags,
+      segment_tags: normalizedSegmentTags,
     });
   }
 
@@ -3281,7 +3293,7 @@ function normalizeSegmentTags(value: unknown): string[] {
     const parts = value.map((v) => String(v || "").trim()).filter(Boolean);
     return dedupeStrings(parts);
   }
-  const str = String(value).trim();
+  const str = normalizeSmartQuotes(String(value).trim());
   if (str.startsWith("[")) {
     try {
       const parsed = JSON.parse(str);

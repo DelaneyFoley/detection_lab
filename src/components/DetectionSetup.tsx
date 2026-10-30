@@ -27,6 +27,9 @@ import {
   compileTargetMemberDescription,
 } from "@/lib/productionMirror";
 import { useProductionMirror } from "@/lib/useProductionMirror";
+import { useSingleDetection } from "@/lib/useSingleDetection";
+import { SingleDetectionPanel } from "@/components/shared/SingleDetectionPanel";
+import { buildSingleDetectionComposition } from "@/lib/productionMirror";
 import { compileAggregatePrompt, extractPreamble } from "@/lib/inference/aggregateCompile";
 import { useGeminiModels } from "@/lib/useGeminiModels";
 import { modelSupportsThinkingLevel } from "@/lib/geminiModels";
@@ -149,7 +152,7 @@ export function DetectionSetup({
   const [editVersionName, setEditVersionName] = useState("");
   const [editPromptSource, setEditPromptSource] = useState<PromptVersion | null>(null);
   const [editingFromVersionRow, setEditingFromVersionRow] = useState(false);
-  const [createMode, setCreateMode] = useState<"blank" | "assist" | "mirror">("blank");
+  const [createMode, setCreateMode] = useState<"single" | "mirror">("single");
   const [assistInput, setAssistInput] = useState("");
   const [assistLoading, setAssistLoading] = useState(false);
   const [assistError, setAssistError] = useState<string | null>(null);
@@ -206,6 +209,12 @@ export function DetectionSetup({
     active: mode === "create" && createMode === "mirror",
     productionLabel: form.production_label,
     targetDescription: createTargetDescription,
+  });
+
+  // Single Detection authoring state (PC-001): one-member aggregate run inside a
+  // selected production context's shared instructions.
+  const createSingle = useSingleDetection({
+    active: mode === "create" && createMode === "single",
   });
 
   const loadRelated = useCallback(async () => {
@@ -370,6 +379,16 @@ export function DetectionSetup({
         return;
       }
     }
+    if (createMode === "single") {
+      if (!createSingle.selectedContext || !createSingle.snapshot) {
+        notify({ message: "Select a context before creating a Single Detection.", tone: "warning" });
+        return;
+      }
+      if (!createSingle.productionLabel.trim()) {
+        notify({ message: "Production Label is required for a Single Detection.", tone: "warning" });
+        return;
+      }
+    }
     const cleanedRubric = form.decision_rubric.filter((r) => r.trim());
     const cleanedSegmentTaxonomy = form.segment_taxonomy.map((s) => s.trim()).filter(Boolean);
     setSavingPrompt(true);
@@ -382,7 +401,11 @@ export function DetectionSetup({
         decision_rubric: cleanedRubric,
         segment_taxonomy: cleanedSegmentTaxonomy,
         production_label:
-          (createMode === "mirror" ? createMirror.targetLabel.trim() : form.production_label.trim()) || null,
+          (createMode === "mirror"
+            ? createMirror.targetLabel.trim()
+            : createMode === "single"
+              ? createSingle.productionLabel.trim()
+              : form.production_label.trim()) || null,
       }),
     });
     const data = await safeJsonObject<{ detection_id?: string; error?: string }>(res);
@@ -393,6 +416,14 @@ export function DetectionSetup({
 
     const decisionRubricText = cleanedRubric.map((r, i) => `${i + 1}. ${r}`).join("\n");
     const isMirror = createMode === "mirror";
+    const isSingle = createMode === "single";
+    const singleComposition =
+      isSingle && createSingle.snapshot
+        ? buildSingleDetectionComposition(createSingle.snapshot, {
+            label: createSingle.productionLabel.trim(),
+            description: createSingle.detectionPrompt,
+          })
+        : null;
     const promptBody: Record<string, unknown> = {
       detection_id: data.detection_id,
       version_label: buildVersionLabel(createVersionName || "Detection baseline", []),
@@ -400,22 +431,22 @@ export function DetectionSetup({
         detection_identity: `${form.display_name} (${form.detection_code})`,
         label_policy: form.label_policy,
         decision_rubric: decisionRubricText,
-        user_prompt_addendum: form.user_prompt_addendum,
-        output_schema: `{"detection_code":"${form.detection_code}","decision":"DETECTED|NOT_DETECTED","confidence":0.0,"evidence":"short phrase"}`,
+        user_prompt_addendum: isSingle ? createSingle.detectionPrompt : form.user_prompt_addendum,
+        output_schema: "",
         examples: "",
       },
       model:
         isMirror && createMirror.composition
           ? createMirror.composition.google_model || selectedModel || "gemini-2.5-flash"
-          : selectedModel || "gemini-2.5-flash",
+          : isSingle && singleComposition
+            ? singleComposition.google_model || selectedModel || "gemini-2.5-flash"
+            : selectedModel || "gemini-2.5-flash",
       temperature: 0,
       top_p: 1,
       max_output_tokens: 1024,
       change_notes: isMirror
         ? "Initial production replication baseline"
-        : createMode === "assist"
-          ? "Generated with Prompt Assist"
-          : "Initial baseline prompt",
+        : "Initial single detection baseline",
       created_by: "user",
       mode: isMirror ? "PRODUCTION_MODE" : "DEVELOPMENT_MODE",
     };
@@ -425,6 +456,12 @@ export function DetectionSetup({
       promptBody.production_snapshot_id = createMirror.snapshot.snapshot_id;
       promptBody.provenance_kind = computeProvenanceKind(createMirror.snapshot, createMirror.composition);
       promptBody.composition = createMirror.composition;
+    }
+    if (isSingle && createSingle.snapshot && singleComposition) {
+      promptBody.context_name = createSingle.selectedContext;
+      promptBody.production_label = createSingle.productionLabel.trim() || null;
+      promptBody.production_snapshot_id = createSingle.snapshot.snapshot_id;
+      promptBody.composition = singleComposition;
     }
     const promptRes = await fetch("/api/prompts", {
       method: "POST",
@@ -442,7 +479,8 @@ export function DetectionSetup({
     setSelectedDetectionId(data.detection_id);
     setMode("view");
     createMirror.reset();
-    setCreateMode("blank");
+    createSingle.reset();
+    setCreateMode("single");
     onRefresh();
     triggerRefresh();
     } finally {
@@ -475,14 +513,12 @@ export function DetectionSetup({
         return;
       }
 
-      const rubric = Array.isArray(data.decision_rubric)
-        ? data.decision_rubric.map((r: string) => String(r || "").trim()).filter(Boolean)
-        : [];
       const imageAttributes = Array.isArray(data.image_attributes)
         ? data.image_attributes.map((value: string) => String(value || "").trim()).filter(Boolean)
         : [];
-      const detected = String(data.label_policy_detected || "").trim();
-      const notDetected = String(data.label_policy_not_detected || "").trim();
+      const detectionPromptText = String(
+        data.detection_prompt || data.user_prompt_addendum || ""
+      ).trim();
 
       setForm((prev) => ({
         ...prev,
@@ -491,15 +527,9 @@ export function DetectionSetup({
           .replace(/[^A-Z0-9_]/g, ""),
         display_name: String(data.display_name || prev.display_name || ""),
         description: String(data.description || prev.description || ""),
-        detection_category: (data.detection_category as DetectionCategory) || prev.detection_category,
-        label_policy: composeLabelPolicySections({ detected, notDetected }),
-        user_prompt_addendum: String(data.user_prompt_addendum || prev.user_prompt_addendum || ""),
-        decision_rubric: rubric.length > 0 ? rubric : prev.decision_rubric,
         segment_taxonomy: imageAttributes.length > 0 ? imageAttributes : prev.segment_taxonomy,
       }));
-      setFormLabelPolicySections({ detected, notDetected });
-      if (detected || notDetected) setShowLabelPolicy(true);
-      if (rubric.length > 0) setShowDecisionRubric(true);
+      if (detectionPromptText) createSingle.setDetectionPrompt(detectionPromptText);
       if (String(data.version_label || "").trim()) {
         setCreateVersionName(String(data.version_label).trim());
       }
@@ -839,8 +869,9 @@ export function DetectionSetup({
     setEditPromptSource(null);
     setEditVersionName("");
     setEditingFromVersionRow(false);
-    setCreateMode("blank");
+    setCreateMode("single");
     createMirror.reset();
+    createSingle.reset();
     setAssistInput("");
     setAssistError(null);
     setCreateVersionName("Detection baseline");
@@ -1868,51 +1899,29 @@ export function DetectionSetup({
 
           {mode === "create" && (
             <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <button
                   type="button"
-                  onClick={() => setCreateMode("blank")}
+                  onClick={() => setCreateMode("single")}
                   className={`relative text-left rounded-2xl border px-5 py-5 transition-colors ${
-                    createMode === "blank"
+                    createMode === "single"
                       ? "border-[#5cb8ff] bg-[rgba(35,74,108,0.14)] shadow-[0_0_0_1px_rgba(92,184,255,0.5)]"
                       : "border-white/10 bg-[rgba(6,13,20,0.68)] hover:bg-[rgba(10,20,31,0.94)]"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="text-base font-semibold text-white">Blank Template</div>
+                    <div className="text-base font-semibold text-white">Single Detection</div>
                     <span
                       className={`mt-1 h-4 w-4 shrink-0 rounded-full border ${
-                        createMode === "blank"
+                        createMode === "single"
                           ? "border-[#5cb8ff] bg-[#5cb8ff]"
                           : "border-white/40"
                       }`}
                     />
                   </div>
                   <div className="mt-2 text-sm leading-snug text-[var(--app-text-muted)]">
-                    Author prompts, attributes, policy frameworks, and scoring benchmarks manually.
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCreateMode("assist")}
-                  className={`relative text-left rounded-2xl border px-5 py-5 transition-colors ${
-                    createMode === "assist"
-                      ? "border-[#5cb8ff] bg-[rgba(35,74,108,0.14)] shadow-[0_0_0_1px_rgba(92,184,255,0.5)]"
-                      : "border-white/10 bg-[rgba(6,13,20,0.68)] hover:bg-[rgba(10,20,31,0.94)]"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="text-base font-semibold text-white">Prompt Assist</div>
-                    <span
-                      className={`mt-1 h-4 w-4 shrink-0 rounded-full border ${
-                        createMode === "assist"
-                          ? "border-[#5cb8ff] bg-[#5cb8ff]"
-                          : "border-white/40"
-                      }`}
-                    />
-                  </div>
-                  <div className="mt-2 text-sm leading-snug text-[var(--app-text-muted)]">
-                    Input simple natural language parameters and auto-generate complex system criteria models.
+                    Author one detection that runs inside a production context&apos;s shared instructions — the
+                    initial step before trying it in full Production Replication.
                   </div>
                 </button>
                 <button
@@ -1935,16 +1944,20 @@ export function DetectionSetup({
                     />
                   </div>
                   <div className="mt-2 text-sm leading-snug text-[var(--app-text-muted)]">
-                    Bind this detection to a real production context and author it inside the production aggregate.
+                    Bind this detection to a real production context and author it inside the full production aggregate.
                   </div>
                 </button>
               </div>
 
-              {createMode === "assist" && (
+              {createMode === "single" && (
                 <div className="rounded-2xl border border-[rgba(92,184,255,0.4)] bg-[rgba(10,25,45,0.35)] p-5 space-y-3">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5cb8ff]">
-                    Describe the detection
+                    Prompt Assist (optional)
                   </div>
+                  <p className="text-xs text-[var(--app-text-muted)]">
+                    Describe the detection in plain language to auto-generate the Detection Prompt, or leave this
+                    blank and author it yourself below.
+                  </p>
                   <textarea
                     className="app-textarea h-24 px-3 py-2 text-sm"
                     value={assistInput}
@@ -1993,6 +2006,7 @@ export function DetectionSetup({
             </div>
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {mode === "edit" && (
               <div>
                 <label className={LABEL_CLS}>Detection Category</label>
                 <select
@@ -2010,6 +2024,7 @@ export function DetectionSetup({
                   ))}
                 </select>
               </div>
+              )}
               {mode === "create" && (
               <div>
                 <label className={LABEL_CLS}>Version Name</label>
@@ -2037,7 +2052,7 @@ export function DetectionSetup({
               )}
             </div>
 
-            {((mode === "create" && createMode !== "mirror") || mode === "edit") && (
+            {mode === "edit" && (
             <div>
               <label className={LABEL_CLS}>Production Label (target)</label>
               <input
@@ -2107,26 +2122,29 @@ export function DetectionSetup({
               </div>
             )}
 
-            {mode === "create" && createMode !== "mirror" && (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <div>
-              <label className={LABEL_CLS}>System Prompt</label>
-              <div className="app-card w-full px-3 py-2 text-sm min-h-24 whitespace-pre-wrap text-[var(--app-text)]">
-                {currentCategoryTemplates.system_prompt}
+            {mode === "create" && createMode === "single" && (
+              <div className="space-y-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#5cb8ff]">
+                  Single Detection
+                </div>
+                <SingleDetectionPanel
+                  contextNames={createSingle.contextNames}
+                  selectedContext={createSingle.selectedContext}
+                  onSelectContext={createSingle.selectContext}
+                  snapshot={createSingle.snapshot}
+                  ctxLoading={createSingle.ctxLoading}
+                  ctxError={createSingle.ctxError}
+                  productionLabel={createSingle.productionLabel}
+                  onChangeProductionLabel={createSingle.setProductionLabel}
+                  detectionPrompt={createSingle.detectionPrompt}
+                  onChangeDetectionPrompt={createSingle.setDetectionPrompt}
+                  preamble={createSingle.preamble}
+                  compiledPreview={createSingle.compiledPreview}
+                />
               </div>
-              <div className="mt-1 text-[11px] text-gray-500">Managed in Admin by detection category.</div>
-            </div>
-            <div>
-              <label className={LABEL_CLS}>User Prompt</label>
-              <div className="app-card w-full px-3 py-2 text-sm min-h-32 whitespace-pre-wrap text-[var(--app-text)]">
-                {currentCategoryTemplates.user_prompt_template || "No user prompt template."}
-              </div>
-              <div className="mt-1 text-[11px] text-gray-500">Base template is Admin-managed. Detection-specific guidance goes in the addendum below.</div>
-            </div>
-          </div>
-          )}
+            )}
 
-          {mode === "create" && createMode !== "mirror" && (
+          {mode === "create" && createMode !== "mirror" && createMode !== "single" && (
           <div>
             <label className={LABEL_CLS}>User Prompt Addendum</label>
             <textarea
@@ -2143,7 +2161,7 @@ export function DetectionSetup({
           </div>
           )}
 
-          {mode === "create" && createMode !== "mirror" && (showLabelPolicy ? (
+          {mode === "create" && createMode !== "mirror" && createMode !== "single" && (showLabelPolicy ? (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs text-gray-400 block">Decision Policy</label>
@@ -2188,7 +2206,7 @@ export function DetectionSetup({
             </div>
           ))}
 
-          {mode === "create" && createMode !== "mirror" && (showDecisionRubric ? (
+          {mode === "create" && createMode !== "mirror" && createMode !== "single" && (showDecisionRubric ? (
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs text-gray-400 block">Decision Rubric (3-7 criteria)</label>
@@ -4162,6 +4180,17 @@ function PromptForm({
     targetDescription,
   });
 
+  // Single Detection authoring state for the Development (single-prompt) mode.
+  const single = useSingleDetection({
+    active: mode === "DEVELOPMENT_MODE",
+    initial: {
+      context_name: initialData?.context_name,
+      production_label: initialData?.production_label ?? productionLabel,
+      composition: initialData?.composition as PromptComposition | null | undefined,
+      production_snapshot_id: initialData?.production_snapshot_id,
+    },
+  });
+
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -4181,6 +4210,32 @@ function PromptForm({
       source_prompt_version_id: initialData?.prompt_version_id ?? null,
       mode,
     };
+    if (mode === "DEVELOPMENT_MODE") {
+      if (!single.selectedContext || !single.snapshot) {
+        setCtxError("Select a context before saving a Single Detection version.");
+        return;
+      }
+      if (!single.productionLabel.trim()) {
+        setCtxError("Production Label is required for a Single Detection version.");
+        return;
+      }
+      const singleComposition = buildSingleDetectionComposition(single.snapshot, {
+        label: single.productionLabel.trim(),
+        description: single.detectionPrompt,
+      });
+      payload = {
+        ...payload,
+        prompt_structure: {
+          ...form.prompt_structure,
+          user_prompt_addendum: single.detectionPrompt,
+        },
+        context_name: single.selectedContext,
+        production_label: single.productionLabel.trim() || null,
+        production_snapshot_id: single.snapshot.snapshot_id,
+        composition: singleComposition,
+        model: singleComposition.google_model || form.model,
+      };
+    }
     if (mode === "PRODUCTION_MODE") {
       if (!selectedContext || !snapshot || !composition) {
         setCtxError("Select a production context to import before saving a production-mode version.");
@@ -4238,7 +4293,7 @@ function PromptForm({
             onClick={() => setMode("DEVELOPMENT_MODE")}
             className={`px-3 py-1.5 ${mode === "DEVELOPMENT_MODE" ? "bg-blue-600 text-white" : "bg-gray-900 text-gray-300"}`}
           >
-            Development
+            Single Detection
           </button>
           <button
             type="button"
@@ -4250,7 +4305,7 @@ function PromptForm({
         </div>
         <p className="text-xs text-[var(--app-text-muted)]">
           {mode === "DEVELOPMENT_MODE"
-            ? "Isolated single-detection development."
+            ? "A single detection that runs inside a selected production context's shared instructions."
             : "Runs the target detection inside the real production context aggregate."}
         </p>
       </div>
@@ -4312,7 +4367,23 @@ function PromptForm({
 
       {mode === "DEVELOPMENT_MODE" && (
         <>
+          <SingleDetectionPanel
+            contextNames={single.contextNames}
+            selectedContext={single.selectedContext}
+            onSelectContext={single.selectContext}
+            snapshot={single.snapshot}
+            ctxLoading={single.ctxLoading}
+            ctxError={single.ctxError}
+            productionLabel={single.productionLabel}
+            onChangeProductionLabel={single.setProductionLabel}
+            detectionPrompt={single.detectionPrompt}
+            onChangeDetectionPrompt={single.setDetectionPrompt}
+            preamble={single.preamble}
+            compiledPreview={single.compiledPreview}
+          />
 
+      {/* Legacy single-object authoring retained (hidden) for reference only. */}
+      {false && (<>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div>
           <label className={LABEL_CLS}>System Prompt</label>
@@ -4446,6 +4517,7 @@ function PromptForm({
           </button>
         </div>
       )}
+      </>)}
         </>
       )}
 

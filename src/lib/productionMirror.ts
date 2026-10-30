@@ -7,6 +7,39 @@ import type {
 import { extractPreamble } from "@/lib/inference/aggregateCompile";
 
 /**
+ * Build the composition for a SINGLE DETECTION version (PC-001). A single
+ * detection runs exactly like a production-context aggregate, but over a single
+ * member: the shared preamble (user prompt shared instructions) extracted from
+ * the selected context's frozen snapshot, followed by one detection block. The
+ * target label is the detection's production label and DETECTED means that label
+ * is returned. No sibling members, no system prompt, no decision policy/rubric.
+ */
+export function buildSingleDetectionComposition(
+  snapshot: ProductionSnapshot,
+  params: { label: string; description: string }
+): PromptComposition {
+  const label = String(params.label || "").trim();
+  return {
+    context_name: snapshot.context_name,
+    google_model: snapshot.google_model,
+    thinking_level: snapshot.thinking_level,
+    preamble: extractPreamble(snapshot.built_prompt),
+    target_source: "structured",
+    multi_label: false,
+    members: [
+      {
+        role: "detection",
+        label,
+        description: String(params.description || ""),
+        position: 1,
+        enabled: true,
+        is_target: true,
+      },
+    ],
+  };
+}
+
+/**
  * Pure production-mirror helpers (Slice S2).
  *
  * These compute the editable aggregate composition from an immutable production
@@ -117,6 +150,35 @@ export function buildCompositionFromSnapshot(
 /** Reassign 1-based positions in current array order. */
 export function renumber(members: CompositionMember[]): CompositionMember[] {
   return members.map((m, i) => ({ ...m, position: i + 1 }));
+}
+
+/**
+ * Apply accepted Prompt-Feedback edits (PC-002) to a Detection Prompt. Each edit
+ * is an exact `old_text -> new_text` replacement (first occurrence), matching how
+ * the single-detection feedback analyzer is instructed to anchor its edits.
+ */
+export function applyDetectionPromptEdits(
+  current: string,
+  edits: Array<{ old_text: string; new_text: string }>
+): string {
+  let out = String(current || "");
+  for (const edit of edits) {
+    if (edit && edit.old_text) {
+      out = out.replace(edit.old_text, edit.new_text);
+    }
+  }
+  return out;
+}
+
+/** Return a copy of a composition with the target member's description replaced. */
+export function withTargetDescription(
+  composition: PromptComposition,
+  description: string
+): PromptComposition {
+  return {
+    ...composition,
+    members: composition.members.map((m) => (m.is_target ? { ...m, description } : m)),
+  };
 }
 
 function nonTargetSignature(

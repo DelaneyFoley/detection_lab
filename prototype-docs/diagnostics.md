@@ -77,7 +77,13 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
   inspect persisted state, success/error feedback, retry behavior, and duplicate
   prevention.
 - **Question:** PQ-004.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** owner intent CONFIRMED via PDEC-011 (option B).
+  Keep a recoverable draft with an explicit "baseline prompt pending" state and
+  idempotent retry; replace today's transient-toast-only signaling. A promptless
+  detection blocks Run Inference (already enforced) and is recovered by manual
+  prompt add if retry fails (OPEN-005 resolved). Implementation gap FUP-012.
+- **Status:** OPEN (intent confirmed; implementation gap FUP-012 tracked in
+  [followups.md](../prototype-docs/followups.md)).
 
 ### PD-003 — Prompt version, approval, and deletion lifecycles need an owner rule
 
@@ -100,7 +106,13 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
 - **Proposed verification:** approve a version, create dependent run/note
   records, then test edit, replacement, archive/delete, and history display.
 - **Question:** PQ-005.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** owner intent CONFIRMED via PDEC-012/PDEC-013.
+  Deletion is hard-delete + cascade (option A) — archive/soft-delete is **not**
+  wanted. Approval becomes a dated, retained decision record (version +
+  evaluation + override reason + timestamp + actor) replacing the single mutable
+  pointer (FUP-013).
+- **Status:** OPEN (intent confirmed; approval-history gap FUP-013 tracked in
+  [followups.md](../prototype-docs/followups.md)).
 
 ### PD-004 — Production-mirror configuration has several plausible authorities
 
@@ -273,7 +285,17 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
   finalize, edit GT later, recompute, and compare run history, current dataset
   truth, snapshots, feedback, and iteration inputs.
 - **Questions:** PQ-001, PQ-002.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** owner intent CONFIRMED via PDEC-004/005/006/007.
+  Finalization is **consolidated into Start AI Prompt Iteration** (the earlier
+  "retain a separate finalize" wording is SUPERSEDED). Checkpoint is the
+  immutable iteration baseline; recompute is comparison-only. Explicit GT and
+  attribute edits save to the dataset at edit time (no separate promote step).
+  Verified gaps remain OPEN as follow-ups: iterator uses live rows not the
+  checkpoint (FUP-003); checkpoint does not bundle immutable evidence/GT basis
+  (FUP-002); one-finalize-per-run restriction (FUP-004); recompute overwrites the
+  per-run GT snapshot (FUP-006); attribute edits are unaudited (FUP-005).
+- **Status:** OPEN (intent confirmed; implementation gaps tracked in
+  [followups.md](../prototype-docs/followups.md)).
 
 ### PD-011 — Flags and notifications span surfaces without a confirmed shared resolution contract
 
@@ -366,7 +388,14 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
   create candidates with mixed eligibility, and discard the current/last round;
   verify provenance and retained history.
 - **Question:** PQ-014.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** partially addressed by PDEC-004/005. The
+  iteration entry point is consolidated into Start AI Prompt Iteration, which
+  must start from an immutable checkpoint (source run, metrics, prompt version,
+  eval config, GT basis) rather than live mutable evidence (FUP-002/FUP-003).
+  Candidate-level eligibility/provenance surfacing and discard/retention
+  semantics remain under PQ-014 and are not yet decided.
+- **Status:** OPEN (iteration entry point decided; feedback/eligibility/discard
+  semantics still under PQ-014).
 
 ### PD-015 — Prompt comparison selects latest runs but meaningful comparability is unresolved
 
@@ -386,7 +415,17 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
   model/configuration, and completion times; verify chosen runs, warnings/gates,
   and synthesis reproducibility.
 - **Question:** PQ-003.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** owner intent CONFIRMED via PDEC-010. Ground truth
+  must be held **constant** (same dataset revision/GT) — differing GT is not a
+  valid comparison (FUP-010). The independent variable is explicit: existing
+  prompt-version mode plus a **new model/thinking-level mode** (same prompt +
+  dataset/GT, vary model/thinking level), which requires run-level selection
+  rather than "latest per prompt" (FUP-011). Runs already persist
+  `dataset_hash`/`model_used`/`thinking_level`, so this is implementable.
+  Execution of missing runs is out of scope: the mode uses existing completed
+  runs only (OPEN-004 resolved).
+- **Status:** OPEN (intent confirmed; implementation gaps FUP-010/FUP-011 and
+  edge case OPEN-004 tracked in [followups.md](../prototype-docs/followups.md)).
 
 ### PD-016 — Held-out evaluation, approval, and deployment must stay distinct
 
@@ -408,7 +447,12 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
   evaluations; inspect Setup, logs, selection, exports, and any production-facing
   language for implied deployment.
 - **Question:** PQ-005.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** owner intent CONFIRMED via PDEC-013. Approval
+  becomes a dated, retained decision record (version + evaluation + override
+  reason + timestamp + actor) and stays distinct from deployment/publication
+  (FUP-013). Evaluation/approval/deployment remain separate states.
+- **Status:** OPEN (intent confirmed; implementation gap FUP-013 tracked in
+  [followups.md](../prototype-docs/followups.md)).
 
 ### PD-017 — Detection deletion has broad cross-entity consequences
 
@@ -430,7 +474,15 @@ Then review split/QA guarantees (PD-007/009), save/recovery validation
   for detections with each dependent record type; verify pointers, exports,
   histories, and recovery.
 - **Question:** PQ-005.
-- **Status:** OPEN.
+- **Disposition (2026-10-27):** owner intent CONFIRMED via PDEC-012. Hard-delete
+  + cascade is intended; archive/disable is not wanted. Verified: the cascade
+  does **not** delete datasets and does **not** change current GT/attribute
+  labels — it only removes correction/checkpoint records, which is acceptable
+  (reconciled with PDEC-005/007/009, which apply to recompute/restart, not
+  deletion). Minor fix: the delete UI wording claims datasets are cascaded; they
+  are not (FUP-014).
+- **Status:** OPEN (intent confirmed; only the FUP-014 wording fix tracked in
+  [followups.md](../prototype-docs/followups.md)).
 
 ### PD-018 — Metric snapshots and live performance surfaces need a shared meaning
 

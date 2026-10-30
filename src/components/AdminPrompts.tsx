@@ -7,10 +7,6 @@ import { DEFAULT_FEEDBACK_IMAGE_LIMITS, FEEDBACK_IMAGE_LIMIT_KEYS } from "@/lib/
 type PromptSettings = {
   prompt_assist_template: string;
   prompt_feedback_template: string;
-  incorrect_capture_system_prompt: string;
-  incorrect_capture_user_prompt: string;
-  hazard_identification_system_prompt: string;
-  hazard_identification_user_prompt: string;
 };
 
 type ImageLimits = Record<string, number>;
@@ -42,38 +38,6 @@ const WORKBENCH_TEMPLATES: TemplateItem[] = [
   },
 ];
 
-const CATEGORY_TEMPLATES: Array<{ title: string; items: TemplateItem[] }> = [
-  {
-    title: "Incorrect Capture",
-    items: [
-      {
-        key: "incorrect_capture_system_prompt",
-        title: "System Prompt",
-        description: "Shared system-level instruction applied to every incorrect-capture detection.",
-      },
-      {
-        key: "incorrect_capture_user_prompt",
-        title: "User Prompt",
-        description: "Shared user prompt base applied to every incorrect-capture detection.",
-      },
-    ],
-  },
-  {
-    title: "Hazard Identification",
-    items: [
-      {
-        key: "hazard_identification_system_prompt",
-        title: "System Prompt",
-        description: "Shared system-level instruction applied to every hazard-identification detection.",
-      },
-      {
-        key: "hazard_identification_user_prompt",
-        title: "User Prompt",
-        description: "Shared user prompt base applied to every hazard-identification detection.",
-      },
-    ],
-  },
-];
 
 export function AdminPrompts() {
   const [loading, setLoading] = useState(true);
@@ -84,28 +48,16 @@ export function AdminPrompts() {
   const [data, setData] = useState<PromptSettings>({
     prompt_assist_template: "",
     prompt_feedback_template: "",
-    incorrect_capture_system_prompt: "",
-    incorrect_capture_user_prompt: "",
-    hazard_identification_system_prompt: "",
-    hazard_identification_user_prompt: "",
   });
   const [draft, setDraft] = useState<PromptSettings>({
     prompt_assist_template: "",
     prompt_feedback_template: "",
-    incorrect_capture_system_prompt: "",
-    incorrect_capture_user_prompt: "",
-    hazard_identification_system_prompt: "",
-    hazard_identification_user_prompt: "",
   });
   const [imageLimits, setImageLimits] = useState<ImageLimits>({ ...DEFAULT_FEEDBACK_IMAGE_LIMITS });
   const [imageLimitsDraft, setImageLimitsDraft] = useState<ImageLimits>({ ...DEFAULT_FEEDBACK_IMAGE_LIMITS });
   const [expanded, setExpanded] = useState<Record<keyof PromptSettings, boolean>>({
     prompt_assist_template: false,
     prompt_feedback_template: false,
-    incorrect_capture_system_prompt: false,
-    incorrect_capture_user_prompt: false,
-    hazard_identification_system_prompt: false,
-    hazard_identification_user_prompt: false,
   });
 
   const load = async () => {
@@ -118,10 +70,6 @@ export function AdminPrompts() {
       const next = {
         prompt_assist_template: String(json?.prompt_assist_template || ""),
         prompt_feedback_template: String(json?.prompt_feedback_template || ""),
-        incorrect_capture_system_prompt: String(json?.incorrect_capture_system_prompt || ""),
-        incorrect_capture_user_prompt: String(json?.incorrect_capture_user_prompt || ""),
-        hazard_identification_system_prompt: String(json?.hazard_identification_system_prompt || ""),
-        hazard_identification_user_prompt: String(json?.hazard_identification_user_prompt || ""),
       };
       setData(next);
       setDraft(next);
@@ -171,7 +119,7 @@ export function AdminPrompts() {
         <div className="min-w-0 flex-1 space-y-2">
           <h2 className="app-page-title">Template Governance</h2>
           <p className="app-page-copy">
-            Manage the templates that shape prompt generation and the shared category prompts applied across detections.
+            Manage the templates that shape AI-assisted prompt generation and feedback.
             These values are global system configuration, not per-detection edits.
           </p>
         </div>
@@ -243,28 +191,6 @@ export function AdminPrompts() {
               )
             )}
           </SectionBlock>
-
-          {CATEGORY_TEMPLATES.map((section) => (
-            <SectionBlock
-              key={section.title}
-              kicker="Category Templates"
-              title={section.title}
-              description="These prompts are applied automatically to every detection in this category."
-            >
-              {section.items.map((item) => (
-                <TemplateCard
-                  key={item.key}
-                  title={item.title}
-                  description={item.description}
-                  value={(editing ? draft : data)[item.key]}
-                  editing={editing}
-                  expanded={editing || expanded[item.key]}
-                  onToggle={() => setExpanded((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
-                  onChange={(value) => setDraft((prev) => ({ ...prev, [item.key]: value }))}
-                />
-              ))}
-            </SectionBlock>
-          ))}
 
           <AnnotatorRegistry />
         </>

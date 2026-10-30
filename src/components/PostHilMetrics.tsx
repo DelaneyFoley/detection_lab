@@ -4,10 +4,22 @@ import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
 import { MetricsDisplay } from "@/components/MetricsDisplay";
 import { useAppFeedback } from "@/components/shared/AppFeedbackProvider";
-import type { Detection, Run, Prediction, PromptVersion, PromptEditSuggestion } from "@/types";
+import type { Detection, Run, Prediction, PromptVersion, PromptEditSuggestion, PromptComposition } from "@/types";
 import { splitTypeLabel } from "@/lib/splitType";
 import { buildVersionLabel, parseVersionLabel } from "@/lib/detectionPrompts";
+import { applyDetectionPromptEdits, withTargetDescription } from "@/lib/productionMirror";
 import { formatMetricValue } from "@/lib/ui/metrics";
+
+/** Parse a composition that may be a JSON string or object (or null). */
+function parseCompositionLoose(value: unknown): PromptComposition | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as PromptComposition;
+  try {
+    return JSON.parse(String(value)) as PromptComposition;
+  } catch {
+    return null;
+  }
+}
 
 export function PostHilMetrics({ detection }: { detection: Detection }) {
   const { apiKey, selectedModel, selectedRunByDetection, setSelectedRunForDetection, refreshCounter, triggerRefresh } = useAppStore();
@@ -101,7 +113,7 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       const data = await res.json();
       if (data.suggestions) {
         const next = (data.suggestions as PromptEditSuggestion[]).filter((suggestion) =>
-          ["label_policy", "decision_policy", "decision_rubric", "user_prompt_addendum"].includes(String(suggestion.section || ""))
+          ["detection_prompt", "label_policy", "decision_policy", "decision_rubric", "user_prompt_addendum"].includes(String(suggestion.section || ""))
         );
         setSuggestions(next);
         setEditableSuggestions(next);
@@ -134,6 +146,9 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
 
     setSaving(true);
 
+    const sourceComposition = parseCompositionLoose((prompt as any).composition);
+    const isSingleDetection = !!(sourceComposition && prompt.production_snapshot_id);
+
     let newLabelPolicy = (prompt.prompt_structure as any)?.label_policy || "";
     let newDecisionRubric = (prompt.prompt_structure as any)?.decision_rubric || "";
     let newUserPromptAddendum =
@@ -141,6 +156,25 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
 
     const accepted = editableSuggestions.filter((_, i) => selectedSuggestions.has(i));
     const rejected = editableSuggestions.filter((_, i) => !selectedSuggestions.has(i));
+
+    // PC-002: single-detection sources edit only the Detection Prompt (the target
+    // member description). Apply accepted edits to it and save a composition-
+    // backed version.
+    const currentDetectionPrompt = isSingleDetection
+      ? String(
+          sourceComposition!.members.find((m) => m.is_target)?.description ||
+            (prompt.prompt_structure as any)?.user_prompt_addendum ||
+            ""
+        )
+      : "";
+    const editedDetectionPrompt = isSingleDetection
+      ? applyDetectionPromptEdits(
+          currentDetectionPrompt,
+          accepted
+            .filter((s) => s.section === "detection_prompt")
+            .map((s) => ({ old_text: s.old_text, new_text: s.new_text }))
+        )
+      : "";
 
     for (const s of accepted) {
       if (s.section === "label_policy" || s.section === "decision_policy") {
@@ -167,12 +201,31 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
       ...accepted.map((s) => `• ${formatSectionLabel(s.section)}: ${s.rationale || "updated"}`),
     ].join("\n");
 
-    try {
-      // Create exactly ONE new version carrying the accepted edits.
-      const res = await fetch("/api/prompts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+    // Composition-backed payload for a Single Detection source; legacy structured
+    // payload otherwise.
+    const requestBody: Record<string, unknown> = isSingleDetection
+      ? {
+          detection_id: detection.detection_id,
+          version_label: versionLabel,
+          source_prompt_version_id: prompt.prompt_version_id,
+          prompt_structure: {
+            ...(prompt.prompt_structure || {}),
+            user_prompt_addendum: editedDetectionPrompt,
+          },
+          mode: prompt.mode || "DEVELOPMENT_MODE",
+          context_name: prompt.context_name ?? null,
+          production_label: prompt.production_label ?? null,
+          production_snapshot_id: prompt.production_snapshot_id,
+          composition: withTargetDescription(sourceComposition!, editedDetectionPrompt),
+          model: prompt.model,
+          temperature: prompt.temperature,
+          top_p: prompt.top_p,
+          max_output_tokens: prompt.max_output_tokens,
+          change_notes: changeNote,
+          version_notes: versionNotes,
+          created_by: "ai-assistant",
+        }
+      : {
           detection_id: detection.detection_id,
           version_label: versionLabel,
           source_prompt_version_id: prompt.prompt_version_id,
@@ -189,7 +242,14 @@ export function PostHilMetrics({ detection }: { detection: Detection }) {
           change_notes: changeNote,
           version_notes: versionNotes,
           created_by: "ai-assistant",
-        }),
+        };
+
+    try {
+      // Create exactly ONE new version carrying the accepted edits.
+      const res = await fetch("/api/prompts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       });
       const data = await res.json();
       if (!res.ok || !data?.prompt_version_id) {
@@ -539,6 +599,8 @@ function formatRunOptionLabel(run: Run, promptLabel?: string): string {
 
 function formatSectionLabel(section?: string): string {
   switch (section) {
+    case "detection_prompt":
+      return "Detection Prompt";
     case "label_policy":
     case "decision_policy":
       return "Decision Policy";

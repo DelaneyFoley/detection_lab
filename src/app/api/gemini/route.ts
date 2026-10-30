@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { DEFAULT_PROMPT_FEEDBACK_TEMPLATE, DEFAULT_FEEDBACK_IMAGE_LIMITS, FEEDBACK_IMAGE_LIMIT_KEYS, renderPromptFeedbackTemplate } from "@/lib/adminPrompts";
+import { DEFAULT_PROMPT_FEEDBACK_TEMPLATE, DEFAULT_PROMPT_FEEDBACK_SINGLE_DETECTION_TEMPLATE, DEFAULT_FEEDBACK_IMAGE_LIMITS, FEEDBACK_IMAGE_LIMIT_KEYS, renderPromptFeedbackTemplate, renderPromptFeedbackSingleDetectionTemplate } from "@/lib/adminPrompts";
 import { buildImagePart } from "@/lib/gemini";
 import { applyRateLimit, parseJsonWithSchema } from "@/lib/api";
 import { getRequestContext, logger } from "@/lib/logger";
 import { GeminiAssistSchema } from "@/lib/schemas";
 import { settingsRepository } from "@/lib/repositories";
+
+/** Parse a composition that may be a JSON string or an object (or null). */
+function parseCompositionLoose(value: unknown): { members: Array<Record<string, any>> } | null {
+  if (!value) return null;
+  if (typeof value === "object") return value as { members: Array<Record<string, any>> };
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
+}
 
 // Prompt improvement assistant
 export async function POST(req: NextRequest) {
@@ -76,6 +87,19 @@ export async function POST(req: NextRequest) {
   const stored = settingsRepository.getByKey("prompt_feedback_template");
   const template = stored?.value || DEFAULT_PROMPT_FEEDBACK_TEMPLATE;
   const promptStructure = (prompt.prompt_structure || {}) as Record<string, unknown>;
+
+  // PC-002: a composition-backed source is a Single Detection — the only
+  // editable surface is the Detection Prompt (the target member description).
+  const composition = parseCompositionLoose(prompt.composition);
+  const isSingleDetection = !!(composition && prompt.production_snapshot_id);
+  const currentDetectionPrompt = isSingleDetection
+    ? String(
+        composition!.members.find((m: any) => m.is_target)?.description ||
+          promptStructure.user_prompt_addendum ||
+          ""
+      )
+    : "";
+
   const currentDecisionPolicy =
     typeof promptStructure.label_policy === "string" ? promptStructure.label_policy : "";
   const currentDecisionRubric =
@@ -90,23 +114,38 @@ export async function POST(req: NextRequest) {
       : typeof detection.user_prompt_addendum === "string"
       ? detection.user_prompt_addendum
       : "";
-  const analysisPrompt = renderPromptFeedbackTemplate(template, {
-    detectionCode: detection.detection_code,
-    detectionDisplayName: detection.display_name,
-    detectionCategory: detection.detection_category,
-    currentDecisionPolicy,
-    currentDecisionRubric,
-    currentUserPromptAddendum,
-    falsePositivesTotal: falsePositives.length,
-    falsePositivesList: falsePositiveList,
-    falseNegativesTotal: falseNegatives.length,
-    falseNegativesList: falseNegativeList,
-    truePositivesList: truePositiveList,
-    trueNegativesList: trueNegativeList,
-    errorTagsList: errorTagList,
-    parseFailTotal: trueParseFailures.length,
-    parseFailList,
-  });
+  const analysisPrompt = isSingleDetection
+    ? renderPromptFeedbackSingleDetectionTemplate(DEFAULT_PROMPT_FEEDBACK_SINGLE_DETECTION_TEMPLATE, {
+        detectionCode: detection.detection_code,
+        detectionDisplayName: detection.display_name,
+        currentDetectionPrompt,
+        falsePositivesTotal: falsePositives.length,
+        falsePositivesList: falsePositiveList,
+        falseNegativesTotal: falseNegatives.length,
+        falseNegativesList: falseNegativeList,
+        truePositivesList: truePositiveList,
+        trueNegativesList: trueNegativeList,
+        errorTagsList: errorTagList,
+        parseFailTotal: trueParseFailures.length,
+        parseFailList,
+      })
+    : renderPromptFeedbackTemplate(template, {
+        detectionCode: detection.detection_code,
+        detectionDisplayName: detection.display_name,
+        detectionCategory: detection.detection_category,
+        currentDecisionPolicy,
+        currentDecisionRubric,
+        currentUserPromptAddendum,
+        falsePositivesTotal: falsePositives.length,
+        falsePositivesList: falsePositiveList,
+        falseNegativesTotal: falseNegatives.length,
+        falseNegativesList: falseNegativeList,
+        truePositivesList: truePositiveList,
+        trueNegativesList: trueNegativeList,
+        errorTagsList: errorTagList,
+        parseFailTotal: trueParseFailures.length,
+        parseFailList,
+      });
 
   // Production-mirror runs execute inside a multi-detection aggregate, so also ask
   // the model to flag cross-detection interference (advisory; target stays the

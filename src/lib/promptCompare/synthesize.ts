@@ -476,6 +476,11 @@ export async function runPromptCompareSynthesisJob(
       decision_rubric: analyzerResult.analysis.synthesis.decision_rubric,
       system_prompt: null,
       user_prompt_addendum: analyzerResult.analysis.synthesis.detection_guidance || null,
+      // For a composition-backed Single Detection source, the merged
+      // detection_guidance IS the synthesized Detection Prompt (member
+      // description); buildPromptVersionInput persists it as a one-member
+      // composition that runs via the aggregate path.
+      detection_prompt: analyzerResult.analysis.synthesis.detection_guidance || null,
     };
     const synthesizedLabel = promptRepository.uniqueVersionLabel(
       job.detection_id,

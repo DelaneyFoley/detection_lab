@@ -123,18 +123,18 @@ export async function POST(req: NextRequest) {
     const detection = runRepository.getDetectionById(detection_id);
     if (!detection) return NextResponse.json({ error: "Detection not found" }, { status: 404 });
 
-    // Production-mode versions execute the whole context aggregate.
+    // Composition-backed versions (Single Detection and Production Replication)
+    // execute via the aggregate path: preamble + member blocks, presence
+    // semantics. A Single Detection is simply a one-member composition.
     let aggregate: AggregateConfig | null = null;
-    if (prompt.mode === "PRODUCTION_MODE") {
-      const composition = prompt.composition
-        ? (JSON.parse(prompt.composition) as PromptComposition)
-        : null;
+    if (prompt.composition) {
+      const composition = JSON.parse(prompt.composition) as PromptComposition;
       const snapshot = prompt.production_snapshot_id
         ? snapshotRepository.getSnapshotById(prompt.production_snapshot_id)
         : null;
       if (!composition || !snapshot) {
         return NextResponse.json(
-          { error: "Production-mode version is missing its composition or frozen snapshot." },
+          { error: "This version is missing its composition or frozen context snapshot." },
           { status: 400 }
         );
       }
@@ -146,7 +146,7 @@ export async function POST(req: NextRequest) {
       const multiLabel = composition.multi_label === true;
       if (!multiLabel && !targetLabel) {
         return NextResponse.json(
-          { error: "This production-mode version has no target detection in its aggregate. Set the version's Target and re-save the version." },
+          { error: "This version has no target detection label. Set the Production Label and re-save the version." },
           { status: 400 }
         );
       }

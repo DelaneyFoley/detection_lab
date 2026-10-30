@@ -7,25 +7,40 @@ recommendations are starting points, not accepted decisions.
 
 ## Batch A — highest-impact workflow decisions
 
-### PQ-001 — What does HIL finalization mean?
+### PQ-001 — Should finalization be a standalone step or part of Start AI Prompt Iteration?
 
 - **Owner routing:** product owner (default).
+- **Status:** **ANSWERED 2026-10-27 → PDEC-004, PDEC-005.**
 - **Related findings:** PD-010, PD-014.
 - **Related workflows:** WF-012, WF-013.
-- **Current evidence:** finalization requires a completed run and records a
-  run-linked metric snapshot/version note; iteration requires this evidence
+- **Current evidence:** finalization is a separate action that must run before
+  automated iteration; the iteration route rejects unless a prior
+  `hil_finalized` version-note entry exists
   ([finalize](../src/app/api/hil/finalize/route.ts#L46),
   [snapshot](../src/app/api/hil/finalize/route.ts#L68),
-  [iteration guard](../src/app/api/hil/prompt-iteration/route.ts#L113)).
-- **Decision:** Which contract should “Finalize HIL” represent?
-  - A. A review-complete checkpoint/snapshot for this run, without changing
-    canonical dataset ground truth.
-  - B. A reviewed and accepted correction to canonical ground truth.
-  - C. Both, but as two separately named actions and records.
-- **Recommendation:** C, preserving a run-specific immutable review snapshot
-  separately from canonical GT edits.
-- **[Answer]:**
-- **Status:** Unanswered
+  [iteration guard](../src/app/api/hil/prompt-iteration/route.ts#L112)). The
+  gate applies only to automated iteration; manual Detection Setup versioning is
+  independent. The iterator reads **live** predictions, not the snapshot
+  ([orchestrator](../src/lib/promptIteration/orchestrator.ts#L196)).
+- **Decision (reframed from the original "keep a separate Finalize button"):**
+  Should the review checkpoint be a standalone click or absorbed into Start?
+  - A. Keep a separate **Finalize HIL** action distinct from iteration.
+    *(Original register recommendation — now **SUPERSEDED**.)*
+  - B. **Consolidate**: one **Start AI Prompt Iteration** action validates the
+    run and prerequisites, saves an immutable checkpoint (reviewed evidence +
+    metrics linked to run, prompt version, eval config, GT basis), records it in
+    version history, and starts iteration from that checkpoint — no separate
+    finalize click.
+- **[Answer]:** **B.** Remove the standalone Finalize HIL step. Start AI Prompt
+  Iteration is one action that checkpoints then starts; the iterator must use the
+  saved checkpoint; subsequent intentional starts create new checkpoints while
+  earlier ones are preserved. Manual Detection Setup versioning stays
+  independent. No requirement to review every image is established, and whether
+  any review prerequisite gates Start remains open (OPEN-001). See
+  [decisions PDEC-004/PDEC-005](decisions.md) and
+  [follow-ups FUP-001–FUP-004](followups.md).
+- **Superseded recommendation:** the earlier suggestion to retain a separate
+  Finalize HIL button (option A) is SUPERSEDED by PDEC-004.
 
 ### PQ-002 — Should historical run metrics follow later ground-truth edits?
 
@@ -43,8 +58,17 @@ recommendations are starting points, not accepted decisions.
   - C. Keep original immutable metrics and allow a separately labeled,
     versioned recomputation.
 - **Recommendation:** C, with the truth revision and denominator visible.
-- **[Answer]:**
-- **Status:** Unanswered
+- **[Answer]:** **C.** The iteration checkpoint is the immutable baseline;
+  "Recompute All vs Current GT" is a separate comparison-only evaluation (no
+  dataset commit, no inference) that must preserve earlier checkpoints, original
+  model predictions, and auditable correction history. Comparisons must identify
+  their ground-truth basis and evaluation scope; matching GT alone is not
+  equivalence. Note the verified gap: recompute overwrites the per-run
+  `ground_truth_label` snapshot in the DB, and clearing `corrected_label` is
+  in-memory-only (history is not destroyed). See
+  [decisions PDEC-007](decisions.md) and
+  [follow-ups FUP-006/FUP-007](followups.md).
+- **Status:** **ANSWERED 2026-10-27 → PDEC-007.**
 
 ### PQ-003 — What makes two prompt runs meaningfully comparable?
 
@@ -64,8 +88,18 @@ recommendations are starting points, not accepted decisions.
   - C. Allow both modes: strict comparable mode and explicitly exploratory mode.
 - **Recommendation:** C, defaulting to strict comparability for evaluation and
   clearly labeling exploratory synthesis.
-- **[Answer]:**
-- **Status:** Unanswered
+- **[Answer]:** **C, structured around a held-constant ground truth.** Ground
+  truth must be the **same** across the two compared runs (same dataset revision
+  / GT basis) — differing GT must not be treated as a valid comparison. The
+  independent variable is chosen explicitly: (1) the existing **prompt-version**
+  comparison mode, and (2) a **new model / thinking-level** comparison mode —
+  same prompt + same dataset (same GT), varying model and/or thinking level —
+  which the owner wants implemented. Today this is impossible: selection keys on
+  (prompt, dataset) and uses only the latest run, with no model/thinking-level
+  axis and no GT-equivalence check. See [decisions PDEC-010](decisions.md),
+  follow-ups FUP-010 (GT-equivalence + basis) and FUP-011 (model/thinking-level
+  mode), and open edge case OPEN-004.
+- **Status:** **ANSWERED 2026-10-27 → PDEC-010.**
 
 ### PQ-004 — How should partial detection/initial-prompt creation recover?
 
@@ -81,8 +115,13 @@ recommendations are starting points, not accepted decisions.
     retry.
 - **Recommendation:** B, to avoid losing author work while making partial
   completion explicit and retryable.
-- **[Answer]:**
-- **Status:** Unanswered
+- **[Answer]:** **B.** Keep the detection as a recoverable draft with an explicit
+  "baseline prompt pending" state and a safe, idempotent retry; do not roll back
+  and do not leave a promptless detection behind only a transient toast. Today's
+  behavior is close to C but weakly signaled. What a promptless detection may do
+  is open (OPEN-005). See [decisions PDEC-011](decisions.md) and
+  [follow-up FUP-012](followups.md).
+- **Status:** **ANSWERED 2026-10-27 → PDEC-011.**
 
 ### PQ-005 — What should deletion and approval retention mean?
 
@@ -103,8 +142,19 @@ recommendations are starting points, not accepted decisions.
     workflow for dependencies.
 - **Recommendation:** B by default; approval should remain a dated decision
   linked to the exact version/evaluation, not a deployment claim.
-- **[Answer]:**
-- **Status:** Unanswered
+- **[Answer]:** **A for deletion; approval becomes a dated decision record.**
+  Hard-delete + cascade after explicit confirmation is fine — no need to retain
+  data for deleted detections/versions/runs. Clarifications: deletion does **not**
+  touch datasets (deleted separately on the Datasets tab) and does **not** change
+  current ground-truth or attribute labels — it only removes the *record* of when
+  they were corrected, which is acceptable. Sub-questions: (1) **Yes** — approval
+  becomes a dated, retained decision record (version + evaluation + override
+  reason + timestamp + actor), not a single mutable pointer. (2) **No** — do not
+  block/soft-delete GT-audit/checkpoints; hard delete is intended. Reconciliation:
+  PDEC-005/007/009 preserve history across **recompute/rescoring/restart**, not
+  against intentional deletion. See [decisions PDEC-012/PDEC-013](decisions.md)
+  and follow-ups FUP-013/FUP-014.
+- **Status:** **ANSWERED 2026-10-27 → PDEC-012, PDEC-013.**
 
 ## Batch B — identity, data lifecycle, and execution authority
 

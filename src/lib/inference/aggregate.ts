@@ -66,6 +66,31 @@ export function deriveAggregateOutcome(
 }
 
 /**
+ * Choose the evidence to surface for a NOT_DETECTED aggregate outcome. The target
+ * itself has no reasoning when it isn't applied, so we fall back to what the model
+ * DID report — mirroring how DETECTED evidence carries the target's reasoning:
+ *   1. A lab-designated support member's reasoning, when configured (is_support).
+ *   2. Otherwise every other detection's reasoning from the raw response, so the
+ *      model's contrary cues still populate the review UI instead of being dropped.
+ * Returns null only when the model emitted no usable reasoning at all.
+ */
+export function deriveNegativeEvidence(
+  siblings: SiblingDetection[],
+  members: Array<{ label: string; enabled: boolean; is_support?: boolean }>
+): string | null {
+  for (const m of members) {
+    if (m.is_support && m.enabled) {
+      const hit = siblings.find((s) => s.label === m.label);
+      if (hit && hit.reasoning && hit.reasoning.trim()) return `${m.label}: ${hit.reasoning}`;
+    }
+  }
+  const contrary = siblings
+    .filter((s) => s.reasoning && s.reasoning.trim())
+    .map((s) => `${s.label}: ${s.reasoning}`);
+  return contrary.length ? contrary.join("\n") : null;
+}
+
+/**
  * Strict validation of the aggregate payload, mirroring production's pydantic
  * `model_validate`: enforce the object/array shape, string fields, and that every
  * emitted label is one of the context's allowed labels (the schema enum). Returns
@@ -206,19 +231,12 @@ export async function runAggregateInference(
           }))
           .filter((v) => v.label);
         const outcome = deriveAggregateOutcome(list, targetLabel);
-        // When the target isn't applied, surface a selected supporting detection's
-        // reasoning as the evidence (does NOT change the DETECTED/NOT_DETECTED decision).
+        // When the target isn't applied it has no reasoning of its own, so surface
+        // the model's other detections (or a designated support member) as the
+        // contrary evidence. This does NOT change the DETECTED/NOT_DETECTED decision.
         let evidence = outcome.evidence;
         if (outcome.decision === "NOT_DETECTED" && !evidence) {
-          for (const m of composition.members) {
-            if (m.is_support && m.enabled) {
-              const hit = outcome.siblings.find((s) => s.label === m.label);
-              if (hit && hit.reasoning) {
-                evidence = `${m.label}: ${hit.reasoning}`;
-                break;
-              }
-            }
-          }
+          evidence = deriveNegativeEvidence(outcome.siblings, composition.members);
         }
         return {
           decision: outcome.decision,
